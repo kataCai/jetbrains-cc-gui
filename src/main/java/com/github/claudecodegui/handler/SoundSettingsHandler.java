@@ -1,7 +1,7 @@
 package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
-
+import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.util.SoundNotificationService;
 import com.google.gson.Gson;
@@ -62,7 +62,10 @@ public class SoundSettingsHandler {
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set task reminder config: " + e.getMessage(), e);
             invokeLaterSafe(() -> {
-                context.callJavaScript("window.showError", context.escapeJs("Failed to save task reminder config: " + e.getMessage()));
+                context.callJavaScript(
+                    "window.showError",
+                    context.escapeJs(ClaudeCodeGuiBundle.message("soundSettings.saveTaskReminderFailed", e.getMessage()))
+                );
             });
         }
     }
@@ -99,7 +102,10 @@ public class SoundSettingsHandler {
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set sound notification enabled: " + e.getMessage(), e);
             invokeLaterSafe(() -> {
-                context.callJavaScript("window.showError", context.escapeJs("Failed to save sound notification config: " + e.getMessage()));
+                context.callJavaScript(
+                    "window.showError",
+                    context.escapeJs(ClaudeCodeGuiBundle.message("soundSettings.saveSoundNotificationFailed", e.getMessage()))
+                );
             });
         }
     }
@@ -120,7 +126,10 @@ public class SoundSettingsHandler {
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set sound only when unfocused: " + e.getMessage(), e);
             invokeLaterSafe(() -> {
-                context.callJavaScript("window.showError", context.escapeJs("Failed to save sound notification config: " + e.getMessage()));
+                context.callJavaScript(
+                    "window.showError",
+                    context.escapeJs(ClaudeCodeGuiBundle.message("soundSettings.saveSoundNotificationFailed", e.getMessage()))
+                );
             });
         }
     }
@@ -161,7 +170,10 @@ public class SoundSettingsHandler {
                 if (!validation.valid()) {
                     final String errorMsg = validation.errorMessage();
                     invokeLaterSafe(() -> {
-                        context.callJavaScript("window.showError", context.escapeJs("Invalid audio file: " + errorMsg));
+                        context.callJavaScript(
+                            "window.showError",
+                            context.escapeJs(ClaudeCodeGuiBundle.message("soundSettings.invalidAudioFile", errorMsg))
+                        );
                     });
                     return;
                 }
@@ -178,7 +190,10 @@ public class SoundSettingsHandler {
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set custom sound path: " + e.getMessage(), e);
             invokeLaterSafe(() -> {
-                context.callJavaScript("window.showError", context.escapeJs("Failed to save custom sound: " + e.getMessage()));
+                context.callJavaScript(
+                    "window.showError",
+                    context.escapeJs(ClaudeCodeGuiBundle.message("soundSettings.saveCustomSoundFailed", e.getMessage()))
+                );
             });
         }
     }
@@ -227,8 +242,8 @@ public class SoundSettingsHandler {
                             ext.equalsIgnoreCase("aiff")
                         );
                     })
-                    .withTitle("Select Sound File")
-                    .withDescription("Select a WAV, MP3, or AIFF audio file");
+                    .withTitle(ClaudeCodeGuiBundle.message("soundSettings.fileChooserTitle"))
+                    .withDescription(ClaudeCodeGuiBundle.message("soundSettings.fileChooserDescription"));
 
                 com.intellij.openapi.fileChooser.FileChooser.chooseFile(
                     descriptor,

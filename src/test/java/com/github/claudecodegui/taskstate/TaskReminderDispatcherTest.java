@@ -107,6 +107,30 @@ public class TaskReminderDispatcherTest {
         assertEquals(1, unfocusedSoundCalls.get());
     }
 
+    @Test
+    public void shouldUseInjectedReminderMessageResolver() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            TaskReminderPolicy.defaults(),
+            balloonNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> true,
+            snapshot -> "需要确认后才能继续。"
+        );
+
+        dispatcher.dispatch(
+            snapshot(TaskState.WAITING_CONFIRM, "session-6", "req-6", "plan_approval_requested"),
+            false
+        );
+
+        // Dispatcher 应真正使用注入的文案解析器，避免把提醒文案写死在分发流程里。
+        assertEquals(1, context.executedJs.size());
+        assertTrue(context.executedJs.get(0).contains("需要确认后才能继续。"));
+    }
+
     /**
      * 构造一个便于测试的 dispatcher，把气泡、声音和焦点判断都替换成可观测实现。
      */

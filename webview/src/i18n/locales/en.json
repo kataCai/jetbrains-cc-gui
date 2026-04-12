@@ -88,7 +88,21 @@
     "unknownFile": "Unknown file",
     "attachmentsUploaded": "[Attachments Uploaded]",
     "streamingConnected": "Claude connected, understanding your question",
-    "showEarlierMessages": "Show {{count}} earlier messages"
+    "showEarlierMessages": "Show {{count}} earlier messages",
+    "composerMode": "Composer mode",
+    "chatMode": "Chat",
+    "planMode": "Plan mode",
+    "planModeLabel": "Plan",
+    "planUnavailableForCodex": "Plan mode unavailable for Codex",
+    "modeStripLabel": "Mode: {{mode}}",
+    "taskState": {
+      "running": "Running",
+      "waiting_confirm": "Waiting for confirmation",
+      "retrying": "Retrying",
+      "recovered": "Recovered",
+      "completed": "Completed",
+      "final_error": "Needs attention"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -228,6 +242,22 @@
         "custom": "Custom",
         "reset": "Reset",
         "hint": "Customize the background color of your messages. Leave empty to follow the theme default."
+      },
+      "taskReminder": {
+        "label": "Task Reminder / Status Reminder",
+        "hint": "Configure popup, balloon, and sound reminders by task state.",
+        "popup": "Popup",
+        "balloon": "Balloon",
+        "sound": "Sound",
+        "enabled": "Enabled",
+        "onlyWhenIdeUnfocused": "Only when IDE unfocused",
+        "state": {
+          "waitingConfirm": "Waiting for confirmation",
+          "retrying": "Retrying",
+          "recovered": "Recovered",
+          "finalError": "Final error",
+          "completed": "Completed"
+        }
       }
     },
     "providers": "Provider Management",
@@ -1118,7 +1148,6 @@
     "bashGroupCompleted": "completed",
     "bashGroupAllCompleted": "All Completed",
     "bashGroupFailed": "failed",
-    "promptLabel": "Prompt",
     "updatePlan": "Update Plan",
     "applyPatch": "Apply Patch"
   },
@@ -1516,5 +1545,13 @@
     "providerNotConfigured": "Provider Not Configured",
     "providerNotConfiguredDesc": "No AI provider is configured yet, or access to the local configuration has not been authorized. Please complete setup in Provider Management settings before starting a conversation.",
     "goToProviderSettings": "Go to Settings"
+  },
+  "taskReminder": {
+    "finalErrorTitle": "Task requires attention",
+    "waitingConfirmTitle": "Task is waiting for confirmation",
+    "openSession": "Open session",
+    "retry": "Retry",
+    "close": "Close",
+    "later": "Later"
   }
 }

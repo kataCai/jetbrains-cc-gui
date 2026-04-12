@@ -1,6 +1,7 @@
 package com.github.claudecodegui.taskstate;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.util.SoundNotificationService;
@@ -32,11 +33,17 @@ public class TaskReminderDispatcher {
         boolean isIdeFocused();
     }
 
+    @FunctionalInterface
+    public interface ReminderMessageResolver {
+        String resolve(TaskStateSnapshot snapshot);
+    }
+
     private final HandlerContext context;
     private final TaskReminderPolicy policy;
     private final ClaudeBalloonNotifier balloonNotifier;
     private final ReminderSoundPlayer reminderSoundPlayer;
     private final IdeFocusChecker ideFocusChecker;
+    private final ReminderMessageResolver reminderMessageResolver;
     private final Gson gson = new Gson();
     // popup 和 balloon 分别维护去重缓存，避免一次状态变更在 React 重挂载、
     // session 恢复或重复消息推送时多次弹出相同提醒。
@@ -53,7 +60,8 @@ public class TaskReminderDispatcher {
             TaskReminderPolicy.defaults(),
             new ClaudeBalloonNotifier(),
             SoundNotificationService.getInstance()::playTaskReminderSound,
-            () -> ApplicationManager.getApplication().isActive()
+            () -> ApplicationManager.getApplication().isActive(),
+            TaskReminderDispatcher::buildDefaultReminderMessage
         );
     }
 
@@ -72,7 +80,8 @@ public class TaskReminderDispatcher {
             policy,
             balloonNotifier,
             soundNotificationService::playTaskReminderSound,
-            () -> ApplicationManager.getApplication().isActive()
+            () -> ApplicationManager.getApplication().isActive(),
+            TaskReminderDispatcher::buildDefaultReminderMessage
         );
     }
 
@@ -87,11 +96,34 @@ public class TaskReminderDispatcher {
         ReminderSoundPlayer reminderSoundPlayer,
         IdeFocusChecker ideFocusChecker
     ) {
+        this(
+            context,
+            policy,
+            balloonNotifier,
+            reminderSoundPlayer,
+            ideFocusChecker,
+            TaskReminderDispatcher::buildDefaultReminderMessage
+        );
+    }
+
+    /**
+     * 完整构造方法，允许测试或上层定制提醒文案来源。
+     * 这样业务代码仍默认走 bundle，本地测试则可以稳定注入伪翻译器。
+     */
+    public TaskReminderDispatcher(
+        HandlerContext context,
+        TaskReminderPolicy policy,
+        ClaudeBalloonNotifier balloonNotifier,
+        ReminderSoundPlayer reminderSoundPlayer,
+        IdeFocusChecker ideFocusChecker,
+        ReminderMessageResolver reminderMessageResolver
+    ) {
         this.context = context;
         this.policy = policy;
         this.balloonNotifier = balloonNotifier;
         this.reminderSoundPlayer = reminderSoundPlayer;
         this.ideFocusChecker = ideFocusChecker;
+        this.reminderMessageResolver = reminderMessageResolver;
     }
 
     /**
@@ -112,7 +144,7 @@ public class TaskReminderDispatcher {
         // 所有提醒渠道都基于同一个决策结果，避免“状态栏说完成、弹窗却没出现”
         // 这种由多处独立判断导致的不一致。
         TaskReminderPolicy.ReminderDecision decision = policy.decide(snapshot, approvalDialogOpen, ideFocused);
-        String reminderMessage = buildReminderMessage(snapshot);
+        String reminderMessage = reminderMessageResolver.resolve(snapshot);
         String dedupKey = buildDedupKey(snapshot);
 
         if (decision.shouldUpdateStatusBar()) {
@@ -170,18 +202,24 @@ public class TaskReminderDispatcher {
      * 根据状态和最近一次事件原因生成提醒文案。
      * 这里统一收敛文案，避免状态栏、气泡和 popup 各自拼接不同内容。
      */
-    private String buildReminderMessage(TaskStateSnapshot snapshot) {
+    private static String buildDefaultReminderMessage(TaskStateSnapshot snapshot) {
         String reason = snapshot.getLatestEvent() != null ? snapshot.getLatestEvent().getReason() : null;
 
         return switch (snapshot.getState()) {
-            case WAITING_CONFIRM -> "Action required: confirmation is needed to continue.";
-            case FINAL_ERROR -> hasText(reason) ? reason : "Task ended with an error.";
-            case COMPLETED -> "Task completed.";
-            case RECOVERED -> "Task recovered and resumed.";
-            case RETRYING -> hasText(reason) ? reason : "Task is retrying.";
-            case CANCELLED -> hasText(reason) ? reason : "Task was cancelled.";
-            case RUNNING -> "Task is running.";
-            case PENDING -> "Task is pending.";
+            case WAITING_CONFIRM -> ClaudeCodeGuiBundle.message("task.reminder.waitingConfirm");
+            case FINAL_ERROR -> hasText(reason)
+                ? reason
+                : ClaudeCodeGuiBundle.message("task.reminder.finalError");
+            case COMPLETED -> ClaudeCodeGuiBundle.message("task.reminder.completed");
+            case RECOVERED -> ClaudeCodeGuiBundle.message("task.reminder.recovered");
+            case RETRYING -> hasText(reason)
+                ? reason
+                : ClaudeCodeGuiBundle.message("task.reminder.retrying");
+            case CANCELLED -> hasText(reason)
+                ? reason
+                : ClaudeCodeGuiBundle.message("task.reminder.cancelled");
+            case RUNNING -> ClaudeCodeGuiBundle.message("task.reminder.running");
+            case PENDING -> ClaudeCodeGuiBundle.message("task.reminder.pending");
         };
     }
 
@@ -235,7 +273,7 @@ public class TaskReminderDispatcher {
      * 判断字符串是否包含有效文本。
      * 这里主要用于决定是否把 sessionId / requestId 写进前端 payload。
      */
-    private boolean hasText(String value) {
+    private static boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
     }
 }

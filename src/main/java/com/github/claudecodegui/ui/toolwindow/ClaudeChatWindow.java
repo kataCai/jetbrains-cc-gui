@@ -518,7 +518,10 @@ public class ClaudeChatWindow {
             return;
         }
         if ("claude".equals(session.getProvider()) && session.getError() == null) {
-            com.github.claudecodegui.notifications.ClaudeNotifier.showSuccess(project, "Task completed");
+            com.github.claudecodegui.notifications.ClaudeNotifier.showSuccess(
+                project,
+                com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("task.send.completed")
+            );
         }
     }
 

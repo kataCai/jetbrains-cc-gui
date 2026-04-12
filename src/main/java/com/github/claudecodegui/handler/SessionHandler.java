@@ -5,6 +5,7 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.bridge.NodeDetector;
+import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.model.NodeDetectionResult;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.session.SessionState;
@@ -222,14 +223,24 @@ public class SessionHandler extends BaseMessageHandler {
                         // Codex 没有 Claude 那种稳定的 stream_end 语义，因此仍在 send 完成时补一个成功提示。
                         // 如果已经启用了 task reminder dispatcher，则由 dispatcher 决定是否播声音，
                         // 避免这里和 reminder 逻辑双重提示。
-                        ClaudeNotifier.showSuccess(project, "Task completed", taskReminderDispatcher == null);
+                        ClaudeNotifier.showSuccess(
+                            project,
+                            ClaudeCodeGuiBundle.message("task.send.completed"),
+                            taskReminderDispatcher == null
+                        );
                     }
                 })
                 .exceptionally(ex -> {
                     notifySendFailed(ex);
                     LOG.error("Failed to send message", ex);
                     if (project != null) {
-                        ClaudeNotifier.showError(project, "Task failed: " + ex.getMessage());
+                        ClaudeNotifier.showError(
+                            project,
+                            ClaudeCodeGuiBundle.message(
+                                "task.send.failed",
+                                ex != null ? ex.getMessage() : ClaudeCodeGuiBundle.message("file.unknownError")
+                            )
+                        );
                     }
                     ApplicationManager.getApplication().invokeLater(() -> {
                         callJavaScript("addErrorMessage", escapeJs("发送失败: " + ex.getMessage()));
@@ -369,14 +380,24 @@ public class SessionHandler extends BaseMessageHandler {
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        ClaudeNotifier.showSuccess(project, "Task completed", taskReminderDispatcher == null);
+                        ClaudeNotifier.showSuccess(
+                            project,
+                            ClaudeCodeGuiBundle.message("task.send.completed"),
+                            taskReminderDispatcher == null
+                        );
                     }
                 })
                 .exceptionally(ex -> {
                     notifySendFailed(ex);
                     LOG.error("Failed to send message with attachments", ex);
                     if (project != null) {
-                        ClaudeNotifier.showError(project, "Task failed: " + ex.getMessage());
+                        ClaudeNotifier.showError(
+                            project,
+                            ClaudeCodeGuiBundle.message(
+                                "task.send.failed",
+                                ex != null ? ex.getMessage() : ClaudeCodeGuiBundle.message("file.unknownError")
+                            )
+                        );
                     }
                     ApplicationManager.getApplication().invokeLater(() -> {
                         callJavaScript("addErrorMessage", escapeJs("发送失败: " + ex.getMessage()));

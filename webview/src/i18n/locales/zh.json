@@ -88,7 +88,21 @@
     "unknownFile": "未知文件",
     "attachmentsUploaded": "[已上传附件]",
     "streamingConnected": "Claude 已成功连接，正在理解问题",
-    "showEarlierMessages": "显示之前的 {{count}} 条消息"
+    "showEarlierMessages": "显示之前的 {{count}} 条消息",
+    "composerMode": "对话模式",
+    "chatMode": "对话",
+    "planMode": "计划模式",
+    "planModeLabel": "计划",
+    "planUnavailableForCodex": "Codex 暂不支持计划模式",
+    "modeStripLabel": "模式：{{mode}}",
+    "taskState": {
+      "running": "执行中",
+      "waiting_confirm": "等待确认",
+      "retrying": "重试中",
+      "recovered": "已恢复",
+      "completed": "已完成",
+      "final_error": "需处理"
+    }
   },
   "settings": {
     "title": "设置",
@@ -228,6 +242,22 @@
         "custom": "自定义",
         "reset": "恢复默认",
         "hint": "自定义您的消息背景颜色，留空则跟随主题默认颜色"
+      },
+      "taskReminder": {
+        "label": "任务提醒 / 状态提醒",
+        "hint": "按任务状态配置弹窗、气泡和声音提醒。",
+        "popup": "弹窗提醒",
+        "balloon": "气泡提醒",
+        "sound": "声音提醒",
+        "enabled": "已开启",
+        "onlyWhenIdeUnfocused": "仅在 IDE 未聚焦时提醒",
+        "state": {
+          "waitingConfirm": "等待确认",
+          "retrying": "重试中",
+          "recovered": "已恢复",
+          "finalError": "最终失败",
+          "completed": "已完成"
+        }
       }
     },
     "providers": "供应商管理",
@@ -1086,7 +1116,7 @@
     "runCommand": "运行命令",
     "contextEngine": "上下文引擎",
     "task": "任务",
-    "promptLabel": "提示词 (Prompt)",
+    "promptLabel": "提示词",
     "readFile": "读取文件",
     "editFile": "编辑文件",
     "writeFile": "写入文件",
@@ -1123,7 +1153,6 @@
     "bashGroupCompleted": "完成",
     "bashGroupAllCompleted": "全部完成",
     "bashGroupFailed": "失败",
-    "promptLabel": "提示词",
     "updatePlan": "更新计划",
     "applyPatch": "应用补丁"
   },
@@ -1521,5 +1550,13 @@
     "providerNotConfigured": "供应商未配置",
     "providerNotConfiguredDesc": "尚未配置 AI 供应商或未授权使用本地配置，请先在供应商管理设置中完成配置后再开始对话。",
     "goToProviderSettings": "前往设置"
+  },
+  "taskReminder": {
+    "finalErrorTitle": "任务需要处理",
+    "waitingConfirmTitle": "任务等待确认",
+    "openSession": "打开会话",
+    "retry": "重试",
+    "close": "关闭",
+    "later": "稍后处理"
   }
 }
