@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
+import com.github.claudecodegui.session.SessionState;
 
 /**
  * Handles permission mode (bypassPermissions, etc.) get/set operations.
@@ -30,6 +31,7 @@ public class PermissionModeHandler {
     public void handleGetMode() {
         try {
             String currentMode = "bypassPermissions";  // Default value
+            String provider = null;
 
             // Prefer getting from session first
             if (context.getSession() != null) {
@@ -37,6 +39,7 @@ public class PermissionModeHandler {
                 if (sessionMode != null && !sessionMode.trim().isEmpty()) {
                     currentMode = sessionMode;
                 }
+                provider = context.getSession().getProvider();
             } else {
                 // If session does not exist, load from persistent storage
                 PropertiesComponent props = PropertiesComponent.getInstance();
@@ -46,7 +49,7 @@ public class PermissionModeHandler {
                 }
             }
 
-            final String modeToSend = currentMode;
+            final String modeToSend = resolveEffectivePermissionMode(provider, currentMode);
 
             ApplicationManager.getApplication().invokeLater(() -> {
                 context.callJavaScript("window.onModeReceived", context.escapeJs(modeToSend));
@@ -73,6 +76,9 @@ public class PermissionModeHandler {
                 }
             }
 
+            String provider = context.getSession() != null ? context.getSession().getProvider() : null;
+            mode = resolveEffectivePermissionMode(provider, mode);
+
             // Check if session exists
             if (context.getSession() != null) {
                 context.getSession().setPermissionMode(mode);
@@ -88,5 +94,25 @@ public class PermissionModeHandler {
         } catch (Exception e) {
             LOG.error("[PermissionModeHandler] Failed to set mode: " + e.getMessage(), e);
         }
+    }
+
+    static String resolveEffectivePermissionMode(String provider, String mode) {
+        // 统一在这里做模式归一化，避免前端、持久化配置、运行时 session
+        // 各自保留一套不同的兜底逻辑，最终导致 UI 展示和真实执行模式不一致。
+        String normalizedMode = mode == null ? "" : mode.trim();
+        if (normalizedMode.isEmpty()) {
+            return "default";
+        }
+        if (!SessionState.isValidPermissionMode(normalizedMode)) {
+            LOG.warn("[PermissionModeHandler] Ignoring invalid mode: " + mode);
+            return "default";
+        }
+        if ("codex".equals(provider) && "plan".equals(normalizedMode)) {
+            // 当前产品层虽然暴露了 Chat/Plan 的概念，但 Codex provider
+            // 底层还没有真正支持 plan permission mode，因此这里强制回落到 default，
+            // 保证发送链路、状态栏和持久化配置看到的是同一个“可执行模式”。
+            return "default";
+        }
+        return normalizedMode;
     }
 }

@@ -8,6 +8,8 @@ import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.model.NodeDetectionResult;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.session.SessionState;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
+import com.github.claudecodegui.taskstate.TaskStateService;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -39,8 +41,25 @@ public class SessionHandler extends BaseMessageHandler {
             // Note: create_new_session should not be handled here; it should be handled by ClaudeSDKToolWindow.createNewSession()
     };
 
+    private final TaskStateService taskStateService;
+    private final TaskReminderDispatcher taskReminderDispatcher;
+
     public SessionHandler(HandlerContext context) {
+        this(context, null, null);
+    }
+
+    public SessionHandler(HandlerContext context, TaskStateService taskStateService) {
+        this(context, taskStateService, null);
+    }
+
+    public SessionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher
+    ) {
         super(context);
+        this.taskStateService = taskStateService;
+        this.taskReminderDispatcher = taskReminderDispatcher;
     }
 
     @Override
@@ -189,17 +208,25 @@ public class SessionHandler extends BaseMessageHandler {
             if (project != null) {
                 ClaudeNotifier.setWaiting(project);
             }
+            // “开始发送”在真正调用 session.send 之前就标记，
+            // 这样等待 Node/SDK 返回首个流式事件前，状态栏和提醒系统已经能同步进入 RUNNING。
+            notifySendStarted();
 
             // [FIX] Pass agent prompt and file tags directly to session
             context.getSession().send(finalPrompt, finalAgentPrompt, finalFileTagPaths, finalRequestedPermissionMode)
                 .thenRun(() -> {
+                    notifySendCompleted();
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        ClaudeNotifier.showSuccess(project, "Task completed");
+                        // Codex 没有 Claude 那种稳定的 stream_end 语义，因此仍在 send 完成时补一个成功提示。
+                        // 如果已经启用了 task reminder dispatcher，则由 dispatcher 决定是否播声音，
+                        // 避免这里和 reminder 逻辑双重提示。
+                        ClaudeNotifier.showSuccess(project, "Task completed", taskReminderDispatcher == null);
                     }
                 })
                 .exceptionally(ex -> {
+                    notifySendFailed(ex);
                     LOG.error("Failed to send message", ex);
                     if (project != null) {
                         ClaudeNotifier.showError(project, "Task failed: " + ex.getMessage());
@@ -331,17 +358,22 @@ public class SessionHandler extends BaseMessageHandler {
             if (project != null) {
                 ClaudeNotifier.setWaiting(project);
             }
+            // 附件发送和普通文本发送复用同一套任务状态收敛逻辑，
+            // 这样 UI 不需要区分“是否带附件”就能拿到一致的状态流。
+            notifySendStarted();
 
             // [FIX] Pass agent prompt and file tags directly to session
             context.getSession().send(prompt, attachments, finalAgentPrompt, finalFileTagPaths, finalRequestedPermissionMode)
                 .thenRun(() -> {
+                    notifySendCompleted();
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        ClaudeNotifier.showSuccess(project, "Task completed");
+                        ClaudeNotifier.showSuccess(project, "Task completed", taskReminderDispatcher == null);
                     }
                 })
                 .exceptionally(ex -> {
+                    notifySendFailed(ex);
                     LOG.error("Failed to send message with attachments", ex);
                     if (project != null) {
                         ClaudeNotifier.showError(project, "Task failed: " + ex.getMessage());
@@ -359,6 +391,12 @@ public class SessionHandler extends BaseMessageHandler {
      */
     private void handleInterruptSession() {
         context.getSession().interrupt().thenRun(() -> {
+            if (taskStateService != null) {
+                // 用户主动中断时记为 CANCELLED，而不是 FAILED。
+                // 后续提醒策略可以据此决定是否只更新状态栏、不打断用户。
+                taskStateService.onCancelled(getSessionId(), "interrupt_session");
+                dispatchTaskReminder(false);
+            }
             ApplicationManager.getApplication().invokeLater(() -> {
                 // [FIX] Notify frontend that stream has ended and reset loading state
                 // This ensures streamActive flag is reset and loading=false takes effect
@@ -373,8 +411,49 @@ public class SessionHandler extends BaseMessageHandler {
      */
     private void handleRestartSession() {
         context.getSession().restart().thenRun(() -> {
+            if (taskStateService != null) {
+                // restart 对用户来说意味着“放弃上一轮并重新开始”，
+                // 因此先结束旧轮状态，再由下一次 send_started 拉起新一轮 RUNNING。
+                taskStateService.onCancelled(getSessionId(), "restart_session");
+                dispatchTaskReminder(false);
+            }
             ApplicationManager.getApplication().invokeLater(() -> {});
         });
+    }
+
+    private void notifySendStarted() {
+        if (taskStateService != null) {
+            taskStateService.onSendStarted(getSessionId());
+            dispatchTaskReminder(false);
+        }
+    }
+
+    private void notifySendCompleted() {
+        if (taskStateService != null) {
+            taskStateService.onSendCompleted(getSessionId());
+            dispatchTaskReminder(false);
+        }
+    }
+
+    private void notifySendFailed(Throwable throwable) {
+        if (taskStateService != null) {
+            // 失败原因尽量沿用真实异常，方便前端弹窗、状态栏和日志看到同一份上下文。
+            taskStateService.onSendFailed(getSessionId(), throwable != null ? throwable.getMessage() : "send_failed");
+            dispatchTaskReminder(false);
+        }
+    }
+
+    private void dispatchTaskReminder(boolean approvalDialogOpen) {
+        if (taskReminderDispatcher != null && taskStateService != null) {
+            taskReminderDispatcher.dispatch(taskStateService.getCurrentSnapshot(), approvalDialogOpen);
+        }
+    }
+
+    private String getSessionId() {
+        // 统一从当前 session 取 id，避免调用方各自判空后拼 reason，
+        // 也方便后续如果 sessionId 获取方式调整时只改这里。
+        ClaudeSession session = context.getSession();
+        return session != null ? session.getSessionId() : null;
     }
 
     /**

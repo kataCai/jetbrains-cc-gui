@@ -1,6 +1,7 @@
 package com.github.claudecodegui.notifications;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
+import com.github.claudecodegui.taskstate.TaskState;
 import com.github.claudecodegui.util.SoundNotificationService;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
@@ -24,10 +25,17 @@ public class ClaudeNotifier {
     }
 
     public static void showSuccess(@NotNull Project project, String message) {
+        showSuccess(project, message, true);
+    }
+
+    public static void showSuccess(@NotNull Project project, String message, boolean playSound) {
         show(project, "Claude ✓", message, 5000);
 
-        // Play the task completion notification sound
-        SoundNotificationService.getInstance().playTaskCompleteSound();
+        if (playSound) {
+            // 兼容旧调用路径：没有接入 task reminder dispatcher 的地方，
+            // 仍然沿用这里的完成提示音。
+            SoundNotificationService.getInstance().playTaskCompleteSound();
+        }
     }
 
     public static void showError(@NotNull Project project, String message) {
@@ -36,6 +44,17 @@ public class ClaudeNotifier {
 
     public static void showWarning(@NotNull Project project, String message) {
         show(project, "Claude ⚠", message, 6000);
+    }
+
+    public static void showTaskReminderStatus(@NotNull Project project, @NotNull TaskState state, String message) {
+        // 状态栏只接受 ready / waiting / error / success 这一层较粗的状态，
+        // 因此这里把更细粒度的任务状态折叠后再更新，避免前端和 IDE widget 各自维护映射。
+        String status = switch (state) {
+            case RUNNING, WAITING_CONFIRM, RETRYING, PENDING -> "waiting";
+            case FINAL_ERROR, CANCELLED -> "error";
+            case COMPLETED, RECOVERED -> "success";
+        };
+        update(project, status, message);
     }
 
     public static void clearStatus(@NotNull Project project) {

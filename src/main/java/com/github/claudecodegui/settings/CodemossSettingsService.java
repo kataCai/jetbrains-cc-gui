@@ -6,6 +6,7 @@ import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.model.PromptScope;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.intellij.openapi.diagnostic.Logger;
@@ -36,6 +37,8 @@ public class CodemossSettingsService {
     public static final String CODEX_RUNTIME_ACCESS_INACTIVE = "inactive";
     public static final String CODEX_RUNTIME_ACCESS_MANAGED = "managed";
     public static final String CODEX_RUNTIME_ACCESS_CLI_LOGIN = "cli_login";
+    private static final String TASK_REMINDER_KEY = "taskReminder";
+    private static final String SOUND_NOTIFICATION_KEY = "soundNotification";
 
     private final Gson gson;
 
@@ -192,6 +195,9 @@ public class CodemossSettingsService {
 
         try (FileReader reader = new FileReader(configFile, StandardCharsets.UTF_8)) {
             JsonObject config = JsonParser.parseReader(reader).getAsJsonObject();
+            if (migrateTaskReminderConfig(config)) {
+                writeConfig(config);
+            }
             LOG.info("[CodemossSettings] Successfully read config from: " + configPath);
             return config;
         } catch (Exception e) {
@@ -250,6 +256,8 @@ public class CodemossSettingsService {
         codex.add("providers", new JsonObject());
         codex.addProperty("localConfigAuthorized", false);
         config.add("codex", codex);
+
+        config.add(TASK_REMINDER_KEY, createDefaultTaskReminderConfig());
 
         return config;
     }
@@ -874,23 +882,36 @@ public class CodemossSettingsService {
     // ==================== Sound Notification Management ====================
 
     /**
+     * Returns the canonical task reminder config.
+     */
+    public JsonObject getTaskReminderConfig() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject taskReminder = ensureTaskReminderConfig(config);
+        return JsonParser.parseString(taskReminder.toString()).getAsJsonObject();
+    }
+
+    /**
+     * Saves canonical task reminder config.
+     */
+    public void setTaskReminderConfig(JsonObject taskReminderConfig) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject normalized = normalizeTaskReminderConfig(taskReminderConfig);
+        config.add(TASK_REMINDER_KEY, normalized);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Updated taskReminder config");
+    }
+
+    /**
      * Get whether sound notification is enabled.
      *
-     * @return whether sound notification is enabled, default is false
+     * @return whether sound notification is enabled, default is true
      */
     public boolean getSoundNotificationEnabled() throws IOException {
         JsonObject config = readConfig();
-
-        if (!config.has("soundNotification")) {
-            return false;
-        }
-
-        JsonObject soundConfig = config.getAsJsonObject("soundNotification");
-        if (soundConfig.has("enabled")) {
-            return soundConfig.get("enabled").getAsBoolean();
-        }
-
-        return false;
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
+        return soundConfig.has("enabled") && !soundConfig.get("enabled").isJsonNull()
+            ? soundConfig.get("enabled").getAsBoolean()
+            : true;
     }
 
     /**
@@ -900,15 +921,7 @@ public class CodemossSettingsService {
      */
     public void setSoundNotificationEnabled(boolean enabled) throws IOException {
         JsonObject config = readConfig();
-
-        JsonObject soundConfig;
-        if (config.has("soundNotification")) {
-            soundConfig = config.getAsJsonObject("soundNotification");
-        } else {
-            soundConfig = new JsonObject();
-            config.add("soundNotification", soundConfig);
-        }
-
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
         soundConfig.addProperty("enabled", enabled);
         writeConfig(config);
         LOG.info("[CodemossSettings] Set sound notification enabled: " + enabled);
@@ -921,17 +934,12 @@ public class CodemossSettingsService {
      */
     public String getCustomSoundPath() throws IOException {
         JsonObject config = readConfig();
-
-        if (!config.has("soundNotification")) {
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
+        if (!soundConfig.has("customSoundPath") || soundConfig.get("customSoundPath").isJsonNull()) {
             return null;
         }
-
-        JsonObject soundConfig = config.getAsJsonObject("soundNotification");
-        if (soundConfig.has("customSoundPath") && !soundConfig.get("customSoundPath").isJsonNull()) {
-            return soundConfig.get("customSoundPath").getAsString();
-        }
-
-        return null;
+        String customPath = soundConfig.get("customSoundPath").getAsString();
+        return customPath == null || customPath.isEmpty() ? null : customPath;
     }
 
     /**
@@ -941,21 +949,8 @@ public class CodemossSettingsService {
      */
     public void setCustomSoundPath(String path) throws IOException {
         JsonObject config = readConfig();
-
-        JsonObject soundConfig;
-        if (config.has("soundNotification")) {
-            soundConfig = config.getAsJsonObject("soundNotification");
-        } else {
-            soundConfig = new JsonObject();
-            config.add("soundNotification", soundConfig);
-        }
-
-        if (path == null || path.isEmpty()) {
-            soundConfig.remove("customSoundPath");
-        } else {
-            soundConfig.addProperty("customSoundPath", path);
-        }
-
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
+        soundConfig.addProperty("customSoundPath", (path == null || path.isEmpty()) ? "" : path);
         writeConfig(config);
         LOG.info("[CodemossSettings] Set custom sound path: " + path);
     }
@@ -963,21 +958,14 @@ public class CodemossSettingsService {
     /**
      * Get whether sound should only play when IDE window is not focused.
      *
-     * @return whether only-when-unfocused is enabled, default is false
+     * @return whether only-when-unfocused is enabled, default is true
      */
     public boolean getSoundOnlyWhenUnfocused() throws IOException {
         JsonObject config = readConfig();
-
-        if (!config.has("soundNotification")) {
-            return false;
-        }
-
-        JsonObject soundConfig = config.getAsJsonObject("soundNotification");
-        if (soundConfig.has("onlyWhenUnfocused")) {
-            return soundConfig.get("onlyWhenUnfocused").getAsBoolean();
-        }
-
-        return false;
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
+        return soundConfig.has("onlyWhenIdeUnfocused") && !soundConfig.get("onlyWhenIdeUnfocused").isJsonNull()
+            ? soundConfig.get("onlyWhenIdeUnfocused").getAsBoolean()
+            : true;
     }
 
     /**
@@ -987,16 +975,8 @@ public class CodemossSettingsService {
      */
     public void setSoundOnlyWhenUnfocused(boolean enabled) throws IOException {
         JsonObject config = readConfig();
-
-        JsonObject soundConfig;
-        if (config.has("soundNotification")) {
-            soundConfig = config.getAsJsonObject("soundNotification");
-        } else {
-            soundConfig = new JsonObject();
-            config.add("soundNotification", soundConfig);
-        }
-
-        soundConfig.addProperty("onlyWhenUnfocused", enabled);
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
+        soundConfig.addProperty("onlyWhenIdeUnfocused", enabled);
         writeConfig(config);
         LOG.info("[CodemossSettings] Set sound only when unfocused: " + enabled);
     }
@@ -1008,17 +988,12 @@ public class CodemossSettingsService {
      */
     public String getSelectedSound() throws IOException {
         JsonObject config = readConfig();
-
-        if (!config.has("soundNotification")) {
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
+        if (!soundConfig.has("selectedSound") || soundConfig.get("selectedSound").isJsonNull()) {
             return "default";
         }
-
-        JsonObject soundConfig = config.getAsJsonObject("soundNotification");
-        if (soundConfig.has("selectedSound") && !soundConfig.get("selectedSound").isJsonNull()) {
-            return soundConfig.get("selectedSound").getAsString();
-        }
-
-        return "default";
+        String selected = soundConfig.get("selectedSound").getAsString();
+        return selected == null || selected.isEmpty() ? "default" : selected;
     }
 
     /**
@@ -1028,18 +1003,182 @@ public class CodemossSettingsService {
      */
     public void setSelectedSound(String soundId) throws IOException {
         JsonObject config = readConfig();
-
-        JsonObject soundConfig;
-        if (config.has("soundNotification")) {
-            soundConfig = config.getAsJsonObject("soundNotification");
-        } else {
-            soundConfig = new JsonObject();
-            config.add("soundNotification", soundConfig);
-        }
-
+        JsonObject soundConfig = ensureTaskReminderConfig(config).getAsJsonObject("sound");
         soundConfig.addProperty("selectedSound", (soundId == null || soundId.isEmpty()) ? "default" : soundId);
         writeConfig(config);
         LOG.info("[CodemossSettings] Set selected sound: " + soundId);
+    }
+
+    private JsonObject ensureTaskReminderConfig(JsonObject config) {
+        if (migrateTaskReminderConfig(config)) {
+            // migration has already populated canonical structure in-memory
+        }
+        return config.getAsJsonObject(TASK_REMINDER_KEY);
+    }
+
+    private boolean migrateTaskReminderConfig(JsonObject config) {
+        boolean changed = false;
+        boolean hadTaskReminder = config.has(TASK_REMINDER_KEY) && config.get(TASK_REMINDER_KEY).isJsonObject();
+        boolean hadTaskReminderSound = hadTaskReminder
+            && config.getAsJsonObject(TASK_REMINDER_KEY).has("sound")
+            && config.getAsJsonObject(TASK_REMINDER_KEY).get("sound").isJsonObject();
+
+        JsonObject normalized = normalizeTaskReminderConfig(
+            hadTaskReminder ? config.getAsJsonObject(TASK_REMINDER_KEY) : null
+        );
+
+        // 无论旧配置是否完整，先保证 taskReminder 主结构一定存在，
+        // 这样后续读写 sound/popup/balloon 都不需要再判空兜底。
+        if (!hadTaskReminder || !normalized.toString().equals(config.getAsJsonObject(TASK_REMINDER_KEY).toString())) {
+            config.add(TASK_REMINDER_KEY, normalized);
+            changed = true;
+        }
+
+        if (config.has(SOUND_NOTIFICATION_KEY) && config.get(SOUND_NOTIFICATION_KEY).isJsonObject()) {
+            JsonObject legacy = config.getAsJsonObject(SOUND_NOTIFICATION_KEY);
+            JsonObject sound = config.getAsJsonObject(TASK_REMINDER_KEY).getAsJsonObject("sound");
+            // 如果此前没有新结构，允许老 soundNotification 完整覆盖 sound 默认值；
+            // 如果新结构已经存在，只补缺失字段，避免旧字段把用户的新配置回滚掉。
+            boolean forceLegacyOverrides = !hadTaskReminder || !hadTaskReminderSound;
+            changed |= applyLegacySoundMigration(sound, legacy, forceLegacyOverrides);
+        }
+
+        return changed;
+    }
+
+    private boolean applyLegacySoundMigration(JsonObject sound, JsonObject legacy, boolean forceOverride) {
+        boolean changed = false;
+        changed |= copyLegacyBoolean(legacy, "enabled", sound, "enabled", forceOverride);
+        changed |= copyLegacyBoolean(legacy, "onlyWhenUnfocused", sound, "onlyWhenIdeUnfocused", forceOverride);
+        changed |= copyLegacyString(legacy, "selectedSound", sound, "selectedSound", forceOverride);
+        changed |= copyLegacyString(legacy, "customSoundPath", sound, "customSoundPath", forceOverride);
+        return changed;
+    }
+
+    private boolean copyLegacyBoolean(
+        JsonObject source,
+        String sourceKey,
+        JsonObject target,
+        String targetKey,
+        boolean forceOverride
+    ) {
+        if (!source.has(sourceKey) || source.get(sourceKey).isJsonNull()) {
+            return false;
+        }
+        if (!forceOverride && target.has(targetKey) && !target.get(targetKey).isJsonNull()) {
+            // 新结构已有显式值时，不让旧字段反向覆盖，避免迁移后每次读取都被旧配置“抢回去”。
+            return false;
+        }
+        boolean value = source.get(sourceKey).getAsBoolean();
+        if (target.has(targetKey) && !target.get(targetKey).isJsonNull() && target.get(targetKey).getAsBoolean() == value) {
+            return false;
+        }
+        target.addProperty(targetKey, value);
+        return true;
+    }
+
+    private boolean copyLegacyString(
+        JsonObject source,
+        String sourceKey,
+        JsonObject target,
+        String targetKey,
+        boolean forceOverride
+    ) {
+        if (!source.has(sourceKey) || source.get(sourceKey).isJsonNull()) {
+            return false;
+        }
+        if (!forceOverride && target.has(targetKey) && !target.get(targetKey).isJsonNull()) {
+            return false;
+        }
+        String value = source.get(sourceKey).getAsString();
+        if (target.has(targetKey) && !target.get(targetKey).isJsonNull()
+            && value.equals(target.get(targetKey).getAsString())) {
+            return false;
+        }
+        target.addProperty(targetKey, value);
+        return true;
+    }
+
+    private JsonObject normalizeTaskReminderConfig(JsonObject source) {
+        JsonObject normalized = createDefaultTaskReminderConfig();
+        if (source == null) {
+            return normalized;
+        }
+
+        // 逐 channel 合并，既保留默认值，又允许 source 做增量覆盖。
+        mergeChannel(source, normalized, "popup", false);
+        mergeChannel(source, normalized, "balloon", false);
+        mergeChannel(source, normalized, "sound", true);
+        return normalized;
+    }
+
+    private void mergeChannel(
+        JsonObject source,
+        JsonObject normalized,
+        String channelKey,
+        boolean withSoundFields
+    ) {
+        if (!source.has(channelKey) || !source.get(channelKey).isJsonObject()) {
+            return;
+        }
+        JsonObject sourceChannel = source.getAsJsonObject(channelKey);
+        JsonObject targetChannel = normalized.getAsJsonObject(channelKey);
+
+        if (sourceChannel.has("enabled") && !sourceChannel.get("enabled").isJsonNull()) {
+            targetChannel.addProperty("enabled", sourceChannel.get("enabled").getAsBoolean());
+        }
+        if (sourceChannel.has("onlyWhenIdeUnfocused") && !sourceChannel.get("onlyWhenIdeUnfocused").isJsonNull()) {
+            targetChannel.addProperty("onlyWhenIdeUnfocused", sourceChannel.get("onlyWhenIdeUnfocused").getAsBoolean());
+        }
+        if (sourceChannel.has("states") && sourceChannel.get("states").isJsonArray()) {
+            JsonArray states = new JsonArray();
+            sourceChannel.getAsJsonArray("states").forEach(element -> {
+                if (!element.isJsonNull()) {
+                    String state = element.getAsString();
+                    if (state != null && !state.trim().isEmpty()) {
+                        // 这里只做最小规范化，不在后端强制枚举校验，
+                        // 这样前后端都能平滑演进；真正的状态集合约束由前端 normalize 再兜一层。
+                        states.add(state.trim());
+                    }
+                }
+            });
+            if (states.size() > 0) {
+                targetChannel.add("states", states);
+            }
+        }
+        if (withSoundFields) {
+            if (sourceChannel.has("selectedSound") && !sourceChannel.get("selectedSound").isJsonNull()) {
+                String selectedSound = sourceChannel.get("selectedSound").getAsString();
+                targetChannel.addProperty("selectedSound", selectedSound == null || selectedSound.isEmpty() ? "default" : selectedSound);
+            }
+            if (sourceChannel.has("customSoundPath") && !sourceChannel.get("customSoundPath").isJsonNull()) {
+                targetChannel.addProperty("customSoundPath", sourceChannel.get("customSoundPath").getAsString());
+            }
+        }
+    }
+
+    private JsonObject createDefaultTaskReminderConfig() {
+        JsonObject taskReminder = new JsonObject();
+        taskReminder.add("popup", createDefaultReminderChannel(true, false, "waiting_confirm", "final_error"));
+        taskReminder.add("balloon", createDefaultReminderChannel(true, true, "completed", "recovered", "final_error"));
+
+        JsonObject sound = createDefaultReminderChannel(true, true, "completed");
+        sound.addProperty("selectedSound", "default");
+        sound.addProperty("customSoundPath", "");
+        taskReminder.add("sound", sound);
+        return taskReminder;
+    }
+
+    private JsonObject createDefaultReminderChannel(boolean enabled, boolean onlyWhenIdeUnfocused, String... states) {
+        JsonObject channel = new JsonObject();
+        channel.addProperty("enabled", enabled);
+        channel.addProperty("onlyWhenIdeUnfocused", onlyWhenIdeUnfocused);
+        JsonArray stateArray = new JsonArray();
+        for (String state : states) {
+            stateArray.add(state);
+        }
+        channel.add("states", stateArray);
+        return channel;
     }
 
     // ==================== AI Feature Toggle Management ====================

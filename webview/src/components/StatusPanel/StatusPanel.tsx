@@ -8,10 +8,21 @@ import SubagentList from './SubagentList';
 import FileChangesList from './FileChangesList';
 import UndoConfirmDialog from './UndoConfirmDialog';
 import DiscardAllDialog from './DiscardAllDialog';
-import type { TabType, StatusPanelProps } from './types';
+import { getTaskStateLabel, type TabType, type StatusPanelProps } from './types';
 import './StatusPanel.less';
 
-const StatusPanel = ({ todos, fileChanges, subagents, expanded = true, isStreaming = false, onUndoFile, onDiscardAll, onKeepAll }: StatusPanelProps) => {
+const StatusPanel = ({
+  todos,
+  fileChanges,
+  subagents,
+  expanded = true,
+  isStreaming = false,
+  usageMode,
+  taskState,
+  onUndoFile,
+  onDiscardAll,
+  onKeepAll,
+}: StatusPanelProps) => {
   const { t } = useTranslation();
   const [openPopover, setOpenPopover] = useState<TabType | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -27,6 +38,7 @@ const StatusPanel = ({ todos, fileChanges, subagents, expanded = true, isStreami
   const hasTodos = todos.length > 0;
   const hasFileChanges = fileChanges.length > 0;
   const hasSubagents = subagents.length > 0;
+  const taskStateLabel = taskState ? getTaskStateLabel(taskState, t) : null;
 
   // Calculate todo stats
   const { completedCount, totalCount, hasInProgressTodo } = useMemo(() => {
@@ -228,6 +240,12 @@ const StatusPanel = ({ todos, fileChanges, subagents, expanded = true, isStreami
     <div className="status-panel" ref={popoverRef}>
       {/* Tab Header */}
       <div className="status-panel-tabs">
+        {(usageMode || taskState) && (
+          <div className="status-panel-mode-hint">
+            {usageMode && <span>{usageMode === 'plan' ? t('chat.planModeLabel', { defaultValue: 'Plan' }) : t('chat.chatMode', { defaultValue: 'Chat' })}</span>}
+            {taskStateLabel && <span>{taskStateLabel}</span>}
+          </div>
+        )}
         {/* Todo Tab */}
         <div
           className={`status-panel-tab ${openPopover === 'todo' ? 'active' : ''}`}

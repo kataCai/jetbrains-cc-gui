@@ -1,5 +1,10 @@
 // hooks/useSettingsBasicActions.ts
 import { useState, useEffect, useCallback } from 'react';
+import type { TaskReminderChannel, TaskReminderConfig, TaskReminderState } from '../../../types/taskReminder';
+import {
+  DEFAULT_TASK_REMINDER_CONFIG,
+  normalizeTaskReminderConfig,
+} from '../../../types/taskReminder';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -45,10 +50,7 @@ export interface UseSettingsBasicActionsReturn {
   localAutoOpenFileEnabled: boolean;
   commitPrompt: string;
   savingCommitPrompt: boolean;
-  soundNotificationEnabled: boolean;
-  soundOnlyWhenUnfocused: boolean;
-  selectedSound: string;
-  customSoundPath: string;
+  taskReminderConfig: TaskReminderConfig;
   diffExpandedByDefault: boolean;
   historyCompletionEnabled: boolean;
   commitGenerationEnabled: boolean;
@@ -63,10 +65,18 @@ export interface UseSettingsBasicActionsReturn {
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
   handleAutoOpenFileEnabledChange: (enabled: boolean) => void;
-  handleSoundNotificationEnabledChange: (enabled: boolean) => void;
-  handleSoundOnlyWhenUnfocusedChange: (enabled: boolean) => void;
-  handleSelectedSoundChange: (soundId: string) => void;
-  handleCustomSoundPathChange: (path: string) => void;
+  handleTaskReminderEnabledChange: (channel: TaskReminderChannel, enabled: boolean) => void;
+  handleTaskReminderStateToggle: (
+    channel: TaskReminderChannel,
+    state: TaskReminderState,
+    enabled: boolean,
+  ) => void;
+  handleTaskReminderOnlyWhenIdeUnfocusedChange: (
+    channel: TaskReminderChannel,
+    enabled: boolean,
+  ) => void;
+  handleTaskReminderSelectedSoundChange: (soundId: string) => void;
+  handleTaskReminderCustomSoundPathChange: (path: string) => void;
   handleSaveCustomSoundPath: () => void;
   handleTestSound: () => void;
   handleBrowseSound: () => void;
@@ -99,10 +109,9 @@ export interface UseSettingsBasicActionsReturn {
   /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitPrompt: (prompt: string) => void;
   /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
-  /** @internal */ setSoundNotificationEnabled: (enabled: boolean) => void;
-  /** @internal */ setSoundOnlyWhenUnfocused: (enabled: boolean) => void;
-  /** @internal */ setSelectedSound: (soundId: string) => void;
-  /** @internal */ setCustomSoundPath: (path: string) => void;
+  /** @internal */ setTaskReminderConfig: (
+    config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
+  ) => void;
   /** @internal */ setDiffExpandedByDefault: (expanded: boolean) => void;
   /** @internal */ setHistoryCompletionEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitGenerationEnabled: (enabled: boolean) => void;
@@ -157,11 +166,10 @@ export function useSettingsBasicActions({
   const [commitPrompt, setCommitPrompt] = useState('');
   const [savingCommitPrompt, setSavingCommitPrompt] = useState(false);
 
-  // Sound notification configuration
-  const [soundNotificationEnabled, setSoundNotificationEnabled] = useState<boolean>(false);
-  const [soundOnlyWhenUnfocused, setSoundOnlyWhenUnfocused] = useState<boolean>(false);
-  const [selectedSound, setSelectedSound] = useState<string>('default');
-  const [customSoundPath, setCustomSoundPath] = useState<string>('');
+  // Canonical task reminder configuration
+  const [taskReminderConfig, setTaskReminderConfigState] = useState<TaskReminderConfig>(
+    DEFAULT_TASK_REMINDER_CONFIG,
+  );
 
   // Diff expanded by default configuration (localStorage-only)
   const [diffExpandedByDefault, setDiffExpandedByDefault] = useState<boolean>(() => {
@@ -252,43 +260,106 @@ export function useSettingsBasicActions({
     }
   }, [onAutoOpenFileEnabledChangeProp]);
 
-  // Sound notification toggle change handler
-  const handleSoundNotificationEnabledChange = useCallback((enabled: boolean) => {
-    setSoundNotificationEnabled(enabled);
-    const payload = { enabled };
-    sendToJava(`set_sound_notification_enabled:${JSON.stringify(payload)}`);
+  const setTaskReminderConfig: UseSettingsBasicActionsReturn['setTaskReminderConfig'] = useCallback((nextConfig) => {
+    setTaskReminderConfigState((prev) => {
+      // 无论数据来自窗口回调还是本地交互，都重新做一次 normalize，
+      // 保证 settings 组件树内部看到的永远是完整、合法、可渲染的配置。
+      const resolved = normalizeTaskReminderConfig(
+        typeof nextConfig === 'function' ? nextConfig(prev) : nextConfig
+      );
+      return resolved;
+    });
   }, []);
 
-  // Sound only-when-unfocused toggle change handler
-  const handleSoundOnlyWhenUnfocusedChange = useCallback((enabled: boolean) => {
-    setSoundOnlyWhenUnfocused(enabled);
-    const payload = { onlyWhenUnfocused: enabled };
-    sendToJava(`set_sound_only_when_unfocused:${JSON.stringify(payload)}`);
+  const updateAndPersistTaskReminder = useCallback((updater: (prev: TaskReminderConfig) => TaskReminderConfig) => {
+    setTaskReminderConfigState((prev) => {
+      const next = normalizeTaskReminderConfig(updater(prev));
+      // 采用“先本地乐观更新，再异步发给 Java”的方式，
+      // 让设置页切换体验立即生效；Java 回推配置后再做一次最终对齐。
+      sendToJava(`set_task_reminder_config:${JSON.stringify(next)}`);
+      return next;
+    });
   }, []);
 
-  // Selected sound change handler
-  const handleSelectedSoundChange = useCallback((soundId: string) => {
-    setSelectedSound(soundId);
-    const payload = { soundId };
-    sendToJava(`set_selected_sound:${JSON.stringify(payload)}`);
+  const handleTaskReminderEnabledChange = useCallback((channel: TaskReminderChannel, enabled: boolean) => {
+    updateAndPersistTaskReminder((prev) => ({
+      ...prev,
+      [channel]: {
+        ...prev[channel],
+        enabled,
+      },
+    }));
+  }, [updateAndPersistTaskReminder]);
+
+  const handleTaskReminderStateToggle = useCallback((
+    channel: TaskReminderChannel,
+    state: TaskReminderState,
+    enabled: boolean,
+  ) => {
+    updateAndPersistTaskReminder((prev) => {
+      const currentStates = prev[channel].states;
+      // 用 Set 保证状态列表天然去重，避免用户反复点击或旧数据回放后出现重复状态。
+      const nextStates = enabled
+        ? Array.from(new Set([...currentStates, state]))
+        : currentStates.filter((item) => item !== state);
+      return {
+        ...prev,
+        [channel]: {
+          ...prev[channel],
+          states: nextStates,
+        },
+      };
+    });
+  }, [updateAndPersistTaskReminder]);
+
+  const handleTaskReminderOnlyWhenIdeUnfocusedChange = useCallback((
+    channel: TaskReminderChannel,
+    enabled: boolean,
+  ) => {
+    updateAndPersistTaskReminder((prev) => ({
+      ...prev,
+      [channel]: {
+        ...prev[channel],
+        onlyWhenIdeUnfocused: enabled,
+      },
+    }));
+  }, [updateAndPersistTaskReminder]);
+
+  const handleTaskReminderSelectedSoundChange = useCallback((soundId: string) => {
+    updateAndPersistTaskReminder((prev) => ({
+      ...prev,
+      sound: {
+        ...prev.sound,
+        selectedSound: soundId,
+      },
+    }));
+  }, [updateAndPersistTaskReminder]);
+
+  const handleTaskReminderCustomSoundPathChange = useCallback((path: string) => {
+    // 输入路径时先只更新本地草稿，避免用户每敲一个字符就把配置写回后端。
+    setTaskReminderConfigState((prev) => ({
+      ...prev,
+      sound: {
+        ...prev.sound,
+        customSoundPath: path,
+      },
+    }));
   }, []);
 
-  // Custom sound path change handler
-  const handleCustomSoundPathChange = useCallback((path: string) => {
-    setCustomSoundPath(path);
-  }, []);
-
-  // Save custom sound path
   const handleSaveCustomSoundPath = useCallback(() => {
-    const payload = { path: customSoundPath };
-    sendToJava(`set_custom_sound_path:${JSON.stringify(payload)}`);
-  }, [customSoundPath]);
+    // 自定义路径走显式保存，和 browse / test 的行为拆开，
+    // 这样用户可以先编辑路径，再决定是否真正写入配置。
+    sendToJava(`set_task_reminder_config:${JSON.stringify(taskReminderConfig)}`);
+  }, [taskReminderConfig]);
 
   // Test sound
   const handleTestSound = useCallback(() => {
-    const payload = { soundId: selectedSound, path: customSoundPath };
+    const payload = {
+      soundId: taskReminderConfig.sound.selectedSound,
+      path: taskReminderConfig.sound.customSoundPath,
+    };
     sendToJava(`test_sound:${JSON.stringify(payload)}`);
-  }, [selectedSound, customSoundPath]);
+  }, [taskReminderConfig.sound.customSoundPath, taskReminderConfig.sound.selectedSound]);
 
   // Browse sound file
   const handleBrowseSound = useCallback(() => {
@@ -346,14 +417,8 @@ export function useSettingsBasicActions({
     setCommitPrompt,
     savingCommitPrompt,
     setSavingCommitPrompt,
-    soundNotificationEnabled,
-    setSoundNotificationEnabled,
-    soundOnlyWhenUnfocused,
-    setSoundOnlyWhenUnfocused,
-    selectedSound,
-    setSelectedSound,
-    customSoundPath,
-    setCustomSoundPath,
+    taskReminderConfig,
+    setTaskReminderConfig,
     diffExpandedByDefault,
     setDiffExpandedByDefault,
     historyCompletionEnabled,
@@ -364,10 +429,11 @@ export function useSettingsBasicActions({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
-    handleSoundNotificationEnabledChange,
-    handleSoundOnlyWhenUnfocusedChange,
-    handleSelectedSoundChange,
-    handleCustomSoundPathChange,
+    handleTaskReminderEnabledChange,
+    handleTaskReminderStateToggle,
+    handleTaskReminderOnlyWhenIdeUnfocusedChange,
+    handleTaskReminderSelectedSoundChange,
+    handleTaskReminderCustomSoundPathChange,
     handleSaveCustomSoundPath,
     handleTestSound,
     handleBrowseSound,

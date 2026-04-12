@@ -36,16 +36,20 @@ import {
 } from './utils/turnScope';
 import type { Attachment, ChatInputBoxHandle } from './components/ChatInputBox/types';
 import { StatusPanel, StatusPanelErrorBoundary } from './components/StatusPanel';
+import { KNOWN_TASK_STATES, type TaskStripState } from './components/StatusPanel/types';
 import { ToastContainer, type ToastMessage } from './components/Toast';
 import { ScrollControl } from './components/ScrollControl';
 import { ChatHeader } from './components/ChatHeader';
+import { ChatModeStrip } from './components/ChatModeStrip';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { MessageList } from './components/MessageList';
 import { MessageAnchorRail } from './components/MessageAnchorRail';
 import { FILE_MODIFY_TOOL_NAMES, isToolName } from './utils/toolConstants';
 import type { RewindableMessage } from './components/RewindSelectDialog';
 import { AppDialogs } from './components/AppDialogs';
+import TaskReminderDialog, { type TaskReminderDialogRequest } from './components/TaskReminderDialog';
 import { APP_VERSION } from './version/version';
+import { getComposerUsageMode } from './components/ChatInputBox/modeViewModel';
 import type {
   ClaudeMessage,
   HistoryData,
@@ -53,6 +57,31 @@ import type {
 } from './types';
 
 const DEFAULT_STATUS = 'ready';
+
+// 任务提醒弹窗目前只承接“必须用户关注”的两类状态。
+// 其余状态通过 mode strip / status panel / toast 等较轻量的方式呈现。
+const isTaskReminderState = (state: unknown): state is TaskReminderDialogRequest['state'] => (
+  state === 'waiting_confirm' || state === 'final_error'
+);
+
+const parseTaskReminderDialogPayload = (json: string): TaskReminderDialogRequest | null => {
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    // 这里做一次严格收口，避免后端过早发送、历史遗留字段或非法 JSON
+    // 直接污染 React 状态树，导致弹窗打开却没有完整上下文。
+    if (!isTaskReminderState(parsed.state) || typeof parsed.message !== 'string') {
+      return null;
+    }
+    return {
+      state: parsed.state,
+      message: parsed.message,
+      sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : undefined,
+      requestId: typeof parsed.requestId === 'string' ? parsed.requestId : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
 
 const App = () => {
   const { t } = useTranslation();
@@ -71,7 +100,7 @@ const App = () => {
 
   // ── Core state (shared across multiple hooks) ──
   const [messages, setMessages] = useState<ClaudeMessage[]>([]);
-  const [_status, setStatus] = useState(DEFAULT_STATUS);
+  const [status, setStatus] = useState(DEFAULT_STATUS);
   const [loading, setLoading] = useState(false);
   const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
   const [isThinking, setIsThinking] = useState(false);
@@ -81,6 +110,7 @@ const App = () => {
   const [historyData, setHistoryData] = useState<HistoryData | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [addModelDialogOpen, setAddModelDialogOpen] = useState(false);
+  const [taskReminderRequest, setTaskReminderRequest] = useState<TaskReminderDialogRequest | null>(null);
   const isFirstMountRef = useRef(true);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [customSessionTitle, setCustomSessionTitle] = useState<string | null>(null);
@@ -101,6 +131,49 @@ const App = () => {
     localStorage.setItem(LAST_SEEN_VERSION_KEY, APP_VERSION);
     setShowChangelogDialog(false);
   }, []);
+
+  const handleShowTaskReminderDialog = useCallback((json: string) => {
+    const payload = parseTaskReminderDialogPayload(json);
+    if (!payload) return;
+    setTaskReminderRequest(payload);
+  }, []);
+
+  const closeTaskReminderDialog = useCallback(() => {
+    setTaskReminderRequest(null);
+  }, []);
+
+  const handleTaskReminderOpenSession = useCallback(() => {
+    setCurrentView('chat');
+    setTaskReminderRequest(null);
+  }, []);
+
+  const handleTaskReminderRetry = useCallback(() => {
+    setCurrentView('chat');
+    // reminder 的 retry 直接复用现有 restart_session 语义，
+    // 避免前后端再额外开一条“从提醒弹窗发起重试”的专用协议。
+    sendBridgeEvent('restart_session');
+    setTaskReminderRequest(null);
+  }, []);
+
+  useEffect(() => {
+    window.showTaskReminderDialog = handleShowTaskReminderDialog;
+    if (
+      Array.isArray(window.__pendingTaskReminderDialogRequests) &&
+      window.__pendingTaskReminderDialogRequests.length > 0
+    ) {
+      const pending = window.__pendingTaskReminderDialogRequests.slice();
+      window.__pendingTaskReminderDialogRequests = [];
+      // React 回调注册之前，Java 侧可能已经把提醒请求暂存在 window 上。
+      // 这里统一回放，确保初始化期的提醒不会被悄悄丢掉。
+      pending.forEach((json) => handleShowTaskReminderDialog(json));
+    }
+
+    return () => {
+      if (window.showTaskReminderDialog === handleShowTaskReminderDialog) {
+        window.showTaskReminderDialog = undefined;
+      }
+    };
+  }, [handleShowTaskReminderDialog]);
 
   // Context state (active file and selection)
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
@@ -440,6 +513,16 @@ const App = () => {
   }, [mergedMessages, currentProvider]);
 
   const statusPanelExpanded = !userCollapsedRef.current;
+  const usageMode = getComposerUsageMode(permissionMode);
+  const taskState = useMemo<TaskStripState | null>(() => {
+    if (loading || streamingActive) {
+      // 只要还在加载或流式输出，就优先把顶部状态视为 running。
+      // 这样不会因为后端状态栏字符串更新稍慢，造成界面闪回到 idle/ready。
+      return 'running';
+    }
+    const normalized = status.trim().toLowerCase() as TaskStripState;
+    return KNOWN_TASK_STATES.has(normalized) ? normalized : null;
+  }, [loading, status, streamingActive]);
 
   const sessionTitle = useMemo(() => {
     if (customSessionTitle) return customSessionTitle;
@@ -458,6 +541,7 @@ const App = () => {
         currentView={currentView}
         sessionTitle={sessionTitle}
         t={t}
+        modeStrip={<ChatModeStrip usageMode={usageMode} taskState={taskState} />}
         onBack={() => setCurrentView('chat')}
         onNewSession={createNewSession}
         onNewTab={() => sendBridgeEvent('create_new_tab')}
@@ -553,6 +637,8 @@ const App = () => {
               subagents={subagents}
               expanded={statusPanelExpanded}
               isStreaming={streamingActive}
+              usageMode={usageMode}
+              taskState={taskState}
               onUndoFile={handleUndoFile}
               onDiscardAll={onDiscardAll}
               onKeepAll={handleKeepAll}
@@ -661,6 +747,13 @@ const App = () => {
         addModelDialogOpen={addModelDialogOpen}
         onCloseAddModel={() => setAddModelDialogOpen(false)}
         currentProvider={currentProvider}
+      />
+      <TaskReminderDialog
+        isOpen={taskReminderRequest !== null}
+        request={taskReminderRequest}
+        onOpenSession={handleTaskReminderOpenSession}
+        onDismiss={closeTaskReminderDialog}
+        onRetry={handleTaskReminderRetry}
       />
     </>
   );

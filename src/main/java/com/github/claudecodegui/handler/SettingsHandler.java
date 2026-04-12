@@ -56,6 +56,8 @@ public class SettingsHandler extends BaseMessageHandler {
         "delete_input_history_item",
         "clear_input_history",
         // Sound notification configuration
+        "get_task_reminder_config",
+        "set_task_reminder_config",
         "get_sound_notification_config",
         "set_sound_notification_enabled",
         "set_sound_only_when_unfocused",
@@ -193,6 +195,12 @@ public class SettingsHandler extends BaseMessageHandler {
                 inputHistoryHandler.handleClearInputHistory();
                 return true;
             // Sound notification configuration
+            case "get_task_reminder_config":
+                soundSettingsHandler.handleGetTaskReminderConfig();
+                return true;
+            case "set_task_reminder_config":
+                soundSettingsHandler.handleSetTaskReminderConfig(content);
+                return true;
             case "get_sound_notification_config":
                 soundSettingsHandler.handleGetSoundNotificationConfig();
                 return true;

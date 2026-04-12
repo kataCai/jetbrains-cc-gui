@@ -5,6 +5,8 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.permission.PermissionRequest;
 import com.github.claudecodegui.permission.PermissionService;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
+import com.github.claudecodegui.taskstate.TaskStateService;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
@@ -49,10 +51,29 @@ public class PermissionHandler extends BaseMessageHandler {
         void onPermissionDenied();
     }
 
+    private final TaskStateService taskStateService;
+    private final TaskReminderDispatcher taskReminderDispatcher;
+    // 仅用于提醒策略判断：如果审批弹窗已经在前台打开，就不再额外弹出 task reminder popup，
+    // 避免用户面对两层内容几乎相同的弹窗。
+    private volatile boolean planApprovalDialogOpen;
     private PermissionDeniedCallback deniedCallback;
 
     public PermissionHandler(HandlerContext context) {
+        this(context, null, null);
+    }
+
+    public PermissionHandler(HandlerContext context, TaskStateService taskStateService) {
+        this(context, taskStateService, null);
+    }
+
+    public PermissionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher
+    ) {
         super(context);
+        this.taskStateService = taskStateService;
+        this.taskReminderDispatcher = taskReminderDispatcher;
     }
 
     public void setPermissionDeniedCallback(PermissionDeniedCallback callback) {
@@ -298,10 +319,19 @@ public class PermissionHandler extends BaseMessageHandler {
         for (Map.Entry<String, CompletableFuture<JsonObject>> entry : pendingPlanApprovalRequests.entrySet()) {
             JsonObject rejected = new com.google.gson.JsonObject();
             rejected.addProperty("approved", false);
+            rejected.addProperty("targetMode", "default");
             rejected.addProperty("message", "Session changed");
             entry.getValue().complete(rejected);
         }
         pendingPlanApprovalRequests.clear();
+
+        if (taskStateService != null) {
+            // 清 session 时不仅要清掉待审批 future，也要把聚合任务状态重置回 PENDING，
+            // 否则新的会话可能继承上一轮 WAITING_CONFIRM / FINAL_ERROR 的尾状态。
+            taskStateService.onSessionCleared(context.getSession() != null ? context.getSession().getSessionId() : null);
+            dispatchTaskReminder(false);
+        }
+        planApprovalDialogOpen = false;
 
         LOG.info("[PERM_CLEAR] Cleared: " + permissionCount + " permission, " +
                  askUserCount + " askUser, " + planCount + " plan requests");
@@ -395,6 +425,13 @@ public class PermissionHandler extends BaseMessageHandler {
         LOG.debug("[PLAN_APPROVAL][SHOW_DIALOG] planData=" + planData.toString());
 
         pendingPlanApprovalRequests.put(requestId, future);
+        planApprovalDialogOpen = true;
+        if (taskStateService != null) {
+            // 审批请求一旦进入挂起队列，就把整条会话链路视为 WAITING_CONFIRM。
+            // 后续所有提醒渠道都基于这个统一状态，而不是各自再推导一次。
+            taskStateService.onPlanApprovalRequested(requestId);
+            dispatchTaskReminder(planApprovalDialogOpen);
+        }
 
         try {
             Gson gson = new Gson();
@@ -418,7 +455,14 @@ public class PermissionHandler extends BaseMessageHandler {
             // Timeout handling (consistent with other permission requests: 5 minutes)
             CompletableFuture.delayedExecutor(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
                 if (!future.isDone()) {
+                    LOG.warn("[PLAN_APPROVAL][SHOW_DIALOG] Timeout requestId=" + requestId);
                     pendingPlanApprovalRequests.remove(requestId);
+                    planApprovalDialogOpen = false;
+                    if (taskStateService != null) {
+                        // 超时后直接落到 FINAL_ERROR，避免界面一直停留在“等待确认”的假象。
+                        taskStateService.onPlanApprovalTimedOut(requestId);
+                        dispatchTaskReminder(false);
+                    }
                     // Return rejection on timeout
                     JsonObject timeoutResponse = new JsonObject();
                     timeoutResponse.addProperty("approved", false);
@@ -431,6 +475,7 @@ public class PermissionHandler extends BaseMessageHandler {
         } catch (Exception e) {
             LOG.error("[PLAN_APPROVAL][SHOW_DIALOG] ERROR: " + e.getMessage(), e);
             pendingPlanApprovalRequests.remove(requestId);
+            planApprovalDialogOpen = false;
             JsonObject errorResponse = new JsonObject();
             errorResponse.addProperty("approved", false);
             errorResponse.addProperty("targetMode", "default");
@@ -453,6 +498,9 @@ public class PermissionHandler extends BaseMessageHandler {
             String requestId = response.get("requestId").getAsString();
             boolean approved = response.has("approved") && response.get("approved").getAsBoolean();
             String targetMode = response.has("targetMode") ? response.get("targetMode").getAsString() : "default";
+            String reason = response.has("message") && !response.get("message").isJsonNull()
+                ? response.get("message").getAsString()
+                : "plan_approval_rejected";
 
             CompletableFuture<JsonObject> pendingFuture = pendingPlanApprovalRequests.remove(requestId);
 
@@ -462,11 +510,30 @@ public class PermissionHandler extends BaseMessageHandler {
                 result.addProperty("targetMode", targetMode);
                 LOG.debug("[PLAN_APPROVAL][HANDLE_RESPONSE] Completing future: approved=" + approved + ", targetMode=" + targetMode);
                 pendingFuture.complete(result);
+                planApprovalDialogOpen = false;
+                if (taskStateService != null) {
+                    // 审批通过后恢复 RUNNING；拒绝后进入 CANCELLED。
+                    // 这里不用让前端自行猜测结果，统一由状态服务给出结论。
+                    if (approved) {
+                        taskStateService.onPlanApprovalApproved(requestId);
+                    } else {
+                        taskStateService.onPlanApprovalRejected(requestId, reason);
+                    }
+                    dispatchTaskReminder(false);
+                }
             } else {
                 LOG.warn("[PLAN_APPROVAL][HANDLE_RESPONSE] No pending request found for requestId: " + requestId);
             }
         } catch (Exception e) {
             LOG.error("[PLAN_APPROVAL][HANDLE_RESPONSE] ERROR: " + e.getMessage(), e);
+        }
+    }
+
+    private void dispatchTaskReminder(boolean approvalDialogOpen) {
+        if (taskReminderDispatcher != null && taskStateService != null) {
+            // ReminderDispatcher 是唯一的提醒分发出口，后端任何状态变化都通过同一路径发往
+            // popup / balloon / status bar / sound，避免多个 handler 重复决定通知策略。
+            taskReminderDispatcher.dispatch(taskStateService.getCurrentSnapshot(), approvalDialogOpen);
         }
     }
 }

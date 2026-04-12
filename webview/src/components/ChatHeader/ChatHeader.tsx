@@ -7,6 +7,7 @@ export interface ChatHeaderProps {
   currentView: 'chat' | 'history' | 'settings';
   sessionTitle: string;
   t: TFunction;
+  modeStrip?: React.ReactNode;
   onBack: () => void;
   onNewSession: () => void;
   onNewTab: () => void;
@@ -20,6 +21,7 @@ export function ChatHeader({
   currentView,
   sessionTitle,
   t,
+  modeStrip,
   onBack,
   onNewSession,
   onNewTab,
@@ -87,76 +89,79 @@ export function ChatHeader({
   }
 
   return (
-    <div className="header">
-      <div className="header-left">
-        {currentView === 'history' ? (
-          <button className="back-button" onClick={onBack} data-tooltip={t('common.back')}>
-            <BackIcon /> {t('common.back')}
-          </button>
-        ) : editing ? (
-          <div className="session-title-edit-mode" onClick={(e) => e.stopPropagation()}>
-            <input
-              ref={inputRef}
-              type="text"
-              className="session-title-input"
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onBlur={handleBlur}
-              maxLength={50}
-              spellCheck={false}
-              aria-label="Session title"
-            />
-            <button className="session-title-save-btn" onClick={commitEdit} aria-label="Save title">
-              <span className="codicon codicon-check" />
+    <>
+      <div className="header">
+        <div className="header-left">
+          {currentView === 'history' ? (
+            <button className="back-button" onClick={onBack} data-tooltip={t('common.back')}>
+              <BackIcon /> {t('common.back')}
             </button>
-            <button className="session-title-cancel-btn" onClick={cancelEdit} aria-label="Cancel editing">
-              <span className="codicon codicon-close" />
-            </button>
-          </div>
-        ) : (
-          <div className="session-title-wrapper">
-            <div className="session-title">
-              {sessionTitle}
-            </div>
-            {titleEditable && (
-              <button className="session-title-edit-btn" onClick={startEditing} aria-label="Edit session title">
-                <span className="codicon codicon-edit" />
+          ) : editing ? (
+            <div className="session-title-edit-mode" onClick={(e) => e.stopPropagation()}>
+              <input
+                ref={inputRef}
+                type="text"
+                className="session-title-input"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onBlur={handleBlur}
+                maxLength={50}
+                spellCheck={false}
+                aria-label="Session title"
+              />
+              <button className="session-title-save-btn" onClick={commitEdit} aria-label="Save title">
+                <span className="codicon codicon-check" />
               </button>
-            )}
-          </div>
-        )}
+              <button className="session-title-cancel-btn" onClick={cancelEdit} aria-label="Cancel editing">
+                <span className="codicon codicon-close" />
+              </button>
+            </div>
+          ) : (
+            <div className="session-title-wrapper">
+              <div className="session-title">
+                {sessionTitle}
+              </div>
+              {titleEditable && (
+                <button className="session-title-edit-btn" onClick={startEditing} aria-label="Edit session title">
+                  <span className="codicon codicon-edit" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="header-right">
+          {currentView === 'chat' && (
+            <>
+              <button className="icon-button" onClick={onNewSession} data-tooltip={t('common.newSession')}>
+                <span className="codicon codicon-plus" />
+              </button>
+              <button
+                className="icon-button"
+                onClick={onNewTab}
+                data-tooltip={t('common.newTab')}
+              >
+                <span className="codicon codicon-split-horizontal" />
+              </button>
+              <button
+                className="icon-button"
+                onClick={onHistory}
+                data-tooltip={t('common.history')}
+              >
+                <span className="codicon codicon-history" />
+              </button>
+              <button
+                className="icon-button"
+                onClick={onSettings}
+                data-tooltip={t('common.settings')}
+              >
+                <span className="codicon codicon-settings-gear" />
+              </button>
+            </>
+          )}
+        </div>
       </div>
-      <div className="header-right">
-        {currentView === 'chat' && (
-          <>
-            <button className="icon-button" onClick={onNewSession} data-tooltip={t('common.newSession')}>
-              <span className="codicon codicon-plus" />
-            </button>
-            <button
-              className="icon-button"
-              onClick={onNewTab}
-              data-tooltip={t('common.newTab')}
-            >
-              <span className="codicon codicon-split-horizontal" />
-            </button>
-            <button
-              className="icon-button"
-              onClick={onHistory}
-              data-tooltip={t('common.history')}
-            >
-              <span className="codicon codicon-history" />
-            </button>
-            <button
-              className="icon-button"
-              onClick={onSettings}
-              data-tooltip={t('common.settings')}
-            >
-              <span className="codicon codicon-settings-gear" />
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+      {currentView === 'chat' && modeStrip}
+    </>
   );
 }

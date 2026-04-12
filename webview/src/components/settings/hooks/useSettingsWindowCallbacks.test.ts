@@ -26,10 +26,7 @@ describe('useSettingsWindowCallbacks', () => {
     setLoading: vi.fn(),
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
-    setSoundNotificationEnabled: vi.fn(),
-    setSoundOnlyWhenUnfocused: vi.fn(),
-    setSelectedSound: vi.fn(),
-    setCustomSoundPath: vi.fn(),
+    setTaskReminderConfig: vi.fn(),
     updateProviders: vi.fn(),
     updateActiveProvider: vi.fn(),
     loadProviders: vi.fn(),
@@ -66,6 +63,62 @@ describe('useSettingsWindowCallbacks', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_streaming_enabled:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_codex_sandbox_mode:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_commit_prompt:');
-    expect(window.sendToJava).toHaveBeenCalledWith('get_sound_notification_config:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_task_reminder_config:');
+  });
+
+  it('writes canonical task reminder config when updateTaskReminderConfig is received', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    const config = {
+      popup: { enabled: true, states: ['waiting_confirm'], onlyWhenIdeUnfocused: false },
+      balloon: { enabled: true, states: ['completed'], onlyWhenIdeUnfocused: true },
+      sound: {
+        enabled: true,
+        states: ['completed'],
+        onlyWhenIdeUnfocused: true,
+        selectedSound: 'default',
+        customSoundPath: '',
+      },
+    };
+
+    window.updateTaskReminderConfig?.(JSON.stringify(config));
+    expect(deps.setTaskReminderConfig).toHaveBeenCalledWith(config);
+  });
+
+  it('merges legacy sound callback into taskReminderConfig.sound', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.updateSoundNotificationConfig?.(JSON.stringify({
+      enabled: false,
+      states: ['final_error'],
+      onlyWhenIdeUnfocused: false,
+      selectedSound: 'custom',
+      customSoundPath: '/tmp/a.wav',
+    }));
+
+    const setCallArg = (deps.setTaskReminderConfig as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    expect(typeof setCallArg).toBe('function');
+
+    const prevConfig = {
+      popup: { enabled: true, states: ['waiting_confirm'], onlyWhenIdeUnfocused: false },
+      balloon: { enabled: true, states: ['completed'], onlyWhenIdeUnfocused: true },
+      sound: {
+        enabled: true,
+        states: ['completed'],
+        onlyWhenIdeUnfocused: true,
+        selectedSound: 'default',
+        customSoundPath: '',
+      },
+    };
+    const nextConfig = setCallArg(prevConfig);
+
+    expect(nextConfig.popup).toEqual(prevConfig.popup);
+    expect(nextConfig.balloon).toEqual(prevConfig.balloon);
+    expect(nextConfig.sound.enabled).toBe(false);
+    expect(nextConfig.sound.states).toEqual(['final_error']);
+    expect(nextConfig.sound.selectedSound).toBe('custom');
+    expect(nextConfig.sound.customSoundPath).toBe('/tmp/a.wav');
   });
 });

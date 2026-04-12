@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ButtonAreaProps, ModelInfo, PermissionMode, ReasoningEffort } from './types';
 import { ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
@@ -6,6 +6,13 @@ import { CLAUDE_MODELS, CODEX_MODELS } from './types';
 import { STORAGE_KEYS, validateCodexCustomModels } from '../../types/provider';
 import type { CodexCustomModel } from '../../types/provider';
 import { readClaudeModelMapping } from '../../utils/claudeModelMapping';
+import {
+  getChatExecutionMode,
+  getComposerUsageMode,
+  resolvePermissionModeFromComposer,
+  type ChatExecutionMode,
+  type ComposerUsageMode,
+} from './modeViewModel';
 
 /**
  * Get custom Codex model list from localStorage
@@ -97,6 +104,10 @@ export const ButtonArea = ({
   // Track changes to custom models in localStorage
   // When localStorage changes, updating this version number triggers useMemo recalculation
   const [customModelsVersion, setCustomModelsVersion] = useState(0);
+  // Plan 是产品层 usage mode，不是底层具体执行模式。
+  // 切到 Plan 时仍要记住用户上一次真正选择的 chat execution mode，
+  // 这样再切回 Chat 时可以恢复原选择，而不是粗暴丢回 default。
+  const lastNonPlanChatExecutionModeRef = useRef<ChatExecutionMode>(getChatExecutionMode(permissionMode));
 
   // Listen for localStorage changes (cross-tab sync + same-tab custom events)
   useEffect(() => {
@@ -121,6 +132,13 @@ export const ButtonArea = ({
       window.removeEventListener('localStorageChange', handleCustomStorageChange as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    if (permissionMode !== 'plan') {
+      // 只有真正处于执行模式时才刷新记忆值，避免 plan 状态把“上一次聊天执行模式”覆盖掉。
+      lastNonPlanChatExecutionModeRef.current = permissionMode;
+    }
+  }, [permissionMode]);
 
   /**
    * Apply model name mapping
@@ -207,8 +225,23 @@ export const ButtonArea = ({
    * Handle mode selection
    */
   const handleModeSelect = useCallback((mode: PermissionMode) => {
-    onModeSelect?.(mode);
-  }, [onModeSelect]);
+    const selectedChatMode = mode as ChatExecutionMode;
+    lastNonPlanChatExecutionModeRef.current = selectedChatMode;
+    // 执行模式下拉只负责切换 default / acceptEdits / bypassPermissions，
+    // 最终仍要和当前 usage mode 重新组合成统一的 permissionMode。
+    const nextMode = resolvePermissionModeFromComposer(getComposerUsageMode(permissionMode), selectedChatMode);
+    onModeSelect?.(nextMode);
+  }, [onModeSelect, permissionMode]);
+
+  const usageMode = getComposerUsageMode(permissionMode);
+  const chatExecutionMode = getChatExecutionMode(permissionMode, lastNonPlanChatExecutionModeRef.current);
+
+  const handleUsageModeSelect = useCallback((mode: ComposerUsageMode) => {
+    // 顶层 Chat/Plan 切换不直接修改“上一次 chat 模式记忆”，
+    // 只把 usage mode 与当前执行模式重新组合，避免用户切换计划模式后丢失偏好。
+    const nextMode = resolvePermissionModeFromComposer(mode, chatExecutionMode);
+    onModeSelect?.(nextMode);
+  }, [chatExecutionMode, onModeSelect]);
 
   /**
    * Handle model selection
@@ -257,7 +290,27 @@ export const ButtonArea = ({
           onChange={handleProviderSelect}
           compact
         />
-        <ModeSelect value={permissionMode} onChange={handleModeSelect} provider={currentProvider} />
+        <div className="composer-mode-toggle" role="tablist" aria-label={t('chat.composerMode', { defaultValue: 'Composer mode' })}>
+          <button
+            type="button"
+            aria-pressed={usageMode === 'chat'}
+            onClick={() => handleUsageModeSelect('chat')}
+          >
+            {t('chat.chatMode', { defaultValue: 'Chat' })}
+          </button>
+          <button
+            type="button"
+            aria-pressed={usageMode === 'plan'}
+            disabled={currentProvider === 'codex'}
+            onClick={() => handleUsageModeSelect('plan')}
+            title={currentProvider === 'codex'
+              ? t('chat.planUnavailableForCodex', { defaultValue: 'Plan mode unavailable for Codex' })
+              : t('chat.planMode', { defaultValue: 'Plan mode' })}
+          >
+            {t('chat.planModeLabel', { defaultValue: 'Plan' })}
+          </button>
+        </div>
+        <ModeSelect value={chatExecutionMode} onChange={handleModeSelect} provider={currentProvider} />
         <ModelSelect value={selectedModel} onChange={handleModelSelect} models={availableModels} currentProvider={currentProvider} onAddModel={onAddModel} />
         {currentProvider === 'codex' && (
           <ReasoningSelect value={reasoningEffort} onChange={handleReasoningChange} />

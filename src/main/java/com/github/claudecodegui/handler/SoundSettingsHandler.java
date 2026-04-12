@@ -10,7 +10,11 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
 /**
- * Handles sound notification configuration and playback messages.
+ * 处理设置页与声音/任务提醒配置之间的桥接。
+ *
+ * <p>当前这个 handler 同时承担两类职责：
+ * 1. 维护新的 canonical `taskReminder` 配置结构；
+ * 2. 对旧版 `soundNotification` 接口做兼容投影，避免前端迁移期间断链。
  */
 public class SoundSettingsHandler {
 
@@ -26,38 +30,61 @@ public class SoundSettingsHandler {
     }
 
     /**
-     * Gets sound notification configuration.
+     * 读取完整的 task reminder 配置并回推给前端。
+     * 如果读取失败，则回退到一份与前端默认值对齐的兜底配置。
      */
-    public void handleGetSoundNotificationConfig() {
+    public void handleGetTaskReminderConfig() {
         try {
-            boolean enabled = settingsService.getSoundNotificationEnabled();
-            boolean onlyWhenUnfocused = settingsService.getSoundOnlyWhenUnfocused();
-            String selectedSound = settingsService.getSelectedSound();
-            String customPath = settingsService.getCustomSoundPath();
-
-            ApplicationManager.getApplication().invokeLater(() -> {
-                JsonObject response = new JsonObject();
-                response.addProperty("enabled", enabled);
-                response.addProperty("onlyWhenUnfocused", onlyWhenUnfocused);
-                response.addProperty("selectedSound", selectedSound);
-                response.addProperty("customSoundPath", customPath != null ? customPath : "");
-                context.callJavaScript("window.updateSoundNotificationConfig", context.escapeJs(gson.toJson(response)));
-            });
+            JsonObject taskReminderConfig = settingsService.getTaskReminderConfig();
+            // 统一把“规范结构 + 兼容旧声音结构”一起回推给前端，
+            // 这样新设置页和旧声音设置入口都能同时拿到一致结果。
+            dispatchTaskReminderConfigUpdate(taskReminderConfig);
         } catch (Exception e) {
-            LOG.error("[SoundSettingsHandler] Failed to get sound notification config: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() -> {
-                JsonObject response = new JsonObject();
-                response.addProperty("enabled", false);
-                response.addProperty("onlyWhenUnfocused", false);
-                response.addProperty("selectedSound", "default");
-                response.addProperty("customSoundPath", "");
-                context.callJavaScript("window.updateSoundNotificationConfig", context.escapeJs(gson.toJson(response)));
+            LOG.error("[SoundSettingsHandler] Failed to get task reminder config: " + e.getMessage(), e);
+            dispatchTaskReminderConfigUpdate(createFallbackTaskReminderConfig());
+        }
+    }
+
+    /**
+     * 保存完整的 task reminder 配置。
+     * 支持直接传 taskReminder 对象，也兼容带外层包装字段的 payload。
+     */
+    public void handleSetTaskReminderConfig(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            JsonObject taskReminder = json;
+            if (json != null && json.has("taskReminder") && json.get("taskReminder").isJsonObject()) {
+                // 兼容可能存在的包裹层，允许前端以后扩展 payload 而不破坏当前接口。
+                taskReminder = json.getAsJsonObject("taskReminder");
+            }
+            settingsService.setTaskReminderConfig(taskReminder);
+            dispatchTaskReminderConfigUpdate(settingsService.getTaskReminderConfig());
+        } catch (Exception e) {
+            LOG.error("[SoundSettingsHandler] Failed to set task reminder config: " + e.getMessage(), e);
+            invokeLaterSafe(() -> {
+                context.callJavaScript("window.showError", context.escapeJs("Failed to save task reminder config: " + e.getMessage()));
             });
         }
     }
 
     /**
-     * Set sound notification enabled state.
+     * 读取旧版 sound notification 配置接口。
+     * 实际数据源已经迁移到 taskReminder.sound，这里只做兼容投影。
+     */
+    public void handleGetSoundNotificationConfig() {
+        try {
+            JsonObject taskReminderConfig = settingsService.getTaskReminderConfig();
+            // 老接口现在只作为兼容桥接存在：真实数据源已经迁移到 taskReminder.sound。
+            dispatchLegacySoundConfigUpdate(taskReminderConfig);
+        } catch (Exception e) {
+            LOG.error("[SoundSettingsHandler] Failed to get sound notification config: " + e.getMessage(), e);
+            dispatchLegacySoundConfigUpdate(createFallbackTaskReminderConfig());
+        }
+    }
+
+    /**
+     * 兼容旧接口：更新声音提醒是否启用。
+     * 最终仍然写入 canonical taskReminder.sound.enabled。
      */
     public void handleSetSoundNotificationEnabled(String content) {
         try {
@@ -71,14 +98,14 @@ public class SoundSettingsHandler {
             dispatchSoundConfigUpdate();
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set sound notification enabled: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterSafe(() -> {
                 context.callJavaScript("window.showError", context.escapeJs("Failed to save sound notification config: " + e.getMessage()));
             });
         }
     }
 
     /**
-     * Set sound only-when-unfocused state.
+     * 兼容旧接口：更新“仅在 IDE 未聚焦时播放声音”。
      */
     public void handleSetSoundOnlyWhenUnfocused(String content) {
         try {
@@ -92,14 +119,14 @@ public class SoundSettingsHandler {
             dispatchSoundConfigUpdate();
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set sound only when unfocused: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterSafe(() -> {
                 context.callJavaScript("window.showError", context.escapeJs("Failed to save sound notification config: " + e.getMessage()));
             });
         }
     }
 
     /**
-     * Set selected sound ID.
+     * 更新当前选中的提示音 ID。
      */
     public void handleSetSelectedSound(String content) {
         try {
@@ -116,7 +143,8 @@ public class SoundSettingsHandler {
     }
 
     /**
-     * Set custom sound file path.
+     * 保存自定义声音文件路径。
+     * 这里会先做文件合法性校验，避免把不可播放的路径持久化进配置。
      */
     public void handleSetCustomSoundPath(String content) {
         try {
@@ -124,14 +152,15 @@ public class SoundSettingsHandler {
             String path = json != null && json.has("path") && !json.get("path").isJsonNull()
                 ? json.get("path").getAsString() : null;
 
-            // Validate file
+            // 只有用户真正填写了路径时才做校验；
+            // 空路径表示“恢复默认声音”，不应该被视为错误。
             if (path != null && !path.isEmpty()) {
                 SoundNotificationService.ValidationResult validation =
                     SoundNotificationService.getInstance().validateSoundFile(path);
 
                 if (!validation.valid()) {
                     final String errorMsg = validation.errorMessage();
-                    ApplicationManager.getApplication().invokeLater(() -> {
+                    invokeLaterSafe(() -> {
                         context.callJavaScript("window.showError", context.escapeJs("Invalid audio file: " + errorMsg));
                     });
                     return;
@@ -143,19 +172,20 @@ public class SoundSettingsHandler {
             LOG.debug("[SoundSettingsHandler] Set custom sound path: " + path);
 
             dispatchSoundConfigUpdate();
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterSafe(() -> {
                 context.callJavaScript("window.showSuccessI18n", context.escapeJs("settings.basic.soundNotification.customSoundSaved"));
             });
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to set custom sound path: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterSafe(() -> {
                 context.callJavaScript("window.showError", context.escapeJs("Failed to save custom sound: " + e.getMessage()));
             });
         }
     }
 
     /**
-     * Test play a sound by soundId + optional custom path.
+     * 试听当前声音设置。
+     * 不会修改配置，只是临时根据 soundId/path 做一次播放。
      */
     public void handleTestSound(String content) {
         try {
@@ -179,10 +209,11 @@ public class SoundSettingsHandler {
     }
 
     /**
-     * Open file chooser for selecting a sound file.
+     * 打开系统文件选择器，让用户选择一个自定义提示音文件。
+     * 选择完成后会立即写入配置，并把 selectedSound 切到 custom。
      */
     public void handleBrowseSoundFile() {
-        ApplicationManager.getApplication().invokeLater(() -> {
+        invokeLaterSafe(() -> {
             try {
                 com.intellij.openapi.fileChooser.FileChooserDescriptor descriptor =
                     new com.intellij.openapi.fileChooser.FileChooserDescriptor(
@@ -207,7 +238,8 @@ public class SoundSettingsHandler {
                         if (file != null) {
                             String path = file.getPath();
 
-                            // Auto-save the selected path and set selectedSound to "custom"
+                            // 浏览文件属于用户的明确选择动作，因此这里直接自动保存，
+                            // 省去“选择文件后还要再点一次保存”的重复操作。
                             boolean enabled = false;
                             try {
                                 enabled = settingsService.getSoundNotificationEnabled();
@@ -235,40 +267,114 @@ public class SoundSettingsHandler {
     }
 
     /**
-     * Reads all sound config fields from settingsService, builds a JsonObject,
-     * and dispatches it to the frontend via window.updateSoundNotificationConfig.
-     * Must be called on a non-EDT thread; scheduling onto EDT is handled internally.
+     * 从 settingsService 读取最新配置并统一回推到前端。
+     * 新前端会收到 canonical taskReminderConfig；旧接口也会收到兼容声音配置。
      */
     private void dispatchSoundConfigUpdate() {
-        boolean enabled;
-        boolean onlyWhenUnfocused;
-        String selectedSound;
-        String customPath;
-
         try {
-            enabled = settingsService.getSoundNotificationEnabled();
-            onlyWhenUnfocused = settingsService.getSoundOnlyWhenUnfocused();
-            selectedSound = settingsService.getSelectedSound();
-            customPath = settingsService.getCustomSoundPath();
+            JsonObject taskReminderConfig = settingsService.getTaskReminderConfig();
+            dispatchTaskReminderConfigUpdate(taskReminderConfig);
         } catch (Exception e) {
-            enabled = false;
-            onlyWhenUnfocused = false;
-            selectedSound = "default";
-            customPath = null;
+            dispatchTaskReminderConfigUpdate(createFallbackTaskReminderConfig());
         }
+    }
 
-        final boolean finalEnabled = enabled;
-        final boolean finalOnlyWhenUnfocused = onlyWhenUnfocused;
-        final String finalSelectedSound = selectedSound;
-        final String finalCustomPath = customPath != null ? customPath : "";
+    /**
+     * 同时向新旧前端回调推送配置。
+     * 新回调用于完整设置页；旧回调用于兼容尚未迁移的声音设置入口。
+     */
+    private void dispatchTaskReminderConfigUpdate(JsonObject taskReminderConfig) {
+        final JsonObject finalTaskReminder = taskReminderConfig;
 
-        ApplicationManager.getApplication().invokeLater(() -> {
-            JsonObject response = new JsonObject();
-            response.addProperty("enabled", finalEnabled);
-            response.addProperty("onlyWhenUnfocused", finalOnlyWhenUnfocused);
-            response.addProperty("selectedSound", finalSelectedSound);
-            response.addProperty("customSoundPath", finalCustomPath);
-            context.callJavaScript("window.updateSoundNotificationConfig", context.escapeJs(gson.toJson(response)));
+        invokeLaterSafe(() -> {
+            // 新前端优先消费 canonical taskReminderConfig。
+            context.callJavaScript("window.updateTaskReminderConfig", context.escapeJs(gson.toJson(finalTaskReminder)));
+            // 同时继续喂给旧的声音配置回调，保证老 UI 或未迁移完的逻辑不被断开。
+            JsonObject legacySoundConfig = toLegacySoundConfig(finalTaskReminder);
+            context.callJavaScript("window.updateSoundNotificationConfig", context.escapeJs(gson.toJson(legacySoundConfig)));
         });
+    }
+
+    /**
+     * 仅向旧版声音回调推送兼容结构。
+     */
+    private void dispatchLegacySoundConfigUpdate(JsonObject taskReminderConfig) {
+        JsonObject legacySoundConfig = toLegacySoundConfig(taskReminderConfig);
+        invokeLaterSafe(() -> {
+            context.callJavaScript("window.updateSoundNotificationConfig", context.escapeJs(gson.toJson(legacySoundConfig)));
+        });
+    }
+
+    /**
+     * 把 canonical taskReminderConfig 投影成旧版 soundNotification 结构。
+     */
+    private JsonObject toLegacySoundConfig(JsonObject taskReminderConfig) {
+        JsonObject response = new JsonObject();
+        // 旧接口只认 sound 这一小块结构，因此这里只做 sound 子树投影，
+        // 明确避免把 popup/balloon 之类新概念“挤进”老接口。
+        JsonObject sound = taskReminderConfig != null
+            && taskReminderConfig.has("sound")
+            && taskReminderConfig.get("sound").isJsonObject()
+            ? taskReminderConfig.getAsJsonObject("sound")
+            : new JsonObject();
+
+        response.addProperty("enabled", sound.has("enabled") && !sound.get("enabled").isJsonNull()
+            ? sound.get("enabled").getAsBoolean()
+            : true);
+        response.addProperty("onlyWhenUnfocused", sound.has("onlyWhenIdeUnfocused") && !sound.get("onlyWhenIdeUnfocused").isJsonNull()
+            ? sound.get("onlyWhenIdeUnfocused").getAsBoolean()
+            : true);
+        response.addProperty("selectedSound", sound.has("selectedSound") && !sound.get("selectedSound").isJsonNull()
+            ? sound.get("selectedSound").getAsString()
+            : "default");
+        response.addProperty("customSoundPath", sound.has("customSoundPath") && !sound.get("customSoundPath").isJsonNull()
+            ? sound.get("customSoundPath").getAsString()
+            : "");
+        return response;
+    }
+
+    /**
+     * 构造一份与前端默认值对齐的兜底 task reminder 配置。
+     */
+    private JsonObject createFallbackTaskReminderConfig() {
+        // fallback 与前端 DEFAULT_TASK_REMINDER_CONFIG 对齐，
+        // 确保任一侧解析失败时仍能回到同一套默认行为。
+        JsonObject taskReminder = new JsonObject();
+
+        JsonObject popup = new JsonObject();
+        popup.addProperty("enabled", true);
+        popup.addProperty("onlyWhenIdeUnfocused", false);
+        popup.add("states", gson.fromJson("[\"waiting_confirm\",\"final_error\"]", com.google.gson.JsonArray.class));
+        taskReminder.add("popup", popup);
+
+        JsonObject balloon = new JsonObject();
+        balloon.addProperty("enabled", true);
+        balloon.addProperty("onlyWhenIdeUnfocused", true);
+        balloon.add("states", gson.fromJson("[\"completed\",\"recovered\",\"final_error\"]", com.google.gson.JsonArray.class));
+        taskReminder.add("balloon", balloon);
+
+        JsonObject sound = new JsonObject();
+        sound.addProperty("enabled", true);
+        sound.addProperty("onlyWhenIdeUnfocused", true);
+        sound.add("states", gson.fromJson("[\"completed\"]", com.google.gson.JsonArray.class));
+        sound.addProperty("selectedSound", "default");
+        sound.addProperty("customSoundPath", "");
+        taskReminder.add("sound", sound);
+
+        return taskReminder;
+    }
+
+    /**
+     * 安全地切回 EDT 执行 UI 相关回调。
+     * 测试环境下如果 Application 尚未初始化，则直接执行，避免调用链卡死。
+     */
+    private void invokeLaterSafe(Runnable runnable) {
+        if (ApplicationManager.getApplication() == null) {
+            // 单元测试或极早期初始化阶段 Application 可能还没挂好，
+            // 这时直接执行可以避免因为 invokeLater 不可用导致测试挂死。
+            runnable.run();
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(runnable);
     }
 }

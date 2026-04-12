@@ -2,6 +2,7 @@ import { useState } from 'react';
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
 import type { DiffThemeMode } from '../../../utils/diffTheme';
+import type { TaskReminderChannel, TaskReminderConfig, TaskReminderState } from '../../../types/taskReminder';
 import AppearanceTab from './AppearanceTab';
 import BehaviorTab from './BehaviorTab';
 import EnvironmentTab from './EnvironmentTab';
@@ -61,15 +62,13 @@ interface BasicConfigSectionProps {
   // Status bar widget configuration
   statusBarWidgetEnabled?: boolean;
   onStatusBarWidgetEnabledChange?: (enabled: boolean) => void;
-  // Sound notification configuration
-  soundNotificationEnabled?: boolean;
-  onSoundNotificationEnabledChange?: (enabled: boolean) => void;
-  soundOnlyWhenUnfocused?: boolean;
-  onSoundOnlyWhenUnfocusedChange?: (enabled: boolean) => void;
-  selectedSound?: string;
-  onSelectedSoundChange?: (soundId: string) => void;
-  customSoundPath?: string;
-  onCustomSoundPathChange?: (path: string) => void;
+  // Task reminder configuration
+  taskReminderConfig?: TaskReminderConfig;
+  onTaskReminderEnabledChange?: (channel: TaskReminderChannel, enabled: boolean) => void;
+  onTaskReminderStateToggle?: (channel: TaskReminderChannel, state: TaskReminderState, enabled: boolean) => void;
+  onTaskReminderOnlyWhenIdeUnfocusedChange?: (channel: TaskReminderChannel, enabled: boolean) => void;
+  onTaskReminderSelectedSoundChange?: (soundId: string) => void;
+  onTaskReminderCustomSoundPathChange?: (path: string) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onBrowseSound?: () => void;
@@ -129,14 +128,12 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onCommitGenerationEnabledChange={props.onCommitGenerationEnabledChange}
           statusBarWidgetEnabled={props.statusBarWidgetEnabled}
           onStatusBarWidgetEnabledChange={props.onStatusBarWidgetEnabledChange}
-          soundNotificationEnabled={props.soundNotificationEnabled}
-          onSoundNotificationEnabledChange={props.onSoundNotificationEnabledChange}
-          soundOnlyWhenUnfocused={props.soundOnlyWhenUnfocused}
-          onSoundOnlyWhenUnfocusedChange={props.onSoundOnlyWhenUnfocusedChange}
-          selectedSound={props.selectedSound}
-          onSelectedSoundChange={props.onSelectedSoundChange}
-          customSoundPath={props.customSoundPath}
-          onCustomSoundPathChange={props.onCustomSoundPathChange}
+          taskReminderConfig={props.taskReminderConfig}
+          onTaskReminderEnabledChange={props.onTaskReminderEnabledChange}
+          onTaskReminderStateToggle={props.onTaskReminderStateToggle}
+          onTaskReminderOnlyWhenIdeUnfocusedChange={props.onTaskReminderOnlyWhenIdeUnfocusedChange}
+          onTaskReminderSelectedSoundChange={props.onTaskReminderSelectedSoundChange}
+          onTaskReminderCustomSoundPathChange={props.onTaskReminderCustomSoundPathChange}
           onSaveCustomSoundPath={props.onSaveCustomSoundPath}
           onTestSound={props.onTestSound}
           onBrowseSound={props.onBrowseSound}

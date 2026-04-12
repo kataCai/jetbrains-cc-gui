@@ -93,7 +93,7 @@ export function ChatInputBoxFooter({
 }) {
   return (
     <>
-      {/* Bottom button area */}
+      {/* Bottom button area (usage mode + execution controls) */}
       <ButtonArea
         disabled={disabled || isLoading}
         hasInputContent={hasInputContent}
@@ -222,4 +222,3 @@ export function ChatInputBoxFooter({
     </>
   );
 }
-

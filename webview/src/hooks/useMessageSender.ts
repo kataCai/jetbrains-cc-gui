@@ -151,10 +151,12 @@ export function useMessageSender({
     const effectivePermissionMode: PermissionMode = currentProvider === 'codex' && requestedPermissionMode === 'plan'
       ? 'default'
       : requestedPermissionMode;
+    const requestedUsageMode = requestedPermissionMode === 'plan' ? 'plan' : 'chat';
     console.debug('[ModeSync][Frontend] send request mode', {
       provider: currentProvider,
       requestedMode: requestedPermissionMode,
       effectiveMode: effectivePermissionMode,
+      requestedUsageMode,
     });
 
     if (hasAttachments) {
@@ -169,6 +171,7 @@ export function useMessageSender({
           agent: agentInfo,
           fileTags: fileTagsInfo,
           permissionMode: effectivePermissionMode,
+          requestedUsageMode,
         });
         sendBridgeEvent('send_message_with_attachments', payload);
       } catch (error) {
@@ -178,6 +181,7 @@ export function useMessageSender({
           agent: agentInfo,
           fileTags: fileTagsInfo,
           permissionMode: effectivePermissionMode,
+          requestedUsageMode,
         });
         sendBridgeEvent('send_message', fallbackPayload);
       }
@@ -187,6 +191,7 @@ export function useMessageSender({
         agent: agentInfo,
         fileTags: fileTagsInfo,
         permissionMode: effectivePermissionMode,
+        requestedUsageMode,
       });
       sendBridgeEvent('send_message', payload);
     }

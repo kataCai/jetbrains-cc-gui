@@ -32,6 +32,8 @@ import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
+import com.github.claudecodegui.taskstate.TaskStateService;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.MessageJsonConverter;
 import com.google.gson.JsonObject;
@@ -242,6 +244,10 @@ public class ChatWindowDelegate {
 
         MessageDispatcher messageDispatcher = new MessageDispatcher();
         host.setMessageDispatcher(messageDispatcher);
+        // TaskStateService 负责把“发送、审批、重试、完成”等离散后端事件收敛成单一任务状态；
+        // Dispatcher 再把这个统一状态分发到前端弹窗、状态栏、气泡和声音渠道。
+        TaskStateService taskStateService = new TaskStateService();
+        TaskReminderDispatcher taskReminderDispatcher = new TaskReminderDispatcher(handlerContext);
 
         messageDispatcher.registerHandler(new ProviderHandler(handlerContext));
         messageDispatcher.registerHandler(new McpServerHandler(handlerContext));
@@ -249,7 +255,7 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(new SkillHandler(handlerContext));
         messageDispatcher.registerHandler(new FileHandler(handlerContext));
         messageDispatcher.registerHandler(new SettingsHandler(handlerContext));
-        messageDispatcher.registerHandler(new SessionHandler(handlerContext));
+        messageDispatcher.registerHandler(new SessionHandler(handlerContext, taskStateService, taskReminderDispatcher));
         messageDispatcher.registerHandler(new FileExportHandler(handlerContext));
         messageDispatcher.registerHandler(new DiffHandler(handlerContext));
         messageDispatcher.registerHandler(new PromptEnhancerHandler(handlerContext));
@@ -282,7 +288,13 @@ public class ChatWindowDelegate {
             }
         }));
 
-        PermissionHandler permissionHandler = new PermissionHandler(handlerContext);
+        PermissionHandler permissionHandler = new PermissionHandler(
+            handlerContext,
+            taskStateService,
+            taskReminderDispatcher
+        );
+        // SessionHandler 和 PermissionHandler 共用同一套任务状态服务，
+        // 才能把“发送中 -> 等待审批 -> 恢复执行 -> 完成/失败”串成一条连续时间线。
         permissionHandler.setPermissionDeniedCallback(host::interruptDueToPermissionDenial);
         host.setPermissionHandler(permissionHandler);
         messageDispatcher.registerHandler(permissionHandler);

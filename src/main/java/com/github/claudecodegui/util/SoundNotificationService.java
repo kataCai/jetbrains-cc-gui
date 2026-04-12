@@ -1,6 +1,7 @@
 package com.github.claudecodegui.util;
 
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.taskstate.TaskState;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import javazoom.jl.decoder.JavaLayerException;
@@ -88,6 +89,17 @@ public class SoundNotificationService {
                 LOG.warn("[SoundNotification] Failed to play notification sound: " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * 为 task reminder 播放提示音。
+     * 当前先保持最保守策略：只有 COMPLETED 会出声，其余状态即使允许提醒，
+     * 也交给状态栏/弹窗/气泡承载，避免失败或等待确认在前台反复打断用户。
+     */
+    public void playTaskReminderSound(TaskState state) {
+        if (state == TaskState.COMPLETED) {
+            playTaskCompleteSound();
+        }
     }
 
     /**

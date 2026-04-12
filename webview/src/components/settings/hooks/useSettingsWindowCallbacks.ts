@@ -4,6 +4,11 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
 import type { AgentConfig } from '../../../types/agent';
 import type { PromptConfig } from '../../../types/prompt';
+import type { TaskReminderConfig } from '../../../types/taskReminder';
+import {
+  mergeLegacySoundConfig,
+  normalizeTaskReminderConfig,
+} from '../../../types/taskReminder';
 import type { AlertType } from '../../AlertDialog';
 import type { ToastMessage } from '../../Toast';
 
@@ -34,11 +39,10 @@ export interface SettingsWindowCallbacksDeps {
   // AI feature toggle setters
   setCommitGenerationEnabled?: (enabled: boolean) => void;
   setStatusBarWidgetEnabled?: (enabled: boolean) => void;
-  // Sound notification setters
-  setSoundNotificationEnabled?: (enabled: boolean) => void;
-  setSoundOnlyWhenUnfocused?: (enabled: boolean) => void;
-  setSelectedSound?: (soundId: string) => void;
-  setCustomSoundPath?: (path: string) => void;
+  // Canonical task reminder setter
+  setTaskReminderConfig?: (
+    config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
+  ) => void;
 
   // Hook functions
   updateProviders: (providers: ProviderConfig[]) => void;
@@ -255,22 +259,25 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Sound notification config callback
+    // Canonical task reminder config callback
+    window.updateTaskReminderConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        // 新协议优先：收到完整 taskReminder 结构时，直接整体替换为规范化后的结果。
+        d().setTaskReminderConfig?.(normalizeTaskReminderConfig(data));
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse task reminder config:', error);
+      }
+    };
+
+    // Legacy sound notification config callback (compatibility bridge).
+    // This only merges into taskReminderConfig.sound and must not touch popup/balloon.
     window.updateSoundNotificationConfig = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
-        if (data.enabled !== undefined) {
-          d().setSoundNotificationEnabled?.(data.enabled);
-        }
-        if (data.onlyWhenUnfocused !== undefined) {
-          d().setSoundOnlyWhenUnfocused?.(data.onlyWhenUnfocused);
-        }
-        if (data.selectedSound !== undefined) {
-          d().setSelectedSound?.(data.selectedSound);
-        }
-        if (data.customSoundPath !== undefined) {
-          d().setCustomSoundPath?.(data.customSoundPath);
-        }
+        // 老协议仍可能从 Java 某些路径回推，这里只把数据桥接进 sound 子树，
+        // 避免把已经迁移完成的 popup / balloon 配置又覆盖回旧模型。
+        d().setTaskReminderConfig?.((prev) => mergeLegacySoundConfig(prev, data));
       } catch (error) {
         console.error('[SettingsView] Failed to parse sound notification config:', error);
       }
@@ -406,7 +413,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_streaming_enabled:');
     sendToJava('get_codex_sandbox_mode:');
     sendToJava('get_commit_prompt:');
-    sendToJava('get_sound_notification_config:');
+    // 设置页初始化时优先拉取 canonical taskReminder 配置；
+    // 如有必要，Java 侧会再兼容性地下发 legacy sound config。
+    sendToJava('get_task_reminder_config:');
     sendToJava('get_commit_generation_enabled:');
     sendToJava('get_status_bar_widget_enabled:');
 
@@ -432,6 +441,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         window.updateSendShortcut = previousUpdateSendShortcut;
       }
       window.updateCommitPrompt = undefined;
+      window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;
       window.updateCommitGenerationEnabled = undefined;
       window.updateStatusBarWidgetEnabled = undefined;

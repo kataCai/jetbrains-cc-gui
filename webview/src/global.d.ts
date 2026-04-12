@@ -137,6 +137,11 @@ interface Window {
   showPlanApprovalDialog?: (json: string) => void;
 
   /**
+   * Show task reminder dialog
+   */
+  showTaskReminderDialog?: (json: string) => void;
+
+  /**
    * Add selection info (file and line numbers) - auto-tracked, only updates ContextBar
    */
   addSelectionInfo?: (selectionInfo: string) => void;
@@ -249,6 +254,11 @@ interface Window {
    * Update sound notification configuration
    */
   updateSoundNotificationConfig?: (json: string) => void;
+
+  /**
+   * Update canonical task reminder configuration
+   */
+  updateTaskReminderConfig?: (json: string) => void;
 
   /**
    * Update AI commit generation enabled state
@@ -691,6 +701,8 @@ interface Window {
   __pendingAskUserQuestionDialogRequests?: string[];
 
   __pendingPlanApprovalDialogRequests?: string[];
+
+  __pendingTaskReminderDialogRequests?: string[];
 
   /**
    * Pending updateMessages payload before React initialization

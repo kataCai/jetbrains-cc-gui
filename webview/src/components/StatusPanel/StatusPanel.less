@@ -4,6 +4,43 @@
   margin: 0 20px 8px 20px;
 }
 
+.chat-mode-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.chat-mode-strip__mode {
+  color: var(--text-secondary);
+}
+
+.chat-mode-strip__state {
+  padding-left: 6px;
+  border-left: 1px solid var(--border-primary);
+  color: var(--text-primary);
+}
+
+.chat-mode-strip[data-state='running'] .chat-mode-strip__state,
+.chat-mode-strip[data-state='retrying'] .chat-mode-strip__state {
+  color: #e2a03f;
+}
+
+.chat-mode-strip[data-state='completed'] .chat-mode-strip__state,
+.chat-mode-strip[data-state='recovered'] .chat-mode-strip__state {
+  color: #89d185;
+}
+
+.chat-mode-strip[data-state='final_error'] .chat-mode-strip__state {
+  color: #ff6b6b;
+}
+
 /* Tab Header - Always visible */
 .status-panel-tabs {
   display: flex;
@@ -34,6 +71,16 @@
       background: var(--scrollbar-thumb-hover);
     }
   }
+}
+
+.status-panel-mode-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 .status-panel-tab {

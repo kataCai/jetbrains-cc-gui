@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
+import type {
+  TaskReminderChannel,
+  TaskReminderConfig,
+  TaskReminderState,
+} from '../../../types/taskReminder';
+import { DEFAULT_TASK_REMINDER_CONFIG, TASK_REMINDER_STATES } from '../../../types/taskReminder';
 
 /** Upward-opening custom select for sound selection (avoids JCEF clipping) */
 const SoundSelectUpward = ({
@@ -85,14 +91,19 @@ export interface BehaviorTabProps {
   onCommitGenerationEnabledChange?: (enabled: boolean) => void;
   statusBarWidgetEnabled?: boolean;
   onStatusBarWidgetEnabledChange?: (enabled: boolean) => void;
-  soundNotificationEnabled?: boolean;
-  onSoundNotificationEnabledChange?: (enabled: boolean) => void;
-  soundOnlyWhenUnfocused?: boolean;
-  onSoundOnlyWhenUnfocusedChange?: (enabled: boolean) => void;
-  selectedSound?: string;
-  onSelectedSoundChange?: (soundId: string) => void;
-  customSoundPath?: string;
-  onCustomSoundPathChange?: (path: string) => void;
+  taskReminderConfig?: TaskReminderConfig;
+  onTaskReminderEnabledChange?: (channel: TaskReminderChannel, enabled: boolean) => void;
+  onTaskReminderStateToggle?: (
+    channel: TaskReminderChannel,
+    state: TaskReminderState,
+    enabled: boolean,
+  ) => void;
+  onTaskReminderOnlyWhenIdeUnfocusedChange?: (
+    channel: TaskReminderChannel,
+    enabled: boolean,
+  ) => void;
+  onTaskReminderSelectedSoundChange?: (soundId: string) => void;
+  onTaskReminderCustomSoundPathChange?: (path: string) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onBrowseSound?: () => void;
@@ -111,14 +122,12 @@ const BehaviorTab = ({
   onCommitGenerationEnabledChange = () => {},
   statusBarWidgetEnabled = true,
   onStatusBarWidgetEnabledChange = () => {},
-  soundNotificationEnabled = false,
-  onSoundNotificationEnabledChange = () => {},
-  soundOnlyWhenUnfocused = false,
-  onSoundOnlyWhenUnfocusedChange = () => {},
-  selectedSound = 'default',
-  onSelectedSoundChange = () => {},
-  customSoundPath = '',
-  onCustomSoundPathChange = () => {},
+  taskReminderConfig = DEFAULT_TASK_REMINDER_CONFIG,
+  onTaskReminderEnabledChange = () => {},
+  onTaskReminderStateToggle = () => {},
+  onTaskReminderOnlyWhenIdeUnfocusedChange = () => {},
+  onTaskReminderSelectedSoundChange = () => {},
+  onTaskReminderCustomSoundPathChange = () => {},
   onSaveCustomSoundPath = () => {},
   onTestSound = () => {},
   onBrowseSound = () => {},
@@ -133,6 +142,38 @@ const BehaviorTab = ({
     { value: 'success', label: t('settings.basic.soundNotification.soundSuccess') },
     { value: 'custom', label: t('settings.basic.soundNotification.soundCustom') },
   ], [t]);
+
+  const stateLabelMap = useMemo<Record<TaskReminderState, string>>(() => ({
+    waiting_confirm: t('settings.basic.taskReminder.state.waitingConfirm', 'Waiting for confirmation'),
+    retrying: t('settings.basic.taskReminder.state.retrying', 'Retrying'),
+    recovered: t('settings.basic.taskReminder.state.recovered', 'Recovered'),
+    final_error: t('settings.basic.taskReminder.state.finalError', 'Final error'),
+    completed: t('settings.basic.taskReminder.state.completed', 'Completed'),
+  }), [t]);
+
+  const renderReminderStates = (
+    channel: TaskReminderChannel,
+    title: string,
+    selectedStates: TaskReminderState[],
+  ) => (
+    // 每个渠道共享同一组可选状态，但是否启用由各自 channel 单独控制。
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+      {TASK_REMINDER_STATES.map((state) => {
+        const checked = selectedStates.includes(state);
+        return (
+          <label key={`${channel}-${state}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <input
+              aria-label={`${title} state ${state}`}
+              type="checkbox"
+              checked={checked}
+              onChange={(event) => onTaskReminderStateToggle(channel, state, event.target.checked)}
+            />
+            <span>{stateLabelMap[state]}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className={styles.tabContent}>
@@ -301,106 +342,140 @@ const BehaviorTab = ({
         </small>
       </div>
 
-      {/* Sound notification */}
+      {/* Task reminder configuration */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
-          <span className="codicon codicon-unmute" />
-          <span className={styles.fieldLabel}>{t('settings.basic.soundNotification.label')}</span>
+          <span className="codicon codicon-bell" />
+          <span className={styles.fieldLabel}>{t('settings.basic.taskReminder.label', 'Task Reminder / 状态提醒')}</span>
         </div>
-        <label className={styles.toggleWrapper}>
-          <input
-            type="checkbox"
-            className={styles.toggleInput}
-            checked={soundNotificationEnabled}
-            onChange={(e) => onSoundNotificationEnabledChange(e.target.checked)}
-          />
-          <span className={styles.toggleSlider} />
-          <span className={styles.toggleLabel}>
-            {soundNotificationEnabled
-              ? t('settings.basic.soundNotification.enabled')
-              : t('settings.basic.soundNotification.disabled')}
-          </span>
-        </label>
         <small className={styles.formHint}>
           <span className="codicon codicon-info" />
-          <span>{t('settings.basic.soundNotification.hint')}</span>
+          <span>{t('settings.basic.taskReminder.hint', 'Configure popup, balloon, and sound reminders by task state.')}</span>
         </small>
 
-        {soundNotificationEnabled && (
-          <div className={styles.customSoundSection}>
-            <div className={styles.soundOnlyWhenUnfocusedSection}>
-              <div className={styles.fieldHeader}>
-                <span className="codicon codicon-eye-closed" />
-                <span className={styles.fieldLabel}>{t('settings.basic.soundNotification.onlyWhenUnfocused')}</span>
-              </div>
-              <label className={styles.toggleWrapper}>
-                <input
-                  type="checkbox"
-                  className={styles.toggleInput}
-                  checked={soundOnlyWhenUnfocused}
-                  onChange={(e) => onSoundOnlyWhenUnfocusedChange(e.target.checked)}
-                />
-                <span className={styles.toggleSlider} />
-                <span className={styles.toggleLabel}>
-                  {soundOnlyWhenUnfocused
-                    ? t('settings.basic.soundNotification.enabled')
-                    : t('settings.basic.soundNotification.disabled')}
-                </span>
-              </label>
-              <small className={styles.formHint}>
-                <span className="codicon codicon-info" />
-                <span>{t('settings.basic.soundNotification.onlyWhenUnfocusedHint')}</span>
-              </small>
-            </div>
-
-            <div className={styles.fieldHeader}>
-              <span className="codicon codicon-library" />
-              <span className={styles.fieldLabel}>{t('settings.basic.soundNotification.selectSound')}</span>
-            </div>
-            <SoundSelectUpward
-              value={selectedSound}
-              onChange={onSelectedSoundChange}
-              options={soundOptions}
-              onTestSound={onTestSound}
-              testSoundLabel={t('settings.basic.soundNotification.testSound')}
-            />
-
-            {selectedSound === 'custom' && (
-              <div className={styles.customSoundFileSection}>
-                <div className={styles.fieldHeader}>
-                  <span className="codicon codicon-file-media" />
-                  <span className={styles.fieldLabel}>{t('settings.basic.soundNotification.customSound')}</span>
-                </div>
-                <div className={styles.nodePathInputWrapper}>
-                  <input
-                    type="text"
-                    className={styles.nodePathInput}
-                    placeholder={t('settings.basic.soundNotification.customSoundPlaceholder')}
-                    value={customSoundPath}
-                    onChange={(e) => onCustomSoundPathChange(e.target.value)}
-                  />
-                  <button
-                    className={styles.saveBtn}
-                    onClick={onBrowseSound}
-                    title={t('settings.basic.soundNotification.browse')}
-                  >
-                    <span className="codicon codicon-folder-opened" />
-                  </button>
-                  <button
-                    className={styles.saveBtn}
-                    onClick={onSaveCustomSoundPath}
-                  >
-                    {t('common.save')}
-                  </button>
-                </div>
-                <small className={styles.formHint}>
-                  <span className="codicon codicon-info" />
-                  <span>{t('settings.basic.soundNotification.customSoundHint')}</span>
-                </small>
-              </div>
-            )}
+        {/* Popup reminder */}
+        <div className={styles.customSoundSection}>
+          <div className={styles.fieldHeader}>
+            <span className="codicon codicon-comment-discussion" />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskReminder.popup', 'Popup')}</span>
           </div>
-        )}
+          <label style={{ display: 'block', marginBottom: '8px' }}>
+            <input
+              aria-label="Popup enabled"
+              type="checkbox"
+              checked={taskReminderConfig.popup.enabled}
+              onChange={(event) => onTaskReminderEnabledChange('popup', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.enabled', 'Enabled')}</span>
+          </label>
+          {renderReminderStates('popup', 'Popup', taskReminderConfig.popup.states)}
+          <label style={{ display: 'block' }}>
+            <input
+              aria-label="Popup only when IDE unfocused"
+              type="checkbox"
+              checked={taskReminderConfig.popup.onlyWhenIdeUnfocused}
+              onChange={(event) => onTaskReminderOnlyWhenIdeUnfocusedChange('popup', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
+          </label>
+        </div>
+
+        {/* Balloon reminder */}
+        <div className={styles.customSoundSection}>
+          <div className={styles.fieldHeader}>
+            <span className="codicon codicon-notifications" />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskReminder.balloon', 'Balloon')}</span>
+          </div>
+          <label style={{ display: 'block', marginBottom: '8px' }}>
+            <input
+              aria-label="Balloon enabled"
+              type="checkbox"
+              checked={taskReminderConfig.balloon.enabled}
+              onChange={(event) => onTaskReminderEnabledChange('balloon', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.enabled', 'Enabled')}</span>
+          </label>
+          {renderReminderStates('balloon', 'Balloon', taskReminderConfig.balloon.states)}
+          <label style={{ display: 'block' }}>
+            <input
+              aria-label="Balloon only when IDE unfocused"
+              type="checkbox"
+              checked={taskReminderConfig.balloon.onlyWhenIdeUnfocused}
+              onChange={(event) => onTaskReminderOnlyWhenIdeUnfocusedChange('balloon', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
+          </label>
+        </div>
+
+        {/* Sound reminder */}
+        <div className={styles.customSoundSection}>
+          <div className={styles.fieldHeader}>
+            <span className="codicon codicon-unmute" />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskReminder.sound', 'Sound')}</span>
+          </div>
+          <label style={{ display: 'block', marginBottom: '8px' }}>
+            <input
+              aria-label="Sound enabled"
+              type="checkbox"
+              checked={taskReminderConfig.sound.enabled}
+              onChange={(event) => onTaskReminderEnabledChange('sound', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.enabled', 'Enabled')}</span>
+          </label>
+          {renderReminderStates('sound', 'Sound', taskReminderConfig.sound.states)}
+          <label style={{ display: 'block', marginBottom: '12px' }}>
+            <input
+              aria-label="Sound only when IDE unfocused"
+              type="checkbox"
+              checked={taskReminderConfig.sound.onlyWhenIdeUnfocused}
+              onChange={(event) => onTaskReminderOnlyWhenIdeUnfocusedChange('sound', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
+          </label>
+
+          <div className={styles.fieldHeader}>
+            <span className="codicon codicon-library" />
+            <span className={styles.fieldLabel}>{t('settings.basic.soundNotification.selectSound', 'Select sound')}</span>
+          </div>
+          <SoundSelectUpward
+            value={taskReminderConfig.sound.selectedSound}
+            onChange={onTaskReminderSelectedSoundChange}
+            options={soundOptions}
+            onTestSound={onTestSound}
+            testSoundLabel={t('settings.basic.soundNotification.testSound', 'Test sound')}
+          />
+
+          {taskReminderConfig.sound.selectedSound === 'custom' && (
+            <div className={styles.customSoundFileSection}>
+              <div className={styles.fieldHeader}>
+                <span className="codicon codicon-file-media" />
+                <span className={styles.fieldLabel}>{t('settings.basic.soundNotification.customSound', 'Custom sound')}</span>
+              </div>
+              <div className={styles.nodePathInputWrapper}>
+                <input
+                  type="text"
+                  className={styles.nodePathInput}
+                  placeholder={t('settings.basic.soundNotification.customSoundPlaceholder', 'Input custom sound path')}
+                  value={taskReminderConfig.sound.customSoundPath}
+                  onChange={(event) => onTaskReminderCustomSoundPathChange(event.target.value)}
+                />
+                <button
+                  className={styles.saveBtn}
+                  onClick={onBrowseSound}
+                  title={t('settings.basic.soundNotification.browse', 'Browse')}
+                >
+                  <span className="codicon codicon-folder-opened" />
+                </button>
+                <button
+                  className={styles.saveBtn}
+                  onClick={onSaveCustomSoundPath}
+                >
+                  {t('common.save', 'Save')}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

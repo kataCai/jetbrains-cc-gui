@@ -123,14 +123,8 @@ const SettingsView = ({
     setCommitPrompt,
     savingCommitPrompt,
     setSavingCommitPrompt,
-    soundNotificationEnabled,
-    setSoundNotificationEnabled,
-    soundOnlyWhenUnfocused,
-    setSoundOnlyWhenUnfocused,
-    selectedSound,
-    setSelectedSound,
-    customSoundPath,
-    setCustomSoundPath,
+    taskReminderConfig,
+    setTaskReminderConfig,
     diffExpandedByDefault,
     setDiffExpandedByDefault,
     historyCompletionEnabled,
@@ -141,10 +135,11 @@ const SettingsView = ({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
-    handleSoundNotificationEnabledChange,
-    handleSoundOnlyWhenUnfocusedChange,
-    handleSelectedSoundChange,
-    handleCustomSoundPathChange,
+    handleTaskReminderEnabledChange,
+    handleTaskReminderStateToggle,
+    handleTaskReminderOnlyWhenIdeUnfocusedChange,
+    handleTaskReminderSelectedSoundChange,
+    handleTaskReminderCustomSoundPathChange,
     handleSaveCustomSoundPath,
     handleTestSound,
     handleBrowseSound,
@@ -281,10 +276,7 @@ const SettingsView = ({
     addToast,
     onStreamingEnabledChangeProp,
     onSendShortcutChangeProp,
-    setSoundNotificationEnabled,
-    setSoundOnlyWhenUnfocused,
-    setSelectedSound,
-    setCustomSoundPath,
+    setTaskReminderConfig,
     setCommitGenerationEnabled,
     setStatusBarWidgetEnabled,
   });
@@ -433,14 +425,12 @@ const SettingsView = ({
                 handleStatusBarWidgetEnabledChange(enabled);
                 addToast(t('toast.restartRequired'), 'warning');
               }}
-              soundNotificationEnabled={soundNotificationEnabled}
-              onSoundNotificationEnabledChange={handleSoundNotificationEnabledChange}
-              soundOnlyWhenUnfocused={soundOnlyWhenUnfocused}
-              onSoundOnlyWhenUnfocusedChange={handleSoundOnlyWhenUnfocusedChange}
-              selectedSound={selectedSound}
-              onSelectedSoundChange={handleSelectedSoundChange}
-              customSoundPath={customSoundPath}
-              onCustomSoundPathChange={handleCustomSoundPathChange}
+              taskReminderConfig={taskReminderConfig}
+              onTaskReminderEnabledChange={handleTaskReminderEnabledChange}
+              onTaskReminderStateToggle={handleTaskReminderStateToggle}
+              onTaskReminderOnlyWhenIdeUnfocusedChange={handleTaskReminderOnlyWhenIdeUnfocusedChange}
+              onTaskReminderSelectedSoundChange={handleTaskReminderSelectedSoundChange}
+              onTaskReminderCustomSoundPathChange={handleTaskReminderCustomSoundPathChange}
               onSaveCustomSoundPath={handleSaveCustomSoundPath}
               onTestSound={handleTestSound}
               onBrowseSound={handleBrowseSound}
