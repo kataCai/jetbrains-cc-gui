@@ -1,6 +1,7 @@
 package com.github.claudecodegui.ui;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
+import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.handler.AgentHandler;
@@ -32,10 +33,12 @@ import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
-import com.github.claudecodegui.taskstate.TaskStateService;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
+import com.github.claudecodegui.taskstate.TaskReminderPolicyFactory;
+import com.github.claudecodegui.taskstate.TaskStateService;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.MessageJsonConverter;
+import com.github.claudecodegui.util.SoundNotificationService;
 import com.google.gson.JsonObject;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.application.ApplicationManager;
@@ -247,14 +250,23 @@ public class ChatWindowDelegate {
         // TaskStateService 负责把“发送、审批、重试、完成”等离散后端事件收敛成单一任务状态；
         // Dispatcher 再把这个统一状态分发到前端弹窗、状态栏、气泡和声音渠道。
         TaskStateService taskStateService = new TaskStateService();
-        TaskReminderDispatcher taskReminderDispatcher = new TaskReminderDispatcher(handlerContext);
+        TaskReminderPolicyFactory taskReminderPolicyFactory = new TaskReminderPolicyFactory();
+        // 提醒策略需要跟随设置页实时变化，因此这里注入“按次解析最新配置”的 provider，
+        // 避免窗口初始化时把默认策略缓存死，导致用户修改设置后仍然不生效。
+        TaskReminderDispatcher taskReminderDispatcher = new TaskReminderDispatcher(
+            handlerContext,
+            () -> taskReminderPolicyFactory.fromSettingsService(settingsService),
+            new ClaudeBalloonNotifier(),
+            SoundNotificationService.getInstance()::playTaskReminderSound,
+            () -> ApplicationManager.getApplication().isActive()
+        );
 
         messageDispatcher.registerHandler(new ProviderHandler(handlerContext));
         messageDispatcher.registerHandler(new McpServerHandler(handlerContext));
         messageDispatcher.registerHandler(new CodexMcpServerHandler(handlerContext, settingsService.getCodexMcpServerManager()));
         messageDispatcher.registerHandler(new SkillHandler(handlerContext));
         messageDispatcher.registerHandler(new FileHandler(handlerContext));
-        messageDispatcher.registerHandler(new SettingsHandler(handlerContext));
+        messageDispatcher.registerHandler(new SettingsHandler(handlerContext, taskReminderDispatcher));
         messageDispatcher.registerHandler(new SessionHandler(handlerContext, taskStateService, taskReminderDispatcher));
         messageDispatcher.registerHandler(new FileExportHandler(handlerContext));
         messageDispatcher.registerHandler(new DiffHandler(handlerContext));

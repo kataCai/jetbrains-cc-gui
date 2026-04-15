@@ -142,6 +142,8 @@ const SettingsView = ({
     handleTaskReminderCustomSoundPathChange,
     handleSaveCustomSoundPath,
     handleTestSound,
+    handleTestPopup,
+    handleTestBalloon,
     handleBrowseSound,
     handleSaveCommitPrompt,
     commitGenerationEnabled,
@@ -433,6 +435,8 @@ const SettingsView = ({
               onTaskReminderCustomSoundPathChange={handleTaskReminderCustomSoundPathChange}
               onSaveCustomSoundPath={handleSaveCustomSoundPath}
               onTestSound={handleTestSound}
+              onTestPopup={handleTestPopup}
+              onTestBalloon={handleTestBalloon}
               onBrowseSound={handleBrowseSound}
             />
           </div>

@@ -3,6 +3,7 @@ package com.github.claudecodegui.handler;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.util.SoundNotificationService;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -22,11 +23,13 @@ public class SoundSettingsHandler {
 
     private final HandlerContext context;
     private final CodemossSettingsService settingsService;
+    private final TaskReminderDispatcher taskReminderDispatcher;
     private final Gson gson = new Gson();
 
-    public SoundSettingsHandler(HandlerContext context) {
+    public SoundSettingsHandler(HandlerContext context, TaskReminderDispatcher taskReminderDispatcher) {
         this.context = context;
         this.settingsService = context.getSettingsService();
+        this.taskReminderDispatcher = taskReminderDispatcher;
     }
 
     /**
@@ -221,6 +224,30 @@ public class SoundSettingsHandler {
         } catch (Exception e) {
             LOG.error("[SoundSettingsHandler] Failed to test sound: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 触发一次 CC GUI 内部 popup 预览，帮助用户确认前端弹窗链路是否可用。
+     */
+    public void handleTestTaskReminderPopup() {
+        if (taskReminderDispatcher == null) {
+            LOG.warn("[SoundSettingsHandler] Skip popup reminder preview because dispatcher is unavailable");
+            return;
+        }
+        LOG.info("[SoundSettingsHandler] Trigger popup reminder preview from settings");
+        taskReminderDispatcher.dispatchTestPopup();
+    }
+
+    /**
+     * 触发一次 IDE balloon 预览，帮助用户区分“插件未发送”与“IDE 设置未展示”。
+     */
+    public void handleTestTaskReminderBalloon() {
+        if (taskReminderDispatcher == null) {
+            LOG.warn("[SoundSettingsHandler] Skip balloon reminder preview because dispatcher is unavailable");
+            return;
+        }
+        LOG.info("[SoundSettingsHandler] Trigger balloon reminder preview from settings");
+        taskReminderDispatcher.dispatchTestBalloon();
     }
 
     /**

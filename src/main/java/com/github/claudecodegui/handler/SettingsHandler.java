@@ -3,6 +3,7 @@ package com.github.claudecodegui.handler;
 import com.github.claudecodegui.handler.core.BaseMessageHandler;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.handler.provider.ModelProviderHandler;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 
 import com.github.claudecodegui.util.ThemeConfigService;
 import com.intellij.openapi.application.ApplicationManager;
@@ -64,13 +65,15 @@ public class SettingsHandler extends BaseMessageHandler {
         "set_selected_sound",
         "set_custom_sound_path",
         "test_sound",
+        "test_task_reminder_popup",
+        "test_task_reminder_balloon",
         "browse_sound_file"
     };
 
-    public SettingsHandler(HandlerContext context) {
+    public SettingsHandler(HandlerContext context, TaskReminderDispatcher taskReminderDispatcher) {
         super(context);
         this.inputHistoryHandler = new InputHistoryHandler(context);
-        this.soundSettingsHandler = new SoundSettingsHandler(context);
+        this.soundSettingsHandler = new SoundSettingsHandler(context, taskReminderDispatcher);
         this.usagePushService = new UsagePushService(context);
         this.permissionModeHandler = new PermissionModeHandler(context);
         this.modelProviderHandler = new ModelProviderHandler(context, usagePushService);
@@ -218,6 +221,12 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "test_sound":
                 soundSettingsHandler.handleTestSound(content);
+                return true;
+            case "test_task_reminder_popup":
+                soundSettingsHandler.handleTestTaskReminderPopup();
+                return true;
+            case "test_task_reminder_balloon":
+                soundSettingsHandler.handleTestTaskReminderBalloon();
                 return true;
             case "browse_sound_file":
                 soundSettingsHandler.handleBrowseSoundFile();

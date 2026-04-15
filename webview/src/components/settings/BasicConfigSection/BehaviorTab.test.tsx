@@ -50,6 +50,7 @@ describe('BehaviorTab task reminder section', () => {
     expect(screen.getByText('Popup')).toBeTruthy();
     expect(screen.getByText('Balloon')).toBeTruthy();
     expect(screen.getByText('Sound')).toBeTruthy();
+    expect(screen.getByText(/Notifications/i)).toBeTruthy();
   });
 
   it('shows key toggles and state multi-select controls', () => {
@@ -79,5 +80,55 @@ describe('BehaviorTab task reminder section', () => {
     const popupState = screen.getByLabelText('Popup state waiting_confirm');
     fireEvent.click(popupState);
     expect(onTaskReminderStateToggle).toHaveBeenCalledWith('popup', 'waiting_confirm', false);
+  });
+
+  it('limits popup state options to supported strong reminder states', () => {
+    render(
+      <BehaviorTab
+        taskReminderConfig={defaultTaskReminderConfig}
+        onTaskReminderEnabledChange={vi.fn()}
+        onTaskReminderStateToggle={vi.fn()}
+        onTaskReminderOnlyWhenIdeUnfocusedChange={vi.fn()}
+        onTaskReminderSelectedSoundChange={vi.fn()}
+        onTaskReminderCustomSoundPathChange={vi.fn()}
+        onSaveCustomSoundPath={vi.fn()}
+        onTestSound={vi.fn()}
+        onBrowseSound={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Popup state waiting_confirm')).toBeTruthy();
+    expect(screen.getByLabelText('Popup state final_error')).toBeTruthy();
+    expect(screen.queryByLabelText('Popup state completed')).toBeNull();
+    expect(screen.queryByLabelText('Popup state retrying')).toBeNull();
+    expect(screen.queryByLabelText('Popup state recovered')).toBeNull();
+    expect(screen.getByLabelText('Balloon state completed')).toBeTruthy();
+  });
+
+  it('renders popup and balloon test actions and triggers callbacks', () => {
+    const onTestPopup = vi.fn();
+    const onTestBalloon = vi.fn();
+
+    render(
+      <BehaviorTab
+        taskReminderConfig={defaultTaskReminderConfig}
+        onTaskReminderEnabledChange={vi.fn()}
+        onTaskReminderStateToggle={vi.fn()}
+        onTaskReminderOnlyWhenIdeUnfocusedChange={vi.fn()}
+        onTaskReminderSelectedSoundChange={vi.fn()}
+        onTaskReminderCustomSoundPathChange={vi.fn()}
+        onSaveCustomSoundPath={vi.fn()}
+        onTestSound={vi.fn()}
+        onBrowseSound={vi.fn()}
+        onTestPopup={onTestPopup}
+        onTestBalloon={onTestBalloon}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test popup' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test balloon' }));
+
+    expect(onTestPopup).toHaveBeenCalledTimes(1);
+    expect(onTestBalloon).toHaveBeenCalledTimes(1);
   });
 });

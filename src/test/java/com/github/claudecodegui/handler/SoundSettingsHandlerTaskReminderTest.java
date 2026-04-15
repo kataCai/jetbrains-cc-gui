@@ -2,6 +2,7 @@ package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -47,7 +48,7 @@ public class SoundSettingsHandlerTaskReminderTest {
         CodemossSettingsService settingsService = new CodemossSettingsService();
         CapturingJsCallback jsCallback = new CapturingJsCallback();
         HandlerContext context = new HandlerContext(null, null, null, settingsService, jsCallback);
-        SoundSettingsHandler handler = new SoundSettingsHandler(context);
+        SoundSettingsHandler handler = new SoundSettingsHandler(context, null);
 
         handler.handleGetTaskReminderConfig();
         flushEdt();
@@ -79,7 +80,7 @@ public class SoundSettingsHandlerTaskReminderTest {
 
         CapturingJsCallback jsCallback = new CapturingJsCallback();
         HandlerContext context = new HandlerContext(null, null, null, settingsService, jsCallback);
-        SoundSettingsHandler handler = new SoundSettingsHandler(context);
+        SoundSettingsHandler handler = new SoundSettingsHandler(context, null);
 
         handler.handleGetSoundNotificationConfig();
         flushEdt();
@@ -93,6 +94,20 @@ public class SoundSettingsHandlerTaskReminderTest {
         assertTrue(payload.get("onlyWhenUnfocused").getAsBoolean());
         assertEquals("chime", payload.get("selectedSound").getAsString());
         assertEquals("/tmp/chime.wav", payload.get("customSoundPath").getAsString());
+    }
+
+    @Test
+    public void shouldDelegateReminderPreviewActionsToDispatcher() {
+        CapturingJsCallback jsCallback = new CapturingJsCallback();
+        HandlerContext context = new HandlerContext(null, null, null, new CodemossSettingsService(), jsCallback);
+        RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+        SoundSettingsHandler handler = new SoundSettingsHandler(context, dispatcher);
+
+        handler.handleTestTaskReminderPopup();
+        handler.handleTestTaskReminderBalloon();
+
+        assertEquals(1, dispatcher.popupPreviewCalls);
+        assertEquals(1, dispatcher.balloonPreviewCalls);
     }
 
     private void flushEdt() {
@@ -152,5 +167,24 @@ public class SoundSettingsHandlerTaskReminderTest {
      * 记录一次 JS 调用及其首个 payload。
      */
     private record JsCall(String functionName, String payload) {
+    }
+
+    private static class RecordingTaskReminderDispatcher extends TaskReminderDispatcher {
+        private int popupPreviewCalls;
+        private int balloonPreviewCalls;
+
+        RecordingTaskReminderDispatcher(HandlerContext context) {
+            super(context);
+        }
+
+        @Override
+        public void dispatchTestPopup() {
+            popupPreviewCalls++;
+        }
+
+        @Override
+        public void dispatchTestBalloon() {
+            balloonPreviewCalls++;
+        }
     }
 }

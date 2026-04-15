@@ -94,6 +94,8 @@
     "planMode": "计划模式",
     "planModeLabel": "计划",
     "planUnavailableForCodex": "Codex 暂不支持计划模式",
+    "planRequiresClaudeHint": "Plan 需要 Claude。请切换到 Claude 后使用。",
+    "planDowngradedForCodex": "Codex 不支持 Plan，已自动回退到 Chat/default。",
     "modeStripLabel": "模式：{{mode}}",
     "taskState": {
       "running": "执行中",
@@ -257,7 +259,10 @@
           "recovered": "已恢复",
           "finalError": "最终失败",
           "completed": "已完成"
-        }
+        },
+        "balloonNotificationsHint": "Balloon 是否可见还受 IDE Notifications 设置影响：Settings | Appearance & Behavior | Notifications。",
+        "testPopup": "测试弹窗",
+        "testBalloon": "测试气泡"
       }
     },
     "providers": "供应商管理",

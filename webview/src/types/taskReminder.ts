@@ -12,6 +12,12 @@ export const TASK_REMINDER_STATES = [
 
 export type TaskReminderState = (typeof TASK_REMINDER_STATES)[number];
 export type TaskReminderChannel = 'popup' | 'balloon' | 'sound';
+export const POPUP_TASK_REMINDER_STATES = ['waiting_confirm', 'final_error'] as const;
+export const TASK_REMINDER_CHANNEL_STATES: Record<TaskReminderChannel, readonly TaskReminderState[]> = {
+  popup: POPUP_TASK_REMINDER_STATES,
+  balloon: TASK_REMINDER_STATES,
+  sound: TASK_REMINDER_STATES,
+};
 
 /**
  * 单个提醒渠道的通用配置。
@@ -93,9 +99,15 @@ const isReminderState = (value: unknown): value is TaskReminderState => (
  * 过滤并规范化状态数组。
  * 非法值会被剔除；如果结果为空，则回退到默认状态集合。
  */
-const sanitizeStates = (states: unknown, fallback: TaskReminderState[]): TaskReminderState[] => {
+const sanitizeStates = (
+  states: unknown,
+  fallback: TaskReminderState[],
+  allowedStates: readonly TaskReminderState[] = TASK_REMINDER_STATES,
+): TaskReminderState[] => {
   if (!Array.isArray(states)) return fallback.slice();
-  const valid = states.filter(isReminderState);
+  const valid = states.filter((state): state is TaskReminderState => (
+    isReminderState(state) && allowedStates.includes(state)
+  ));
   // 去重后返回新数组，既保证 React state 可预测，也避免后端/本地存储重复项扩散。
   return valid.length > 0 ? Array.from(new Set(valid)) : fallback.slice();
 };
@@ -125,7 +137,7 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
   return {
     popup: {
       enabled: toBoolean(popupRaw.enabled, popupDefault.enabled),
-      states: sanitizeStates(popupRaw.states, popupDefault.states),
+      states: sanitizeStates(popupRaw.states, popupDefault.states, TASK_REMINDER_CHANNEL_STATES.popup),
       onlyWhenIdeUnfocused: toBoolean(
         popupRaw.onlyWhenIdeUnfocused,
         popupDefault.onlyWhenIdeUnfocused,
@@ -133,7 +145,7 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
     },
     balloon: {
       enabled: toBoolean(balloonRaw.enabled, balloonDefault.enabled),
-      states: sanitizeStates(balloonRaw.states, balloonDefault.states),
+      states: sanitizeStates(balloonRaw.states, balloonDefault.states, TASK_REMINDER_CHANNEL_STATES.balloon),
       onlyWhenIdeUnfocused: toBoolean(
         balloonRaw.onlyWhenIdeUnfocused,
         balloonDefault.onlyWhenIdeUnfocused,
@@ -141,7 +153,7 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
     },
     sound: {
       enabled: toBoolean(soundRaw.enabled, soundDefault.enabled),
-      states: sanitizeStates(soundRaw.states, soundDefault.states),
+      states: sanitizeStates(soundRaw.states, soundDefault.states, TASK_REMINDER_CHANNEL_STATES.sound),
       onlyWhenIdeUnfocused: toBoolean(
         soundRaw.onlyWhenIdeUnfocused,
         soundDefault.onlyWhenIdeUnfocused,

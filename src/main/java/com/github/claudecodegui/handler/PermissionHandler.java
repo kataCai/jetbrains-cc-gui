@@ -34,7 +34,8 @@ public class PermissionHandler extends BaseMessageHandler {
     private static final String[] SUPPORTED_TYPES = {
         "permission_decision",
         "ask_user_question_response",
-        "plan_approval_response"
+        "plan_approval_response",
+        "plan_approval_dialog_visibility"
     };
 
     // Permission request map
@@ -53,9 +54,9 @@ public class PermissionHandler extends BaseMessageHandler {
 
     private final TaskStateService taskStateService;
     private final TaskReminderDispatcher taskReminderDispatcher;
-    // 仅用于提醒策略判断：如果审批弹窗已经在前台打开，就不再额外弹出 task reminder popup，
-    // 避免用户面对两层内容几乎相同的弹窗。
-    private volatile boolean planApprovalDialogOpen;
+    // 浠呯敤浜庢彁閱掔瓥鐣ュ垽鏂細濡傛灉瀹℃壒寮圭獥宸茬粡鍦ㄥ墠鍙版墦寮€锛屽氨涓嶅啀棰濆寮瑰嚭 task reminder popup锛?
+    // 閬垮厤鐢ㄦ埛闈㈠涓ゅ眰鍐呭鍑犱箮鐩稿悓鐨勫脊绐椼€?
+    private volatile boolean planApprovalDialogVisible;
     private PermissionDeniedCallback deniedCallback;
 
     public PermissionHandler(HandlerContext context) {
@@ -96,6 +97,11 @@ public class PermissionHandler extends BaseMessageHandler {
             LOG.debug("[ASK_USER_QUESTION][BRIDGE_RECV] Received ask_user_question_response from JS");
             LOG.debug("[ASK_USER_QUESTION][BRIDGE_RECV] Content: " + content);
             handleAskUserQuestionResponse(content);
+            return true;
+        } else if ("plan_approval_dialog_visibility".equals(type)) {
+            LOG.debug("[PLAN_APPROVAL][BRIDGE_RECV] Received plan_approval_dialog_visibility from JS");
+            LOG.debug("[PLAN_APPROVAL][BRIDGE_RECV] Content: " + content);
+            handlePlanApprovalDialogVisibility(content);
             return true;
         } else if ("plan_approval_response".equals(type)) {
             LOG.debug("[PLAN_APPROVAL][BRIDGE_RECV] Received plan_approval_response from JS");
@@ -165,7 +171,7 @@ public class PermissionHandler extends BaseMessageHandler {
      * Show permission request dialog (from PermissionRequest).
      */
     public void showPermissionDialog(PermissionRequest request) {
-        LOG.info("[PermissionHandler] 显示权限请求对话框: " + request.getToolName());
+        LOG.info("[PermissionHandler] 鏄剧ず鏉冮檺璇锋眰瀵硅瘽妗? " + request.getToolName());
 
         try {
             Gson gson = new Gson();
@@ -186,7 +192,7 @@ public class PermissionHandler extends BaseMessageHandler {
             // Get the project associated with the permission request
             Project targetProject = request.getProject();
             if (targetProject == null) {
-                LOG.warn("[PermissionHandler] 警告: PermissionRequest 没有关联的 Project，使用当前 context 的窗口");
+                LOG.warn("[PermissionHandler] PermissionRequest has no project, fallback to current context window");
                 targetProject = this.context.getProject();
             }
 
@@ -215,7 +221,7 @@ public class PermissionHandler extends BaseMessageHandler {
             targetWindow.executeJavaScriptCode(jsCode);
 
         } catch (Exception e) {
-            LOG.error("[PermissionHandler] 显示权限弹窗失败: " + e.getMessage(), e);
+            LOG.error("[PermissionHandler] 鏄剧ず鏉冮檺寮圭獥澶辫触: " + e.getMessage(), e);
             this.context.getSession().handlePermissionDecision(
                 request.getChannelId(),
                 false,
@@ -326,12 +332,12 @@ public class PermissionHandler extends BaseMessageHandler {
         pendingPlanApprovalRequests.clear();
 
         if (taskStateService != null) {
-            // 清 session 时不仅要清掉待审批 future，也要把聚合任务状态重置回 PENDING，
-            // 否则新的会话可能继承上一轮 WAITING_CONFIRM / FINAL_ERROR 的尾状态。
+            // 娓?session 鏃朵笉浠呰娓呮帀寰呭鎵?future锛屼篃瑕佹妸鑱氬悎浠诲姟鐘舵€侀噸缃洖 PENDING锛?
+            // 鍚﹀垯鏂扮殑浼氳瘽鍙兘缁ф壙涓婁竴杞?WAITING_CONFIRM / FINAL_ERROR 鐨勫熬鐘舵€併€?
             taskStateService.onSessionCleared(context.getSession() != null ? context.getSession().getSessionId() : null);
             dispatchTaskReminder(false);
         }
-        planApprovalDialogOpen = false;
+        planApprovalDialogVisible = false;
 
         LOG.info("[PERM_CLEAR] Cleared: " + permissionCount + " permission, " +
                  askUserCount + " askUser, " + planCount + " plan requests");
@@ -425,12 +431,12 @@ public class PermissionHandler extends BaseMessageHandler {
         LOG.debug("[PLAN_APPROVAL][SHOW_DIALOG] planData=" + planData.toString());
 
         pendingPlanApprovalRequests.put(requestId, future);
-        planApprovalDialogOpen = true;
+        planApprovalDialogVisible = false;
         if (taskStateService != null) {
-            // 审批请求一旦进入挂起队列，就把整条会话链路视为 WAITING_CONFIRM。
-            // 后续所有提醒渠道都基于这个统一状态，而不是各自再推导一次。
+            // 这里先按“审批弹窗即将占位”分发 WAITING_CONFIRM，
+            // 避免 reminder popup 比真正的审批弹窗更早弹出。
             taskStateService.onPlanApprovalRequested(requestId);
-            dispatchTaskReminder(planApprovalDialogOpen);
+            dispatchTaskReminder(true);
         }
 
         try {
@@ -457,9 +463,9 @@ public class PermissionHandler extends BaseMessageHandler {
                 if (!future.isDone()) {
                     LOG.warn("[PLAN_APPROVAL][SHOW_DIALOG] Timeout requestId=" + requestId);
                     pendingPlanApprovalRequests.remove(requestId);
-                    planApprovalDialogOpen = false;
+                    planApprovalDialogVisible = false;
                     if (taskStateService != null) {
-                        // 超时后直接落到 FINAL_ERROR，避免界面一直停留在“等待确认”的假象。
+                        // 瓒呮椂鍚庣洿鎺ヨ惤鍒?FINAL_ERROR锛岄伩鍏嶇晫闈竴鐩村仠鐣欏湪鈥滅瓑寰呯‘璁も€濈殑鍋囪薄銆?
                         taskStateService.onPlanApprovalTimedOut(requestId);
                         dispatchTaskReminder(false);
                     }
@@ -475,7 +481,7 @@ public class PermissionHandler extends BaseMessageHandler {
         } catch (Exception e) {
             LOG.error("[PLAN_APPROVAL][SHOW_DIALOG] ERROR: " + e.getMessage(), e);
             pendingPlanApprovalRequests.remove(requestId);
-            planApprovalDialogOpen = false;
+            planApprovalDialogVisible = false;
             JsonObject errorResponse = new JsonObject();
             errorResponse.addProperty("approved", false);
             errorResponse.addProperty("targetMode", "default");
@@ -484,6 +490,40 @@ public class PermissionHandler extends BaseMessageHandler {
         }
 
         return future;
+    }
+
+    private void handlePlanApprovalDialogVisibility(String jsonContent) {
+        try {
+            Gson gson = new Gson();
+            JsonObject payload = gson.fromJson(jsonContent, JsonObject.class);
+            if (payload == null) {
+                return;
+            }
+
+            boolean visible = payload.has("visible") && payload.get("visible").getAsBoolean();
+            String requestId = payload.has("requestId") && !payload.get("requestId").isJsonNull()
+                ? payload.get("requestId").getAsString()
+                : null;
+
+            if (taskStateService == null) {
+                planApprovalDialogVisible = visible;
+                return;
+            }
+
+            String currentRequestId = taskStateService.getCurrentSnapshot() != null
+                ? taskStateService.getCurrentSnapshot().getRequestId()
+                : null;
+            if (requestId != null && currentRequestId != null && !requestId.equals(currentRequestId)) {
+                LOG.debug("[PLAN_APPROVAL][VISIBILITY] Ignore stale visibility event, requestId=" + requestId
+                    + ", currentRequestId=" + currentRequestId);
+                return;
+            }
+
+            planApprovalDialogVisible = visible;
+            dispatchTaskReminder(planApprovalDialogVisible);
+        } catch (Exception e) {
+            LOG.error("[PLAN_APPROVAL][VISIBILITY] ERROR: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -510,10 +550,10 @@ public class PermissionHandler extends BaseMessageHandler {
                 result.addProperty("targetMode", targetMode);
                 LOG.debug("[PLAN_APPROVAL][HANDLE_RESPONSE] Completing future: approved=" + approved + ", targetMode=" + targetMode);
                 pendingFuture.complete(result);
-                planApprovalDialogOpen = false;
+                planApprovalDialogVisible = false;
                 if (taskStateService != null) {
-                    // 审批通过后恢复 RUNNING；拒绝后进入 CANCELLED。
-                    // 这里不用让前端自行猜测结果，统一由状态服务给出结论。
+                    // 瀹℃壒閫氳繃鍚庢仮澶?RUNNING锛涙嫆缁濆悗杩涘叆 CANCELLED銆?
+                    // 杩欓噷涓嶇敤璁╁墠绔嚜琛岀寽娴嬬粨鏋滐紝缁熶竴鐢辩姸鎬佹湇鍔＄粰鍑虹粨璁恒€?
                     if (approved) {
                         taskStateService.onPlanApprovalApproved(requestId);
                     } else {
@@ -529,11 +569,14 @@ public class PermissionHandler extends BaseMessageHandler {
         }
     }
 
-    private void dispatchTaskReminder(boolean approvalDialogOpen) {
+    private void dispatchTaskReminder(boolean approvalDialogVisible) {
         if (taskReminderDispatcher != null && taskStateService != null) {
-            // ReminderDispatcher 是唯一的提醒分发出口，后端任何状态变化都通过同一路径发往
-            // popup / balloon / status bar / sound，避免多个 handler 重复决定通知策略。
-            taskReminderDispatcher.dispatch(taskStateService.getCurrentSnapshot(), approvalDialogOpen);
+            // ReminderDispatcher 鏄敮涓€鐨勬彁閱掑垎鍙戝嚭鍙ｏ紝鍚庣浠讳綍鐘舵€佸彉鍖栭兘閫氳繃鍚屼竴璺緞鍙戝線
+            // popup / balloon / status bar / sound锛岄伩鍏嶅涓?handler 閲嶅鍐冲畾閫氱煡绛栫暐銆?
+            taskReminderDispatcher.dispatch(taskStateService.getCurrentSnapshot(), approvalDialogVisible);
         }
     }
 }
+
+
+

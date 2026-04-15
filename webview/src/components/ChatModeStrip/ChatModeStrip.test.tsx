@@ -12,6 +12,9 @@ vi.mock('react-i18next', async (importOriginal) => {
         if (key === 'chat.modeStripLabel') {
           return options?.mode ? `Mode: ${String(options.mode)}` : 'Mode';
         }
+        if (key === 'chat.planRequiresClaudeHint') {
+          return 'Plan requires Claude';
+        }
         return typeof options?.defaultValue === 'string' ? options.defaultValue : key;
       },
     }),
@@ -38,5 +41,11 @@ describe('ChatModeStrip', () => {
     render(<ChatModeStrip usageMode="chat" taskState="waiting_confirm" />);
 
     expect(screen.getByText('Waiting for confirmation')).toBeTruthy();
+  });
+
+  it('does not render codex mode strip without task state', () => {
+    const { container } = render(<ChatModeStrip usageMode="chat" taskState={null} currentProvider="codex" />);
+
+    expect(container.firstChild).toBe(null);
   });
 });

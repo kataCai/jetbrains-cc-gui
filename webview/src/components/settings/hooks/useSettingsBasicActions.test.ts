@@ -22,4 +22,16 @@ describe('useSettingsBasicActions task reminder config', () => {
     expect(payload.popup.enabled).toBe(false);
     expect(Array.isArray(payload.popup.states)).toBe(true);
   });
+
+  it('sends task reminder test events for popup and balloon', () => {
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.handleTestPopup();
+      result.current.handleTestBalloon();
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith('test_task_reminder_popup:');
+    expect(window.sendToJava).toHaveBeenCalledWith('test_task_reminder_balloon:');
+  });
 });

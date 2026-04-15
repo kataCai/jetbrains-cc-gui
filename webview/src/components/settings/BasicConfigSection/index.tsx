@@ -71,6 +71,8 @@ interface BasicConfigSectionProps {
   onTaskReminderCustomSoundPathChange?: (path: string) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
+  onTestPopup?: () => void;
+  onTestBalloon?: () => void;
   onBrowseSound?: () => void;
 }
 
@@ -136,6 +138,8 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onTaskReminderCustomSoundPathChange={props.onTaskReminderCustomSoundPathChange}
           onSaveCustomSoundPath={props.onSaveCustomSoundPath}
           onTestSound={props.onTestSound}
+          onTestPopup={props.onTestPopup}
+          onTestBalloon={props.onTestBalloon}
           onBrowseSound={props.onBrowseSound}
         />
       )}

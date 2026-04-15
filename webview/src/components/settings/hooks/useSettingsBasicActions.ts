@@ -79,6 +79,8 @@ export interface UseSettingsBasicActionsReturn {
   handleTaskReminderCustomSoundPathChange: (path: string) => void;
   handleSaveCustomSoundPath: () => void;
   handleTestSound: () => void;
+  handleTestPopup: () => void;
+  handleTestBalloon: () => void;
   handleBrowseSound: () => void;
   handleSaveCommitPrompt: () => void;
   handleCommitGenerationEnabledChange: (enabled: boolean) => void;
@@ -361,6 +363,14 @@ export function useSettingsBasicActions({
     sendToJava(`test_sound:${JSON.stringify(payload)}`);
   }, [taskReminderConfig.sound.customSoundPath, taskReminderConfig.sound.selectedSound]);
 
+  const handleTestPopup = useCallback(() => {
+    sendToJava('test_task_reminder_popup:');
+  }, []);
+
+  const handleTestBalloon = useCallback(() => {
+    sendToJava('test_task_reminder_balloon:');
+  }, []);
+
   // Browse sound file
   const handleBrowseSound = useCallback(() => {
     sendToJava('browse_sound_file:');
@@ -436,6 +446,8 @@ export function useSettingsBasicActions({
     handleTaskReminderCustomSoundPathChange,
     handleSaveCustomSoundPath,
     handleTestSound,
+    handleTestPopup,
+    handleTestBalloon,
     handleBrowseSound,
     handleSaveCommitPrompt,
     commitGenerationEnabled,

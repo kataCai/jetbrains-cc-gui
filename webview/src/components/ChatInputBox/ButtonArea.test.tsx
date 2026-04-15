@@ -13,6 +13,7 @@ vi.mock('react-i18next', async (importOriginal) => {
     'chat.composerMode': 'Composer mode',
     'chat.chatMode': 'Chat',
     'chat.planModeLabel': 'Plan',
+    'chat.planRequiresClaudeHint': 'Plan requires Claude. Switch to Claude to use it.',
     'modes.default.label': 'Default',
     'modes.acceptEdits.label': 'Accept Edits',
     'modes.bypassPermissions.label': 'Bypass Permissions',
@@ -39,9 +40,7 @@ describe('ButtonArea', () => {
     expect(resolvePermissionModeFromComposer('chat', 'acceptEdits')).toBe('acceptEdits');
   });
 
-  it('renders Chat / Plan switch and disables Plan for codex', () => {
-    const onModeSelect = vi.fn();
-
+  it('hides Chat / Plan switch for codex', () => {
     render(
       <ButtonArea
         hasInputContent
@@ -49,20 +48,14 @@ describe('ButtonArea', () => {
         permissionMode="default"
         currentProvider="codex"
         onSubmit={() => {}}
-        onModeSelect={onModeSelect}
+        onModeSelect={vi.fn()}
       />
     );
 
-    const modeToggle = screen.getByRole('tablist', { name: /Composer mode/i });
-    const chatButton = within(modeToggle).getByRole('button', { name: /Chat/i });
-    const planButton = within(modeToggle).getByRole('button', { name: /Plan/i });
-
-    // Codex 当前不支持 plan，因此按钮存在但必须处于禁用状态。
-    expect(chatButton.getAttribute('aria-pressed')).toBe('true');
-    expect(planButton.hasAttribute('disabled')).toBe(true);
-
-    fireEvent.click(planButton);
-    expect(onModeSelect).not.toHaveBeenCalled();
+    // Codex 当前不支持 plan，输入区不应再渲染易误导的 Chat / Plan 切换入口。
+    expect(screen.queryByRole('tablist', { name: /Composer mode/i })).toBeNull();
+    expect(screen.queryByText(/switch to claude/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Plan$/i })).toBeNull();
   });
 
   it('restores prior chat execution mode after leaving plan mode', () => {

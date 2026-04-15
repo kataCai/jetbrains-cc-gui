@@ -59,6 +59,15 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   useEffect(() => { currentProviderRef.current = currentProvider; }, [currentProvider]);
   useEffect(() => { activeProviderConfigRef.current = activeProviderConfig; }, [activeProviderConfig]);
 
+  const notifyCodexPlanDowngrade = useCallback(() => {
+    addToast(
+      t('chat.planDowngradedForCodex', {
+        defaultValue: 'Codex does not support Plan mode. Switched back to Chat/default.',
+      }),
+      'warning',
+    );
+  }, [addToast, t]);
+
   // Select the displayed model based on the current provider
   const selectedModel = currentProvider === 'codex' ? selectedCodexModel : selectedClaudeModel;
 
@@ -233,6 +242,7 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   }, []);
 
   const handleProviderSelect = useCallback((providerId: string) => {
+    const shouldNotifyCodexPlanDowngrade = providerId === 'codex' && permissionMode === 'plan';
     setCurrentProvider(providerId);
     sendBridgeEvent('set_provider', providerId);
     const modeToSet: PermissionMode = providerId === 'codex'
@@ -243,7 +253,10 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
 
     const newModel = providerId === 'codex' ? selectedCodexModel : selectedClaudeModel;
     sendBridgeEvent('set_model', newModel);
-  }, [claudePermissionMode, codexPermissionMode, selectedCodexModel, selectedClaudeModel]);
+    if (shouldNotifyCodexPlanDowngrade) {
+      notifyCodexPlanDowngrade();
+    }
+  }, [claudePermissionMode, codexPermissionMode, notifyCodexPlanDowngrade, permissionMode, selectedCodexModel, selectedClaudeModel]);
 
   const handleReasoningChange = useCallback((effort: ReasoningEffort) => {
     setReasoningEffort(effort);

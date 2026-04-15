@@ -32,6 +32,12 @@
   flex-shrink: 0;
 }
 
+.composer-mode-hint {
+  font-size: 11px;
+  color: var(--description-foreground);
+  white-space: nowrap;
+}
+
 .button-divider {
   width: 1px;
   height: 16px;

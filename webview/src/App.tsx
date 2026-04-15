@@ -541,7 +541,7 @@ const App = () => {
         currentView={currentView}
         sessionTitle={sessionTitle}
         t={t}
-        modeStrip={<ChatModeStrip usageMode={usageMode} taskState={taskState} />}
+        modeStrip={<ChatModeStrip usageMode={usageMode} taskState={taskState} currentProvider={currentProvider as 'claude' | 'codex'} />}
         onBack={() => setCurrentView('chat')}
         onNewSession={createNewSession}
         onNewTab={() => sendBridgeEvent('create_new_tab')}

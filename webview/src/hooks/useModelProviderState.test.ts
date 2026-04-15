@@ -81,4 +81,28 @@ describe('useModelProviderState', () => {
     expect(result.current.permissionMode).toBe('plan');
     expect(sendBridgeEvent).toHaveBeenCalledWith('set_mode', 'plan');
   });
+
+  it('shows downgrade toast when switching from claude plan to codex', () => {
+    const addToast = vi.fn();
+    const { result } = renderHook(() => useModelProviderState({
+      addToast,
+      t: ((key: string, options?: { defaultValue?: string }) => options?.defaultValue ?? key) as any,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('claude');
+      result.current.handleModeSelect('plan');
+    });
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    expect(result.current.currentProvider).toBe('codex');
+    expect(result.current.permissionMode).toBe('default');
+    expect(addToast).toHaveBeenCalledWith(
+      'Codex does not support Plan mode. Switched back to Chat/default.',
+      'warning',
+    );
+  });
 });

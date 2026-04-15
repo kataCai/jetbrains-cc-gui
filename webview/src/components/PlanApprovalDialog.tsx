@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { formatCountdown } from '../utils/helpers';
 import MarkdownBlock from './MarkdownBlock';
 import { useDialogResize } from '../hooks/useDialogResize';
+import { sendBridgeEvent } from '../utils/bridge';
 import './PlanApprovalDialog.css';
 
 // Timeout configuration (kept in sync with backend PermissionHandler.java)
@@ -79,6 +80,22 @@ const PlanApprovalDialog = ({
       setRemainingSeconds(TIMEOUT_SECONDS);
       setDialogHeight(null);
     }
+  }, [isOpen, request?.requestId]);
+
+  useEffect(() => {
+    if (!isOpen || !request) return undefined;
+
+    sendBridgeEvent('plan_approval_dialog_visibility', JSON.stringify({
+      requestId: request.requestId,
+      visible: true,
+    }));
+
+    return () => {
+      sendBridgeEvent('plan_approval_dialog_visibility', JSON.stringify({
+        requestId: request.requestId,
+        visible: false,
+      }));
+    };
   }, [isOpen, request?.requestId]);
 
   // Keyboard event handling

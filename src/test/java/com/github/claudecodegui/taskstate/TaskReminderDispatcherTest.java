@@ -7,6 +7,7 @@ import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -131,6 +132,77 @@ public class TaskReminderDispatcherTest {
         assertTrue(context.executedJs.get(0).contains("需要确认后才能继续。"));
     }
 
+    @Test
+    public void shouldResolveLatestPolicyOnEachDispatch() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        AtomicReference<TaskReminderPolicy> policyRef = new AtomicReference<>(TaskReminderPolicy.defaults());
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policyRef::get,
+            balloonNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> true
+        );
+
+        TaskStateSnapshot completed = snapshot(TaskState.COMPLETED, "session-7", "req-7", "send_completed");
+        dispatcher.dispatch(completed, false);
+        assertEquals(0, soundCalls.get());
+
+        policyRef.set(
+            new TaskReminderPolicy(
+                java.util.EnumSet.noneOf(TaskState.class),
+                java.util.EnumSet.noneOf(TaskState.class),
+                java.util.EnumSet.of(TaskState.COMPLETED),
+                java.util.EnumSet.of(TaskState.COMPLETED),
+                false,
+                true,
+                true,
+                false
+            )
+        );
+
+        dispatcher.dispatch(
+            snapshot(TaskState.COMPLETED, "session-7", "req-8", "send_completed"),
+            false
+        );
+
+        // 第二次分发应读取到最新策略，使 IDE 前台下的完成态也能播放声音。
+        assertEquals(1, soundCalls.get());
+    }
+
+    @Test
+    public void shouldDispatchPopupPreviewRequestForSettingsSelfCheck() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderDispatcher dispatcher = createDispatcher(context, balloonNotifier, soundCalls, true);
+
+        dispatcher.dispatchTestPopup("Preview popup message");
+
+        assertEquals(1, context.executedJs.size());
+        assertTrue(context.executedJs.get(0).contains("\"state\":\"waiting_confirm\""));
+        assertTrue(context.executedJs.get(0).contains("Preview popup message"));
+        assertEquals(0, balloonNotifier.callCount.get());
+        assertEquals(0, soundCalls.get());
+    }
+
+    @Test
+    public void shouldDispatchBalloonPreviewForSettingsSelfCheck() {
+        CapturingHandlerContext context = new CapturingHandlerContext(true);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderDispatcher dispatcher = createDispatcher(context, balloonNotifier, soundCalls, true);
+
+        dispatcher.dispatchTestBalloon("Preview balloon message");
+
+        assertEquals(1, balloonNotifier.callCount.get());
+        assertEquals("Preview balloon message", balloonNotifier.messages.get(0));
+        assertEquals(0, context.executedJs.size());
+        assertEquals(0, soundCalls.get());
+    }
+
     /**
      * 构造一个便于测试的 dispatcher，把气泡、声音和焦点判断都替换成可观测实现。
      */
@@ -166,8 +238,13 @@ public class TaskReminderDispatcherTest {
      */
     private static class CapturingHandlerContext extends HandlerContext {
         private final List<String> executedJs = new ArrayList<>();
+        private final Project project;
 
         CapturingHandlerContext() {
+            this(false);
+        }
+
+        CapturingHandlerContext(boolean provideProject) {
             super(
                 null,
                 null,
@@ -184,6 +261,17 @@ public class TaskReminderDispatcherTest {
                     }
                 }
             );
+            this.project = provideProject
+                ? (Project) java.lang.reflect.Proxy.newProxyInstance(
+                    Project.class.getClassLoader(),
+                    new Class[]{Project.class},
+                    (proxy, method, args) -> switch (method.getName()) {
+                        case "isDisposed" -> false;
+                        case "getName" -> "task-reminder-test";
+                        default -> method.getReturnType().isPrimitive() ? defaultPrimitiveValue(method.getReturnType()) : null;
+                    }
+                )
+                : null;
         }
 
         @Override
@@ -195,6 +283,21 @@ public class TaskReminderDispatcherTest {
         public String escapeJs(String str) {
             return str;
         }
+
+        @Override
+        public Project getProject() {
+            return project;
+        }
+
+        private static Object defaultPrimitiveValue(Class<?> primitiveType) {
+            if (primitiveType == boolean.class) {
+                return false;
+            }
+            if (primitiveType == char.class) {
+                return '\0';
+            }
+            return 0;
+        }
     }
 
     /**
@@ -202,10 +305,12 @@ public class TaskReminderDispatcherTest {
      */
     private static class RecordingBalloonNotifier extends ClaudeBalloonNotifier {
         private final AtomicInteger callCount = new AtomicInteger();
+        private final List<String> messages = new ArrayList<>();
 
         @Override
         public void showTaskReminder(Project project, TaskState state, String message) {
             callCount.incrementAndGet();
+            messages.add(message);
         }
     }
 }

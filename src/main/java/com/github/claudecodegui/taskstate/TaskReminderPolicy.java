@@ -5,10 +5,7 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * 定义提醒渠道的路由规则。
- *
- * <p>这个类只回答“当前状态应该走哪些渠道”，不关心具体如何弹窗、如何发声音，
- * 因此可以在测试里被独立验证，也方便后续把策略做成可配置项。
+ * 定义任务提醒各通道的路由规则。
  */
 public class TaskReminderPolicy {
 
@@ -16,27 +13,18 @@ public class TaskReminderPolicy {
     private final Set<TaskState> balloonStates;
     private final Set<TaskState> soundStates;
     private final Set<TaskState> statusBarStates;
-    private final boolean suppressWaitingPopupWhenApprovalDialogOpen;
+    private final boolean popupOnlyWhenIdeUnfocused;
+    private final boolean suppressWaitingPopupWhenApprovalDialogVisible;
     private final boolean balloonOnlyWhenIdeUnfocused;
     private final boolean soundOnlyWhenIdeUnfocused;
 
-    /**
-     * 创建一份完整的提醒策略。
-     *
-     * @param popupStates 哪些状态允许走前端 popup
-     * @param balloonStates 哪些状态允许走 IDE balloon
-     * @param soundStates 哪些状态允许播声音
-     * @param statusBarStates 哪些状态需要同步到状态栏
-     * @param suppressWaitingPopupWhenApprovalDialogOpen 审批弹窗已打开时，是否压制等待确认 popup
-     * @param balloonOnlyWhenIdeUnfocused 气泡是否仅在 IDE 不聚焦时触发
-     * @param soundOnlyWhenIdeUnfocused 声音是否仅在 IDE 不聚焦时触发
-     */
     public TaskReminderPolicy(
         Set<TaskState> popupStates,
         Set<TaskState> balloonStates,
         Set<TaskState> soundStates,
         Set<TaskState> statusBarStates,
-        boolean suppressWaitingPopupWhenApprovalDialogOpen,
+        boolean popupOnlyWhenIdeUnfocused,
+        boolean suppressWaitingPopupWhenApprovalDialogVisible,
         boolean balloonOnlyWhenIdeUnfocused,
         boolean soundOnlyWhenIdeUnfocused
     ) {
@@ -44,18 +32,17 @@ public class TaskReminderPolicy {
         this.balloonStates = immutableEnumSet(balloonStates);
         this.soundStates = immutableEnumSet(soundStates);
         this.statusBarStates = immutableEnumSet(statusBarStates);
-        this.suppressWaitingPopupWhenApprovalDialogOpen = suppressWaitingPopupWhenApprovalDialogOpen;
+        this.popupOnlyWhenIdeUnfocused = popupOnlyWhenIdeUnfocused;
+        this.suppressWaitingPopupWhenApprovalDialogVisible = suppressWaitingPopupWhenApprovalDialogVisible;
         this.balloonOnlyWhenIdeUnfocused = balloonOnlyWhenIdeUnfocused;
         this.soundOnlyWhenIdeUnfocused = soundOnlyWhenIdeUnfocused;
     }
 
     /**
      * 返回当前任务提醒功能的默认策略。
-     * 默认值偏保守：完成态走轻提示，等待确认/最终失败走更强提醒。
      */
     public static TaskReminderPolicy defaults() {
         return new TaskReminderPolicy(
-            // popup 只承担“必须马上关注”的职责，因此默认只覆盖等待审批和最终失败。
             EnumSet.of(TaskState.WAITING_CONFIRM, TaskState.FINAL_ERROR),
             EnumSet.of(TaskState.COMPLETED, TaskState.RECOVERED, TaskState.FINAL_ERROR),
             EnumSet.of(TaskState.COMPLETED),
@@ -68,6 +55,7 @@ public class TaskReminderPolicy {
                 TaskState.COMPLETED,
                 TaskState.CANCELLED
             ),
+            false,
             true,
             true,
             true
@@ -75,43 +63,54 @@ public class TaskReminderPolicy {
     }
 
     /**
-     * 根据当前状态、弹窗情况和 IDE 焦点情况计算最终路由结果。
+     * 根据当前状态、审批弹窗可见性和 IDE 焦点情况计算最终路由结果。
      */
-    public ReminderDecision decide(TaskStateSnapshot snapshot, boolean approvalDialogOpen, boolean ideFocused) {
+    public ReminderDecision decide(TaskStateSnapshot snapshot, boolean approvalDialogVisible, boolean ideFocused) {
         TaskState state = snapshot != null ? snapshot.getState() : null;
         if (state == null) {
             return ReminderDecision.NONE;
         }
 
         boolean showPopup = popupStates.contains(state);
-        if (showPopup && suppressWaitingPopupWhenApprovalDialogOpen
-            && approvalDialogOpen && state == TaskState.WAITING_CONFIRM) {
-            // IDE 前台已经有审批弹窗时，不再追加 reminder popup，
-            // 避免用户被两个“确认继续”的界面来回打断。
+        String popupReason = showPopup ? "allowed" : "state_not_enabled";
+        if (showPopup && popupOnlyWhenIdeUnfocused && ideFocused) {
             showPopup = false;
+            popupReason = "ide_focused_filtered";
+        } else if (showPopup
+            && suppressWaitingPopupWhenApprovalDialogVisible
+            && approvalDialogVisible
+            && state == TaskState.WAITING_CONFIRM) {
+            showPopup = false;
+            popupReason = "approval_dialog_visible";
         }
 
         boolean showBalloon = balloonStates.contains(state);
+        String balloonReason = showBalloon ? "allowed" : "state_not_enabled";
         if (showBalloon && balloonOnlyWhenIdeUnfocused && ideFocused) {
             showBalloon = false;
+            balloonReason = "ide_focused_filtered";
         }
 
         boolean playSound = soundStates.contains(state);
+        String soundReason = playSound ? "allowed" : "state_not_enabled";
         if (playSound && soundOnlyWhenIdeUnfocused && ideFocused) {
-            // 声音提醒默认更克制：IDE 正在前台时，用户已经能看到状态变化，
-            // 没必要再用提示音打断。
             playSound = false;
+            soundReason = "ide_focused_filtered";
         }
 
         boolean updateStatusBar = statusBarStates.contains(state);
 
-        return new ReminderDecision(showPopup, showBalloon, updateStatusBar, playSound);
+        return new ReminderDecision(
+            showPopup,
+            showBalloon,
+            updateStatusBar,
+            playSound,
+            popupReason,
+            balloonReason,
+            soundReason
+        );
     }
 
-    /**
-     * 把输入集合收敛成不可变 EnumSet。
-     * 这样策略构建完成后就不会被外部调用方再修改。
-     */
     private static Set<TaskState> immutableEnumSet(Set<TaskState> states) {
         if (states == null || states.isEmpty()) {
             return Collections.emptySet();
@@ -120,22 +119,40 @@ public class TaskReminderPolicy {
     }
 
     public static final class ReminderDecision {
-        private static final ReminderDecision NONE = new ReminderDecision(false, false, false, false);
+        private static final ReminderDecision NONE = new ReminderDecision(
+            false,
+            false,
+            false,
+            false,
+            "state_not_enabled",
+            "state_not_enabled",
+            "state_not_enabled"
+        );
 
         private final boolean showPopup;
         private final boolean showBalloon;
         private final boolean updateStatusBar;
         private final boolean playSound;
+        private final String popupReason;
+        private final String balloonReason;
+        private final String soundReason;
 
-        /**
-         * 一次策略计算的最终结果。
-         * Dispatcher 只消费这个结果，不需要再关心内部路由细节。
-         */
-        public ReminderDecision(boolean showPopup, boolean showBalloon, boolean updateStatusBar, boolean playSound) {
+        public ReminderDecision(
+            boolean showPopup,
+            boolean showBalloon,
+            boolean updateStatusBar,
+            boolean playSound,
+            String popupReason,
+            String balloonReason,
+            String soundReason
+        ) {
             this.showPopup = showPopup;
             this.showBalloon = showBalloon;
             this.updateStatusBar = updateStatusBar;
             this.playSound = playSound;
+            this.popupReason = popupReason;
+            this.balloonReason = balloonReason;
+            this.soundReason = soundReason;
         }
 
         public boolean shouldShowPopup() {
@@ -152,6 +169,18 @@ public class TaskReminderPolicy {
 
         public boolean shouldPlaySound() {
             return playSound;
+        }
+
+        public String getPopupReason() {
+            return popupReason;
+        }
+
+        public String getBalloonReason() {
+            return balloonReason;
+        }
+
+        public String getSoundReason() {
+            return soundReason;
         }
     }
 }

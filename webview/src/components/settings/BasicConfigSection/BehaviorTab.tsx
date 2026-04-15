@@ -6,7 +6,10 @@ import type {
   TaskReminderConfig,
   TaskReminderState,
 } from '../../../types/taskReminder';
-import { DEFAULT_TASK_REMINDER_CONFIG, TASK_REMINDER_STATES } from '../../../types/taskReminder';
+import {
+  DEFAULT_TASK_REMINDER_CONFIG,
+  TASK_REMINDER_CHANNEL_STATES,
+} from '../../../types/taskReminder';
 
 /** Upward-opening custom select for sound selection (avoids JCEF clipping) */
 const SoundSelectUpward = ({
@@ -106,6 +109,8 @@ export interface BehaviorTabProps {
   onTaskReminderCustomSoundPathChange?: (path: string) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
+  onTestPopup?: () => void;
+  onTestBalloon?: () => void;
   onBrowseSound?: () => void;
 }
 
@@ -130,6 +135,8 @@ const BehaviorTab = ({
   onTaskReminderCustomSoundPathChange = () => {},
   onSaveCustomSoundPath = () => {},
   onTestSound = () => {},
+  onTestPopup = () => {},
+  onTestBalloon = () => {},
   onBrowseSound = () => {},
 }: BehaviorTabProps) => {
   const { t } = useTranslation();
@@ -154,11 +161,11 @@ const BehaviorTab = ({
   const renderReminderStates = (
     channel: TaskReminderChannel,
     title: string,
-    selectedStates: TaskReminderState[],
+      selectedStates: TaskReminderState[],
   ) => (
-    // 每个渠道共享同一组可选状态，但是否启用由各自 channel 单独控制。
+    // popup 只展示当前前端真正支持的强提醒状态，避免出现“可配置但永远不会生效”的选项。
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
-      {TASK_REMINDER_STATES.map((state) => {
+      {TASK_REMINDER_CHANNEL_STATES[channel].map((state) => {
         const checked = selectedStates.includes(state);
         return (
           <label key={`${channel}-${state}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -352,6 +359,15 @@ const BehaviorTab = ({
           <span className="codicon codicon-info" />
           <span>{t('settings.basic.taskReminder.hint', 'Configure popup, balloon, and sound reminders by task state.')}</span>
         </small>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-bell-dot" />
+          <span>
+            {t(
+              'settings.basic.taskReminder.balloonNotificationsHint',
+              'Balloon visibility also depends on IDE Notifications settings: Settings | Appearance & Behavior | Notifications.',
+            )}
+          </span>
+        </small>
 
         {/* Popup reminder */}
         <div className={styles.customSoundSection}>
@@ -378,6 +394,15 @@ const BehaviorTab = ({
             />
             <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
           </label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
+            <button
+              type="button"
+              className={styles.saveBtn}
+              onClick={onTestPopup}
+            >
+              {t('settings.basic.taskReminder.testPopup', 'Test popup')}
+            </button>
+          </div>
         </div>
 
         {/* Balloon reminder */}
@@ -405,6 +430,15 @@ const BehaviorTab = ({
             />
             <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
           </label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
+            <button
+              type="button"
+              className={styles.saveBtn}
+              onClick={onTestBalloon}
+            >
+              {t('settings.basic.taskReminder.testBalloon', 'Test balloon')}
+            </button>
+          </div>
         </div>
 
         {/* Sound reminder */}

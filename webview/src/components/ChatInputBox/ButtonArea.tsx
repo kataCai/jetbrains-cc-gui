@@ -235,6 +235,7 @@ export const ButtonArea = ({
 
   const usageMode = getComposerUsageMode(permissionMode);
   const chatExecutionMode = getChatExecutionMode(permissionMode, lastNonPlanChatExecutionModeRef.current);
+  const showComposerModeToggle = currentProvider !== 'codex';
 
   const handleUsageModeSelect = useCallback((mode: ComposerUsageMode) => {
     // 顶层 Chat/Plan 切换不直接修改“上一次 chat 模式记忆”，
@@ -290,26 +291,25 @@ export const ButtonArea = ({
           onChange={handleProviderSelect}
           compact
         />
-        <div className="composer-mode-toggle" role="tablist" aria-label={t('chat.composerMode', { defaultValue: 'Composer mode' })}>
-          <button
-            type="button"
-            aria-pressed={usageMode === 'chat'}
-            onClick={() => handleUsageModeSelect('chat')}
-          >
-            {t('chat.chatMode', { defaultValue: 'Chat' })}
-          </button>
-          <button
-            type="button"
-            aria-pressed={usageMode === 'plan'}
-            disabled={currentProvider === 'codex'}
-            onClick={() => handleUsageModeSelect('plan')}
-            title={currentProvider === 'codex'
-              ? t('chat.planUnavailableForCodex', { defaultValue: 'Plan mode unavailable for Codex' })
-              : t('chat.planMode', { defaultValue: 'Plan mode' })}
-          >
-            {t('chat.planModeLabel', { defaultValue: 'Plan' })}
-          </button>
-        </div>
+        {showComposerModeToggle && (
+          <div className="composer-mode-toggle" role="tablist" aria-label={t('chat.composerMode', { defaultValue: 'Composer mode' })}>
+            <button
+              type="button"
+              aria-pressed={usageMode === 'chat'}
+              onClick={() => handleUsageModeSelect('chat')}
+            >
+              {t('chat.chatMode', { defaultValue: 'Chat' })}
+            </button>
+            <button
+              type="button"
+              aria-pressed={usageMode === 'plan'}
+              onClick={() => handleUsageModeSelect('plan')}
+              title={t('chat.planMode', { defaultValue: 'Plan mode' })}
+            >
+              {t('chat.planModeLabel', { defaultValue: 'Plan' })}
+            </button>
+          </div>
+        )}
         <ModeSelect value={chatExecutionMode} onChange={handleModeSelect} provider={currentProvider} />
         <ModelSelect value={selectedModel} onChange={handleModelSelect} models={availableModels} currentProvider={currentProvider} onAddModel={onAddModel} />
         {currentProvider === 'codex' && (

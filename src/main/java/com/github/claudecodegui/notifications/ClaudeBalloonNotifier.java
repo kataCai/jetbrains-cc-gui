@@ -3,6 +3,7 @@ package com.github.claudecodegui.notifications;
 import com.github.claudecodegui.taskstate.TaskState;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 
 /**
@@ -12,6 +13,7 @@ import com.intellij.openapi.project.Project;
  */
 public class ClaudeBalloonNotifier {
 
+    private static final Logger LOG = Logger.getInstance(ClaudeBalloonNotifier.class);
     private static final String NOTIFICATION_GROUP_ID = "CC GUI Notifications";
 
     public void showTaskReminder(Project project, TaskState state, String message) {
@@ -23,6 +25,10 @@ public class ClaudeBalloonNotifier {
         // 真的失败用 ERROR，明确成功用 INFORMATION，其余中间态用 WARNING 让用户感知“仍需关注”。
         NotificationType type = toNotificationType(state);
         String displayMessage = "Claude: " + message;
+        LOG.info("[ClaudeBalloonNotifier] state=" + state.getValue()
+            + ", type=" + type
+            + ", group=" + NOTIFICATION_GROUP_ID
+            + ", message=" + message);
 
         NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)

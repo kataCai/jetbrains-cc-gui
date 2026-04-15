@@ -94,6 +94,8 @@
     "planMode": "Plan mode",
     "planModeLabel": "Plan",
     "planUnavailableForCodex": "Plan mode unavailable for Codex",
+    "planRequiresClaudeHint": "Plan requires Claude. Switch to Claude to use it.",
+    "planDowngradedForCodex": "Codex does not support Plan mode. Switched back to Chat/default.",
     "modeStripLabel": "Mode: {{mode}}",
     "taskState": {
       "running": "Running",
@@ -257,7 +259,10 @@
           "recovered": "Recovered",
           "finalError": "Final error",
           "completed": "Completed"
-        }
+        },
+        "balloonNotificationsHint": "Balloon visibility also depends on IDE Notifications settings: Settings | Appearance & Behavior | Notifications.",
+        "testPopup": "Test popup",
+        "testBalloon": "Test balloon"
       }
     },
     "providers": "Provider Management",
