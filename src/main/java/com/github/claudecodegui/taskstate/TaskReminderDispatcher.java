@@ -28,6 +28,7 @@ public class TaskReminderDispatcher {
 
     private static final Logger LOG = Logger.getInstance(TaskReminderDispatcher.class);
     private static final int MAX_DEDUP_CACHE_SIZE = 256;
+    private static final int MAX_SUMMARY_CACHE_SIZE = 128;
 
     @FunctionalInterface
     public interface ReminderSoundPlayer {
@@ -58,6 +59,7 @@ public class TaskReminderDispatcher {
     private final Map<String, Boolean> popupDedupKeys = new LinkedHashMap<>();
     private final Map<String, Boolean> balloonDedupKeys = new LinkedHashMap<>();
     private final Map<String, Boolean> systemDedupKeys = new LinkedHashMap<>();
+    private final Map<String, String> sessionTaskSummaryCache = new LinkedHashMap<>();
 
     /**
      * 浣跨敤榛樿绛栫暐鏋勫缓鎻愰啋鍒嗗彂鍣ㄣ€?
@@ -291,7 +293,14 @@ public class TaskReminderDispatcher {
         TaskReminderPolicy policy = resolvePolicy();
         TaskReminderPolicy.ReminderDecision decision = policy.decide(snapshot, approvalDialogVisible, ideFocused);
         String reminderMessage = reminderMessageResolver.resolve(snapshot);
-        TaskReminderNotificationPayload payload = payloadFactory.create(context, snapshot, reminderMessage);
+        String liveTaskSummary = payloadFactory.resolveTaskSummaryCandidate(context, snapshot, reminderMessage);
+        String effectiveTaskSummary = resolveReminderTaskSummary(snapshot, liveTaskSummary);
+        TaskReminderNotificationPayload payload = payloadFactory.create(
+            context,
+            snapshot,
+            reminderMessage,
+            effectiveTaskSummary
+        );
         String dedupKey = buildDedupKey(snapshot);
         boolean shouldShowBalloon = decision.shouldShowBalloon();
         boolean shouldShowPopup = decision.shouldShowPopup();
@@ -477,6 +486,42 @@ public class TaskReminderDispatcher {
     }
 
     /**
+     * 对同一轮任务的多次状态变化复用首次确定的摘要，避免后续消息把旧任务提醒“顶掉”。
+     */
+    private String resolveReminderTaskSummary(TaskStateSnapshot snapshot, String liveTaskSummary) {
+        String sessionId = snapshot != null ? snapshot.getSessionId() : null;
+        if (!hasText(sessionId) || snapshot == null || snapshot.getState() == null) {
+            return liveTaskSummary;
+        }
+
+        synchronized (sessionTaskSummaryCache) {
+            return switch (snapshot.getState()) {
+                case RUNNING, WAITING_CONFIRM, RETRYING -> rememberTaskSummary(sessionId, liveTaskSummary);
+                case COMPLETED, FINAL_ERROR, RECOVERED, CANCELLED -> {
+                    String cachedSummary = sessionTaskSummaryCache.get(sessionId);
+                    if (hasText(cachedSummary)) {
+                        yield cachedSummary;
+                    }
+                    yield rememberTaskSummary(sessionId, liveTaskSummary);
+                }
+                case PENDING -> {
+                    sessionTaskSummaryCache.remove(sessionId);
+                    yield liveTaskSummary;
+                }
+            };
+        }
+    }
+
+    private String rememberTaskSummary(String sessionId, String taskSummary) {
+        if (!hasText(sessionId) || !hasText(taskSummary)) {
+            return taskSummary;
+        }
+        sessionTaskSummaryCache.put(sessionId, taskSummary);
+        trimSummaryCache();
+        return taskSummary;
+    }
+
+    /**
      * 淇壀鍘婚噸缂撳瓨锛岄伩鍏嶉暱鏃堕棿杩愯鍚庡唴瀛樻寔缁闀裤€?
      * 绛栫暐涓婁紭鍏堜繚鐣欐渶杩戠殑鎻愰啋璁板綍锛屽洜涓哄畠浠渶鍙兘鍐嶆琚噸澶嶆姇閫掋€?
      */
@@ -485,6 +530,17 @@ public class TaskReminderDispatcher {
             // LinkedHashMap 鎸夋彃鍏ラ『搴忕Щ闄ゆ渶鏃ч」锛?
             // 杩欐牱鍘婚噸缂撳瓨涓嶄細鏃犻檺澧為暱锛屼絾鏈€杩戜竴鎵规彁閱掍粛鐒跺彲鎷︽埅閲嶅寮瑰嚭銆?
             Iterator<String> iterator = dedupMap.keySet().iterator();
+            if (!iterator.hasNext()) {
+                break;
+            }
+            iterator.next();
+            iterator.remove();
+        }
+    }
+
+    private void trimSummaryCache() {
+        while (sessionTaskSummaryCache.size() > MAX_SUMMARY_CACHE_SIZE) {
+            Iterator<String> iterator = sessionTaskSummaryCache.keySet().iterator();
             if (!iterator.hasNext()) {
                 break;
             }

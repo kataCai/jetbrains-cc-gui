@@ -37,6 +37,15 @@ public class TaskReminderPayloadFactory {
         TaskStateSnapshot snapshot,
         String fallbackMessage
     ) {
+        return create(context, snapshot, fallbackMessage, null);
+    }
+
+    public TaskReminderNotificationPayload create(
+        HandlerContext context,
+        TaskStateSnapshot snapshot,
+        String fallbackMessage,
+        String preferredTaskSummary
+    ) {
         String sessionId = firstNonBlank(
             snapshot != null ? snapshot.getSessionId() : null,
             context != null && context.getSession() != null ? context.getSession().getSessionId() : null
@@ -46,7 +55,8 @@ public class TaskReminderPayloadFactory {
             context != null ? context.getSession() : null,
             context != null ? context.getProject() : null,
             sessionId,
-            fallbackMessage
+            fallbackMessage,
+            preferredTaskSummary
         );
         String message = hasText(summary) ? summary : sanitizeAndTruncate(fallbackMessage);
 
@@ -59,20 +69,45 @@ public class TaskReminderPayloadFactory {
         );
     }
 
+    public String resolveTaskSummaryCandidate(
+        HandlerContext context,
+        TaskStateSnapshot snapshot,
+        String fallbackMessage
+    ) {
+        String sessionId = firstNonBlank(
+            snapshot != null ? snapshot.getSessionId() : null,
+            context != null && context.getSession() != null ? context.getSession().getSessionId() : null
+        );
+        return resolveSummary(
+            context != null ? context.getSession() : null,
+            context != null ? context.getProject() : null,
+            sessionId,
+            fallbackMessage,
+            null
+        );
+    }
+
     private String resolveSummary(
         ClaudeSession session,
         Project project,
         String sessionId,
-        String fallbackMessage
+        String fallbackMessage,
+        String preferredTaskSummary
     ) {
-        String sessionSummary = sanitizeAndTruncate(session != null ? session.getSummary() : null);
-        if (hasText(sessionSummary)) {
-            return sessionSummary;
+        String explicitSummary = sanitizeAndTruncate(preferredTaskSummary);
+        if (hasText(explicitSummary)) {
+            return explicitSummary;
         }
 
         String latestUserMessage = sanitizeAndTruncate(findLatestUserMessage(session));
         if (hasText(latestUserMessage)) {
             return latestUserMessage;
+        }
+
+        // 任务提醒优先体现当前轮次处理内容；会话 summary 只作为兜底标题使用。
+        String sessionSummary = sanitizeAndTruncate(session != null ? session.getSummary() : null);
+        if (hasText(sessionSummary)) {
+            return sessionSummary;
         }
 
         String tabDisplayName = sanitizeAndTruncate(tabDisplayNameResolver.resolve(project, sessionId));

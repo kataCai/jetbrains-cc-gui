@@ -70,6 +70,25 @@ public class TaskReminderDispatcherTest {
     }
 
     @Test
+    public void shouldPreferLatestUserMessageOverExistingSessionSummaryInPopupPayload() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        context.setSession(sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "Implement current task summary for this notification"
+        ));
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderDispatcher dispatcher = createDispatcher(context, balloonNotifier, soundCalls, true);
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-1", "req-current", "plan_approval_requested"), false);
+
+        assertEquals(1, context.executedJs.size());
+        String jsCode = context.executedJs.get(0);
+        assertTrue(jsCode.contains("\"taskSummary\":\"Implement current task summary for this notification\""));
+        assertTrue(jsCode.contains("\"message\":\"Implement current task summary for this notification\""));
+    }
+
+    @Test
     public void shouldDedupePopupForSameSnapshot() {
         CapturingHandlerContext context = new CapturingHandlerContext();
         RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
@@ -260,6 +279,90 @@ public class TaskReminderDispatcherTest {
     }
 
     @Test
+    public void shouldPreferLatestUserMessageForSystemReminderPayload() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        context.setSession(sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "Summarize the latest task state change"
+        ));
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-system", "req-latest", "send_completed"), false);
+
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("Summarize the latest task state change", systemNotifier.messages.get(0));
+    }
+
+    @Test
+    public void shouldKeepSameTaskSummaryAcrossStateChangesWithinSameRound() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        ClaudeSession session = sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "Fix the current reminder summary behavior"
+        );
+        context.setSession(session);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.of(TaskState.WAITING_CONFIRM),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-round", "req-round", "plan_approval_requested"), false);
+        session.getState().addMessage(new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "Prepare the next unrelated task"
+        ));
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-round", null, "send_completed"), false);
+
+        assertEquals(1, context.executedJs.size());
+        String popupJsCode = context.executedJs.get(0);
+        assertTrue(popupJsCode.contains("\"taskSummary\":\"Fix the current reminder summary behavior\""));
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("Fix the current reminder summary behavior", systemNotifier.messages.get(0));
+    }
+
+    @Test
     public void shouldDedupeSystemReminderForSameSnapshot() {
         CapturingHandlerContext context = new CapturingHandlerContext();
         RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
@@ -343,6 +446,12 @@ public class TaskReminderDispatcherTest {
     private static ClaudeSession sessionWithSummary(String summary) {
         ClaudeSession session = new ClaudeSession(null, null, null);
         session.getState().setSummary(summary);
+        return session;
+    }
+
+    private static ClaudeSession sessionWithSummaryAndUserMessage(String summary, String latestUserMessage) {
+        ClaudeSession session = sessionWithSummary(summary);
+        session.getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, latestUserMessage));
         return session;
     }
 
