@@ -90,6 +90,55 @@ public class CodemossSettingsServiceTaskReminderMigrationTest {
         assertEquals("/tmp/ding.wav", sound.get("customSoundPath").getAsString());
     }
 
+
+    @Test
+    public void shouldBackfillSystemReminderChannelWhenMissingFromPersistedTaskReminder() throws Exception {
+        Path tempHome = Files.createTempDirectory("task-reminder-system-home");
+        useTemporaryHomeDirectory(tempHome);
+
+        JsonObject config = new JsonObject();
+        JsonObject taskReminder = new JsonObject();
+        taskReminder.add("popup", createChannel(true, false, "waiting_confirm", "final_error"));
+        taskReminder.add("balloon", createChannel(true, true, "completed", "recovered", "final_error"));
+
+        JsonObject sound = createChannel(true, true, "completed");
+        sound.addProperty("selectedSound", "default");
+        sound.addProperty("customSoundPath", "");
+        taskReminder.add("sound", sound);
+
+        config.add("taskReminder", taskReminder);
+        writeConfig(tempHome, config);
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        JsonObject normalized = service.getTaskReminderConfig();
+        JsonObject system = normalized.getAsJsonObject("system");
+
+        assertTrue(normalized.has("system"));
+        assertEquals(false, system.get("enabled").getAsBoolean());
+        assertTrue(system.get("onlyWhenIdeUnfocused").getAsBoolean());
+
+        JsonArray states = system.getAsJsonArray("states");
+        assertEquals(3, states.size());
+        assertEquals("waiting_confirm", states.get(0).getAsString());
+        assertEquals("final_error", states.get(1).getAsString());
+        assertEquals("completed", states.get(2).getAsString());
+
+        JsonObject persisted = service.readConfig();
+        assertTrue(persisted.getAsJsonObject("taskReminder").has("system"));
+    }
+
+    private JsonObject createChannel(boolean enabled, boolean onlyWhenIdeUnfocused, String... states) {
+        JsonObject channel = new JsonObject();
+        channel.addProperty("enabled", enabled);
+        channel.addProperty("onlyWhenIdeUnfocused", onlyWhenIdeUnfocused);
+        JsonArray stateArray = new JsonArray();
+        for (String state : states) {
+            stateArray.add(state);
+        }
+        channel.add("states", stateArray);
+        return channel;
+    }
+
     private void writeConfig(Path tempHome, JsonObject config) throws Exception {
         // 手动构造一个最小配置文件，用于模拟升级前的旧用户环境。
         Path configDir = tempHome.resolve(".codemoss");

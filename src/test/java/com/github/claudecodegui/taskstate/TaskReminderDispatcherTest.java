@@ -2,6 +2,7 @@ package com.github.claudecodegui.taskstate;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
+import com.github.claudecodegui.notifications.SystemReminderNotifier;
 import com.intellij.openapi.project.Project;
 import org.junit.Test;
 
@@ -203,6 +204,76 @@ public class TaskReminderDispatcherTest {
         assertEquals(0, soundCalls.get());
     }
 
+
+    @Test
+    public void shouldDispatchSystemReminderWhenPolicyAllowsAndIdeIsUnfocused() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-system", "req-system", "send_completed"), false);
+
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals(0, balloonNotifier.callCount.get());
+        assertEquals(0, soundCalls.get());
+        assertEquals("Task completed.", systemNotifier.messages.get(0));
+    }
+
+    @Test
+    public void shouldDedupeSystemReminderForSameSnapshot() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+        TaskStateSnapshot snapshot = snapshot(TaskState.COMPLETED, "session-system", "req-dedup", "send_completed");
+
+        dispatcher.dispatch(snapshot, false);
+        dispatcher.dispatch(snapshot, false);
+
+        assertEquals(1, systemNotifier.callCount.get());
+    }
+
     /**
      * 构造一个便于测试的 dispatcher，把气泡、声音和焦点判断都替换成可观测实现。
      */
@@ -212,10 +283,27 @@ public class TaskReminderDispatcherTest {
         AtomicInteger soundCalls,
         boolean ideFocused
     ) {
+        return createDispatcher(
+            context,
+            balloonNotifier,
+            new RecordingSystemReminderNotifier(),
+            soundCalls,
+            ideFocused
+        );
+    }
+
+    private static TaskReminderDispatcher createDispatcher(
+        CapturingHandlerContext context,
+        RecordingBalloonNotifier balloonNotifier,
+        RecordingSystemReminderNotifier systemNotifier,
+        AtomicInteger soundCalls,
+        boolean ideFocused
+    ) {
         return new TaskReminderDispatcher(
             context,
             TaskReminderPolicy.defaults(),
             balloonNotifier,
+            systemNotifier,
             state -> soundCalls.incrementAndGet(),
             () -> ideFocused
         );
@@ -306,6 +394,24 @@ public class TaskReminderDispatcherTest {
     private static class RecordingBalloonNotifier extends ClaudeBalloonNotifier {
         private final AtomicInteger callCount = new AtomicInteger();
         private final List<String> messages = new ArrayList<>();
+
+        @Override
+        public void showTaskReminder(Project project, TaskState state, String message) {
+            callCount.incrementAndGet();
+            messages.add(message);
+        }
+    }
+
+    /**
+     * ?? system reminder ??????? dispatcher ??????????????
+     */
+    private static class RecordingSystemReminderNotifier extends SystemReminderNotifier {
+        private final AtomicInteger callCount = new AtomicInteger();
+        private final List<String> messages = new ArrayList<>();
+
+        RecordingSystemReminderNotifier() {
+            super();
+        }
 
         @Override
         public void showTaskReminder(Project project, TaskState state, String message) {

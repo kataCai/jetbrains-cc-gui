@@ -11,12 +11,14 @@ export const TASK_REMINDER_STATES = [
 ] as const;
 
 export type TaskReminderState = (typeof TASK_REMINDER_STATES)[number];
-export type TaskReminderChannel = 'popup' | 'balloon' | 'sound';
+export type TaskReminderChannel = 'popup' | 'balloon' | 'sound' | 'system';
 export const POPUP_TASK_REMINDER_STATES = ['waiting_confirm', 'final_error'] as const;
+export const SYSTEM_TASK_REMINDER_STATES = ['waiting_confirm', 'final_error', 'completed'] as const;
 export const TASK_REMINDER_CHANNEL_STATES: Record<TaskReminderChannel, readonly TaskReminderState[]> = {
   popup: POPUP_TASK_REMINDER_STATES,
   balloon: TASK_REMINDER_STATES,
   sound: TASK_REMINDER_STATES,
+  system: SYSTEM_TASK_REMINDER_STATES,
 };
 
 /**
@@ -44,6 +46,7 @@ export interface TaskReminderConfig {
   popup: TaskReminderChannelConfig;
   balloon: TaskReminderChannelConfig;
   sound: TaskReminderSoundConfig;
+  system: TaskReminderChannelConfig;
 }
 
 /**
@@ -62,6 +65,7 @@ export interface LegacySoundNotificationConfig {
 const DEFAULT_POPUP_STATES: TaskReminderState[] = ['waiting_confirm', 'final_error'];
 const DEFAULT_BALLOON_STATES: TaskReminderState[] = ['completed', 'recovered', 'final_error'];
 const DEFAULT_SOUND_STATES: TaskReminderState[] = ['completed'];
+const DEFAULT_SYSTEM_STATES: TaskReminderState[] = ['waiting_confirm', 'final_error', 'completed'];
 
 /**
  * 任务提醒的默认配置。
@@ -85,6 +89,11 @@ export const DEFAULT_TASK_REMINDER_CONFIG: TaskReminderConfig = {
     onlyWhenIdeUnfocused: true,
     selectedSound: 'default',
     customSoundPath: '',
+  },
+  system: {
+    enabled: false,
+    states: DEFAULT_SYSTEM_STATES,
+    onlyWhenIdeUnfocused: true,
   },
 };
 
@@ -129,10 +138,12 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
   const popupRaw = (source.popup && typeof source.popup === 'object') ? source.popup as Record<string, unknown> : {};
   const balloonRaw = (source.balloon && typeof source.balloon === 'object') ? source.balloon as Record<string, unknown> : {};
   const soundRaw = (source.sound && typeof source.sound === 'object') ? source.sound as Record<string, unknown> : {};
+  const systemRaw = (source.system && typeof source.system === 'object') ? source.system as Record<string, unknown> : {};
 
   const popupDefault = DEFAULT_TASK_REMINDER_CONFIG.popup;
   const balloonDefault = DEFAULT_TASK_REMINDER_CONFIG.balloon;
   const soundDefault = DEFAULT_TASK_REMINDER_CONFIG.sound;
+  const systemDefault = DEFAULT_TASK_REMINDER_CONFIG.system;
 
   return {
     popup: {
@@ -164,6 +175,14 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
       customSoundPath: typeof soundRaw.customSoundPath === 'string'
         ? soundRaw.customSoundPath
         : soundDefault.customSoundPath,
+    },
+    system: {
+      enabled: toBoolean(systemRaw.enabled, systemDefault.enabled),
+      states: sanitizeStates(systemRaw.states, systemDefault.states, TASK_REMINDER_CHANNEL_STATES.system),
+      onlyWhenIdeUnfocused: toBoolean(
+        systemRaw.onlyWhenIdeUnfocused,
+        systemDefault.onlyWhenIdeUnfocused,
+      ),
     },
   };
 };

@@ -27,10 +27,15 @@ const defaultTaskReminderConfig: TaskReminderConfig = {
     selectedSound: 'default',
     customSoundPath: '',
   },
+  system: {
+    enabled: false,
+    states: ['waiting_confirm', 'final_error', 'completed'],
+    onlyWhenIdeUnfocused: true,
+  },
 };
 
 describe('BehaviorTab task reminder section', () => {
-  it('renders task reminder group and popup/balloon/sound sections', () => {
+  it('renders task reminder group and popup/balloon/sound/system sections', () => {
     // 设置页应完整展示三类提醒渠道，确保新配置结构在 UI 层可见。
     render(
       <BehaviorTab
@@ -50,6 +55,7 @@ describe('BehaviorTab task reminder section', () => {
     expect(screen.getByText('Popup')).toBeTruthy();
     expect(screen.getByText('Balloon')).toBeTruthy();
     expect(screen.getByText('Sound')).toBeTruthy();
+    expect(screen.getByText('System')).toBeTruthy();
     expect(screen.getByText(/Notifications/i)).toBeTruthy();
   });
 
@@ -74,8 +80,10 @@ describe('BehaviorTab task reminder section', () => {
     expect(screen.getByLabelText('Popup enabled')).toBeTruthy();
     expect(screen.getByLabelText('Balloon enabled')).toBeTruthy();
     expect(screen.getByLabelText('Sound enabled')).toBeTruthy();
+    expect(screen.getByLabelText('System enabled')).toBeTruthy();
     expect(screen.getByLabelText('Popup only when IDE unfocused')).toBeTruthy();
     expect(screen.getByLabelText('Sound only when IDE unfocused')).toBeTruthy();
+    expect(screen.getByLabelText('System only when IDE unfocused')).toBeTruthy();
 
     const popupState = screen.getByLabelText('Popup state waiting_confirm');
     fireEvent.click(popupState);
@@ -103,6 +111,11 @@ describe('BehaviorTab task reminder section', () => {
     expect(screen.queryByLabelText('Popup state retrying')).toBeNull();
     expect(screen.queryByLabelText('Popup state recovered')).toBeNull();
     expect(screen.getByLabelText('Balloon state completed')).toBeTruthy();
+    expect(screen.getByLabelText('System state waiting_confirm')).toBeTruthy();
+    expect(screen.getByLabelText('System state final_error')).toBeTruthy();
+    expect(screen.getByLabelText('System state completed')).toBeTruthy();
+    expect(screen.queryByLabelText('System state retrying')).toBeNull();
+    expect(screen.queryByLabelText('System state recovered')).toBeNull();
   });
 
   it('renders popup and balloon test actions and triggers callbacks', () => {

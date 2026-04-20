@@ -31,6 +31,11 @@ public class TaskReminderPolicyFactory {
         TaskState.WAITING_CONFIRM,
         TaskState.FINAL_ERROR
     );
+    private static final Set<TaskState> SUPPORTED_SYSTEM_STATES = EnumSet.of(
+        TaskState.WAITING_CONFIRM,
+        TaskState.FINAL_ERROR,
+        TaskState.COMPLETED
+    );
 
     /**
      * 从 settings service 读取最新 task reminder 配置并转换成策略。
@@ -58,6 +63,7 @@ public class TaskReminderPolicyFactory {
         JsonObject popupConfig = config.getAsJsonObject("popup");
         JsonObject balloonConfig = config.getAsJsonObject("balloon");
         JsonObject soundConfig = config.getAsJsonObject("sound");
+        JsonObject systemConfig = config.getAsJsonObject("system");
 
         Set<TaskState> popupStates = parseChannelStates(
             popupConfig,
@@ -74,20 +80,30 @@ public class TaskReminderPolicyFactory {
             null,
             EnumSet.of(TaskState.COMPLETED)
         );
+        Set<TaskState> systemStates = systemConfig == null
+            ? EnumSet.noneOf(TaskState.class)
+            : parseChannelStates(
+                systemConfig,
+                SUPPORTED_SYSTEM_STATES,
+                EnumSet.of(TaskState.WAITING_CONFIRM, TaskState.FINAL_ERROR, TaskState.COMPLETED)
+            );
 
         boolean popupOnlyWhenIdeUnfocused = getOnlyWhenIdeUnfocused(popupConfig, false);
         boolean balloonOnlyWhenIdeUnfocused = getOnlyWhenIdeUnfocused(balloonConfig, true);
         boolean soundOnlyWhenIdeUnfocused = getOnlyWhenIdeUnfocused(soundConfig, true);
+        boolean systemOnlyWhenIdeUnfocused = getOnlyWhenIdeUnfocused(systemConfig, true);
 
         TaskReminderPolicy policy = new TaskReminderPolicy(
             popupStates,
             balloonStates,
             soundStates,
+            systemStates,
             DEFAULT_STATUS_BAR_STATES,
             popupOnlyWhenIdeUnfocused,
             true,
             balloonOnlyWhenIdeUnfocused,
-            soundOnlyWhenIdeUnfocused
+            soundOnlyWhenIdeUnfocused,
+            systemOnlyWhenIdeUnfocused
         );
         LOG.debug(
             "[TaskReminderPolicyFactory] popup=" + popupStates
@@ -96,6 +112,8 @@ public class TaskReminderPolicyFactory {
                 + ", balloonOnlyWhenIdeUnfocused=" + balloonOnlyWhenIdeUnfocused
                 + ", sound=" + soundStates
                 + ", soundOnlyWhenIdeUnfocused=" + soundOnlyWhenIdeUnfocused
+                + ", system=" + systemStates
+                + ", systemOnlyWhenIdeUnfocused=" + systemOnlyWhenIdeUnfocused
         );
         return policy;
     }

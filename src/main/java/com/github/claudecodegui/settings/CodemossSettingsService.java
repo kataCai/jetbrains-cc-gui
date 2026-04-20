@@ -1109,6 +1109,7 @@ public class CodemossSettingsService {
         mergeChannel(source, normalized, "popup", false);
         mergeChannel(source, normalized, "balloon", false);
         mergeChannel(source, normalized, "sound", true);
+        mergeChannel(source, normalized, "system", false);
         return normalized;
     }
 
@@ -1166,6 +1167,7 @@ public class CodemossSettingsService {
         sound.addProperty("selectedSound", "default");
         sound.addProperty("customSoundPath", "");
         taskReminder.add("sound", sound);
+        taskReminder.add("system", createDefaultReminderChannel(false, true, "waiting_confirm", "final_error", "completed"));
         return taskReminder;
     }
 

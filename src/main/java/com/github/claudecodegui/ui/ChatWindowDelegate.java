@@ -2,6 +2,7 @@ package com.github.claudecodegui.ui;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
+import com.github.claudecodegui.notifications.SystemReminderNotifier;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.handler.AgentHandler;
@@ -257,6 +258,7 @@ public class ChatWindowDelegate {
             handlerContext,
             () -> taskReminderPolicyFactory.fromSettingsService(settingsService),
             new ClaudeBalloonNotifier(),
+            new SystemReminderNotifier(),
             SoundNotificationService.getInstance()::playTaskReminderSound,
             () -> ApplicationManager.getApplication().isActive()
         );

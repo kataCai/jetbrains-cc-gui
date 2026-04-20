@@ -110,6 +110,40 @@ public class TaskReminderPolicyFactoryTest {
         assertTrue(unfocusedDecision.shouldShowPopup());
     }
 
+    @Test
+    public void shouldFilterUnsupportedSystemStatesAndRespectIdeFocusSetting() {
+        TaskReminderPolicyFactory factory = new TaskReminderPolicyFactory();
+        JsonObject config = new JsonObject();
+
+        JsonObject system = new JsonObject();
+        system.addProperty("enabled", true);
+        system.addProperty("onlyWhenIdeUnfocused", true);
+        system.add("states", states("completed", "retrying", "final_error"));
+        config.add("system", system);
+
+        TaskReminderPolicy policy = factory.fromTaskReminderConfig(config);
+
+        TaskReminderPolicy.ReminderDecision focusedCompleted = policy.decide(
+            snapshot(TaskState.COMPLETED),
+            false,
+            true
+        );
+        TaskReminderPolicy.ReminderDecision unfocusedCompleted = policy.decide(
+            snapshot(TaskState.COMPLETED),
+            false,
+            false
+        );
+        TaskReminderPolicy.ReminderDecision unfocusedRetrying = policy.decide(
+            snapshot(TaskState.RETRYING),
+            false,
+            false
+        );
+
+        assertFalse(focusedCompleted.shouldShowSystem());
+        assertTrue(unfocusedCompleted.shouldShowSystem());
+        assertFalse(unfocusedRetrying.shouldShowSystem());
+    }
+
     private static TaskStateSnapshot snapshot(TaskState state) {
         return new TaskStateSnapshot(
             state,

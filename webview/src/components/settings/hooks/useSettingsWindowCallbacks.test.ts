@@ -83,7 +83,14 @@ describe('useSettingsWindowCallbacks', () => {
     };
 
     window.updateTaskReminderConfig?.(JSON.stringify(config));
-    expect(deps.setTaskReminderConfig).toHaveBeenCalledWith(config);
+    expect(deps.setTaskReminderConfig).toHaveBeenCalledWith({
+      ...config,
+      system: {
+        enabled: false,
+        states: ['waiting_confirm', 'final_error', 'completed'],
+        onlyWhenIdeUnfocused: true,
+      },
+    });
   });
 
   it('merges legacy sound callback into taskReminderConfig.sound', () => {
@@ -111,11 +118,17 @@ describe('useSettingsWindowCallbacks', () => {
         selectedSound: 'default',
         customSoundPath: '',
       },
+      system: {
+        enabled: false,
+        states: ['waiting_confirm', 'final_error', 'completed'],
+        onlyWhenIdeUnfocused: true,
+      },
     };
     const nextConfig = setCallArg(prevConfig);
 
     expect(nextConfig.popup).toEqual(prevConfig.popup);
     expect(nextConfig.balloon).toEqual(prevConfig.balloon);
+    expect(nextConfig.system).toEqual(prevConfig.system);
     expect(nextConfig.sound.enabled).toBe(false);
     expect(nextConfig.sound.states).toEqual(['final_error']);
     expect(nextConfig.sound.selectedSound).toBe('custom');

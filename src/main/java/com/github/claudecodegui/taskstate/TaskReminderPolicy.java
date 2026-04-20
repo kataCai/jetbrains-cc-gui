@@ -12,12 +12,41 @@ public class TaskReminderPolicy {
     private final Set<TaskState> popupStates;
     private final Set<TaskState> balloonStates;
     private final Set<TaskState> soundStates;
+    private final Set<TaskState> systemStates;
     private final Set<TaskState> statusBarStates;
     private final boolean popupOnlyWhenIdeUnfocused;
     private final boolean suppressWaitingPopupWhenApprovalDialogVisible;
     private final boolean balloonOnlyWhenIdeUnfocused;
     private final boolean soundOnlyWhenIdeUnfocused;
+    private final boolean systemOnlyWhenIdeUnfocused;
 
+    public TaskReminderPolicy(
+        Set<TaskState> popupStates,
+        Set<TaskState> balloonStates,
+        Set<TaskState> soundStates,
+        Set<TaskState> systemStates,
+        Set<TaskState> statusBarStates,
+        boolean popupOnlyWhenIdeUnfocused,
+        boolean suppressWaitingPopupWhenApprovalDialogVisible,
+        boolean balloonOnlyWhenIdeUnfocused,
+        boolean soundOnlyWhenIdeUnfocused,
+        boolean systemOnlyWhenIdeUnfocused
+    ) {
+        this.popupStates = immutableEnumSet(popupStates);
+        this.balloonStates = immutableEnumSet(balloonStates);
+        this.soundStates = immutableEnumSet(soundStates);
+        this.systemStates = immutableEnumSet(systemStates);
+        this.statusBarStates = immutableEnumSet(statusBarStates);
+        this.popupOnlyWhenIdeUnfocused = popupOnlyWhenIdeUnfocused;
+        this.suppressWaitingPopupWhenApprovalDialogVisible = suppressWaitingPopupWhenApprovalDialogVisible;
+        this.balloonOnlyWhenIdeUnfocused = balloonOnlyWhenIdeUnfocused;
+        this.soundOnlyWhenIdeUnfocused = soundOnlyWhenIdeUnfocused;
+        this.systemOnlyWhenIdeUnfocused = systemOnlyWhenIdeUnfocused;
+    }
+
+    /**
+     * 兼容旧调用方：未显式传入 system 通道时，默认关闭该通道。
+     */
     public TaskReminderPolicy(
         Set<TaskState> popupStates,
         Set<TaskState> balloonStates,
@@ -28,14 +57,18 @@ public class TaskReminderPolicy {
         boolean balloonOnlyWhenIdeUnfocused,
         boolean soundOnlyWhenIdeUnfocused
     ) {
-        this.popupStates = immutableEnumSet(popupStates);
-        this.balloonStates = immutableEnumSet(balloonStates);
-        this.soundStates = immutableEnumSet(soundStates);
-        this.statusBarStates = immutableEnumSet(statusBarStates);
-        this.popupOnlyWhenIdeUnfocused = popupOnlyWhenIdeUnfocused;
-        this.suppressWaitingPopupWhenApprovalDialogVisible = suppressWaitingPopupWhenApprovalDialogVisible;
-        this.balloonOnlyWhenIdeUnfocused = balloonOnlyWhenIdeUnfocused;
-        this.soundOnlyWhenIdeUnfocused = soundOnlyWhenIdeUnfocused;
+        this(
+            popupStates,
+            balloonStates,
+            soundStates,
+            Collections.emptySet(),
+            statusBarStates,
+            popupOnlyWhenIdeUnfocused,
+            suppressWaitingPopupWhenApprovalDialogVisible,
+            balloonOnlyWhenIdeUnfocused,
+            soundOnlyWhenIdeUnfocused,
+            true
+        );
     }
 
     /**
@@ -46,6 +79,7 @@ public class TaskReminderPolicy {
             EnumSet.of(TaskState.WAITING_CONFIRM, TaskState.FINAL_ERROR),
             EnumSet.of(TaskState.COMPLETED, TaskState.RECOVERED, TaskState.FINAL_ERROR),
             EnumSet.of(TaskState.COMPLETED),
+            Collections.emptySet(),
             EnumSet.of(
                 TaskState.RUNNING,
                 TaskState.WAITING_CONFIRM,
@@ -56,6 +90,7 @@ public class TaskReminderPolicy {
                 TaskState.CANCELLED
             ),
             false,
+            true,
             true,
             true,
             true
@@ -98,16 +133,25 @@ public class TaskReminderPolicy {
             soundReason = "ide_focused_filtered";
         }
 
+        boolean showSystem = systemStates.contains(state);
+        String systemReason = showSystem ? "allowed" : "state_not_enabled";
+        if (showSystem && systemOnlyWhenIdeUnfocused && ideFocused) {
+            showSystem = false;
+            systemReason = "ide_focused_filtered";
+        }
+
         boolean updateStatusBar = statusBarStates.contains(state);
 
         return new ReminderDecision(
             showPopup,
             showBalloon,
-            updateStatusBar,
             playSound,
+            showSystem,
+            updateStatusBar,
             popupReason,
             balloonReason,
-            soundReason
+            soundReason,
+            systemReason
         );
     }
 
@@ -124,6 +168,8 @@ public class TaskReminderPolicy {
             false,
             false,
             false,
+            false,
+            "state_not_enabled",
             "state_not_enabled",
             "state_not_enabled",
             "state_not_enabled"
@@ -131,28 +177,34 @@ public class TaskReminderPolicy {
 
         private final boolean showPopup;
         private final boolean showBalloon;
-        private final boolean updateStatusBar;
         private final boolean playSound;
+        private final boolean showSystem;
+        private final boolean updateStatusBar;
         private final String popupReason;
         private final String balloonReason;
         private final String soundReason;
+        private final String systemReason;
 
         public ReminderDecision(
             boolean showPopup,
             boolean showBalloon,
-            boolean updateStatusBar,
             boolean playSound,
+            boolean showSystem,
+            boolean updateStatusBar,
             String popupReason,
             String balloonReason,
-            String soundReason
+            String soundReason,
+            String systemReason
         ) {
             this.showPopup = showPopup;
             this.showBalloon = showBalloon;
-            this.updateStatusBar = updateStatusBar;
             this.playSound = playSound;
+            this.showSystem = showSystem;
+            this.updateStatusBar = updateStatusBar;
             this.popupReason = popupReason;
             this.balloonReason = balloonReason;
             this.soundReason = soundReason;
+            this.systemReason = systemReason;
         }
 
         public boolean shouldShowPopup() {
@@ -171,6 +223,10 @@ public class TaskReminderPolicy {
             return playSound;
         }
 
+        public boolean shouldShowSystem() {
+            return showSystem;
+        }
+
         public String getPopupReason() {
             return popupReason;
         }
@@ -181,6 +237,10 @@ public class TaskReminderPolicy {
 
         public String getSoundReason() {
             return soundReason;
+        }
+
+        public String getSystemReason() {
+            return systemReason;
         }
     }
 }

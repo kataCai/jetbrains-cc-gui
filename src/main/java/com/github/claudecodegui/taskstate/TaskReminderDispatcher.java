@@ -4,6 +4,7 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
+import com.github.claudecodegui.notifications.SystemReminderNotifier;
 import com.github.claudecodegui.util.SoundNotificationService;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -44,6 +45,7 @@ public class TaskReminderDispatcher {
     private final HandlerContext context;
     private final Supplier<TaskReminderPolicy> policySupplier;
     private final ClaudeBalloonNotifier balloonNotifier;
+    private final SystemReminderNotifier systemReminderNotifier;
     private final ReminderSoundPlayer reminderSoundPlayer;
     private final IdeFocusChecker ideFocusChecker;
     private final ReminderMessageResolver reminderMessageResolver;
@@ -52,6 +54,7 @@ public class TaskReminderDispatcher {
     // session 鎭㈠鎴栭噸澶嶆秷鎭帹閫佹椂澶氭寮瑰嚭鐩稿悓鎻愰啋銆?
     private final Map<String, Boolean> popupDedupKeys = new LinkedHashMap<>();
     private final Map<String, Boolean> balloonDedupKeys = new LinkedHashMap<>();
+    private final Map<String, Boolean> systemDedupKeys = new LinkedHashMap<>();
 
     /**
      * 浣跨敤榛樿绛栫暐鏋勫缓鎻愰啋鍒嗗彂鍣ㄣ€?
@@ -62,6 +65,7 @@ public class TaskReminderDispatcher {
             context,
             () -> TaskReminderPolicy.defaults(),
             new ClaudeBalloonNotifier(),
+            new SystemReminderNotifier(),
             SoundNotificationService.getInstance()::playTaskReminderSound,
             () -> ApplicationManager.getApplication().isActive(),
             TaskReminderDispatcher::buildDefaultReminderMessage
@@ -82,6 +86,7 @@ public class TaskReminderDispatcher {
             context,
             () -> policy,
             balloonNotifier,
+            new SystemReminderNotifier(),
             soundNotificationService::playTaskReminderSound,
             () -> ApplicationManager.getApplication().isActive(),
             TaskReminderDispatcher::buildDefaultReminderMessage
@@ -101,6 +106,29 @@ public class TaskReminderDispatcher {
             context,
             policySupplier,
             balloonNotifier,
+            new SystemReminderNotifier(),
+            reminderSoundPlayer,
+            ideFocusChecker,
+            TaskReminderDispatcher::buildDefaultReminderMessage
+        );
+    }
+
+    /**
+     * 支持按次解析策略并注入 system notifier 的构造器。
+     */
+    public TaskReminderDispatcher(
+        HandlerContext context,
+        Supplier<TaskReminderPolicy> policySupplier,
+        ClaudeBalloonNotifier balloonNotifier,
+        SystemReminderNotifier systemReminderNotifier,
+        ReminderSoundPlayer reminderSoundPlayer,
+        IdeFocusChecker ideFocusChecker
+    ) {
+        this(
+            context,
+            policySupplier,
+            balloonNotifier,
+            systemReminderNotifier,
             reminderSoundPlayer,
             ideFocusChecker,
             TaskReminderDispatcher::buildDefaultReminderMessage
@@ -120,6 +148,7 @@ public class TaskReminderDispatcher {
             context,
             () -> policy,
             balloonNotifier,
+            new SystemReminderNotifier(),
             reminderSoundPlayer,
             ideFocusChecker,
             TaskReminderDispatcher::buildDefaultReminderMessage
@@ -127,7 +156,8 @@ public class TaskReminderDispatcher {
     }
 
     /**
-     * 鍏煎鐩存帴娉ㄥ叆鍥哄畾绛栫暐涓旇嚜瀹氫箟鏂囨瑙ｆ瀽鍣ㄧ殑鍦烘櫙銆?     */
+     * 兼容旧调用方：未显式传入 system notifier 时使用默认实现。
+     */
     public TaskReminderDispatcher(
         HandlerContext context,
         TaskReminderPolicy policy,
@@ -140,6 +170,51 @@ public class TaskReminderDispatcher {
             context,
             () -> policy,
             balloonNotifier,
+            new SystemReminderNotifier(),
+            reminderSoundPlayer,
+            ideFocusChecker,
+            reminderMessageResolver
+        );
+    }
+
+    /**
+     * 鍏煎鐩存帴娉ㄥ叆鍥哄畾绛栫暐涓旇嚜瀹氫箟鏂囨瑙ｆ瀽鍣ㄧ殑鍦烘櫙銆?     */
+    public TaskReminderDispatcher(
+        HandlerContext context,
+        TaskReminderPolicy policy,
+        ClaudeBalloonNotifier balloonNotifier,
+        SystemReminderNotifier systemReminderNotifier,
+        ReminderSoundPlayer reminderSoundPlayer,
+        IdeFocusChecker ideFocusChecker
+    ) {
+        this(
+            context,
+            () -> policy,
+            balloonNotifier,
+            systemReminderNotifier,
+            reminderSoundPlayer,
+            ideFocusChecker,
+            TaskReminderDispatcher::buildDefaultReminderMessage
+        );
+    }
+
+    /**
+     * 支持自定义文案解析器与 system notifier 的完整构造器。
+     */
+    public TaskReminderDispatcher(
+        HandlerContext context,
+        TaskReminderPolicy policy,
+        ClaudeBalloonNotifier balloonNotifier,
+        SystemReminderNotifier systemReminderNotifier,
+        ReminderSoundPlayer reminderSoundPlayer,
+        IdeFocusChecker ideFocusChecker,
+        ReminderMessageResolver reminderMessageResolver
+    ) {
+        this(
+            context,
+            () -> policy,
+            balloonNotifier,
+            systemReminderNotifier,
             reminderSoundPlayer,
             ideFocusChecker,
             reminderMessageResolver
@@ -152,6 +227,7 @@ public class TaskReminderDispatcher {
         HandlerContext context,
         Supplier<TaskReminderPolicy> policySupplier,
         ClaudeBalloonNotifier balloonNotifier,
+        SystemReminderNotifier systemReminderNotifier,
         ReminderSoundPlayer reminderSoundPlayer,
         IdeFocusChecker ideFocusChecker,
         ReminderMessageResolver reminderMessageResolver
@@ -159,6 +235,7 @@ public class TaskReminderDispatcher {
         this.context = context;
         this.policySupplier = policySupplier;
         this.balloonNotifier = balloonNotifier;
+        this.systemReminderNotifier = systemReminderNotifier;
         this.reminderSoundPlayer = reminderSoundPlayer;
         this.ideFocusChecker = ideFocusChecker;
         this.reminderMessageResolver = reminderMessageResolver;
@@ -184,8 +261,10 @@ public class TaskReminderDispatcher {
         String dedupKey = buildDedupKey(snapshot);
         boolean shouldShowBalloon = decision.shouldShowBalloon();
         boolean shouldShowPopup = decision.shouldShowPopup();
+        boolean shouldShowSystem = decision.shouldShowSystem();
         boolean balloonDispatched = shouldShowBalloon && markDispatched(balloonDedupKeys, dedupKey);
         boolean popupDispatched = shouldShowPopup && markDispatched(popupDedupKeys, dedupKey);
+        boolean systemDispatched = shouldShowSystem && markDispatched(systemDedupKeys, dedupKey);
 
         LOG.debug(
             "[TaskReminderDispatcher] state=" + snapshot.getState().getValue()
@@ -194,6 +273,7 @@ public class TaskReminderDispatcher {
                 + ", popup=" + shouldShowPopup + "/" + popupDispatched + "/" + decision.getPopupReason()
                 + ", balloon=" + shouldShowBalloon + "/" + balloonDispatched + "/" + decision.getBalloonReason()
                 + ", sound=" + decision.shouldPlaySound() + "/" + decision.getSoundReason()
+                + ", system=" + shouldShowSystem + "/" + systemDispatched + "/" + decision.getSystemReason()
                 + ", statusBar=" + decision.shouldUpdateStatusBar()
         );
 
@@ -210,6 +290,10 @@ public class TaskReminderDispatcher {
 
         if (decision.shouldPlaySound()) {
             reminderSoundPlayer.play(snapshot.getState());
+        }
+
+        if (systemDispatched && systemReminderNotifier != null) {
+            systemReminderNotifier.showTaskReminder(context.getProject(), snapshot.getState(), reminderMessage);
         }
 
         if (popupDispatched) {

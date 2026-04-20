@@ -23,6 +23,23 @@ describe('useSettingsBasicActions task reminder config', () => {
     expect(Array.isArray(payload.popup.states)).toBe(true);
   });
 
+  it('supports the system reminder channel when updating canonical task reminder config', () => {
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.handleTaskReminderEnabledChange('system', true);
+    });
+
+    const calls = (window.sendToJava as any).mock.calls;
+    const command = calls.findLast(([message]: [unknown]) => String(message).startsWith('set_task_reminder_config:'))?.[0];
+    expect(command).toBeTruthy();
+
+    const payload = JSON.parse(String(command).slice('set_task_reminder_config:'.length));
+    expect(payload.system.enabled).toBe(true);
+    expect(payload.system.onlyWhenIdeUnfocused).toBe(true);
+    expect(payload.system.states).toEqual(['waiting_confirm', 'final_error', 'completed']);
+  });
+
   it('sends task reminder test events for popup and balloon', () => {
     const { result } = renderHook(() => useSettingsBasicActions({}));
 

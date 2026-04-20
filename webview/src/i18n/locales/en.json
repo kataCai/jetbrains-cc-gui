@@ -247,10 +247,11 @@
       },
       "taskReminder": {
         "label": "Task Reminder / Status Reminder",
-        "hint": "Configure popup, balloon, and sound reminders by task state.",
+        "hint": "Configure popup, balloon, sound, and system reminders by task state.",
         "popup": "Popup",
         "balloon": "Balloon",
         "sound": "Sound",
+        "system": "System",
         "enabled": "Enabled",
         "onlyWhenIdeUnfocused": "Only when IDE unfocused",
         "state": {

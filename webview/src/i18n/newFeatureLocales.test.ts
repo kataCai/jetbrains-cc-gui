@@ -8,6 +8,7 @@ const REQUIRED_NEW_FEATURE_KEYS = [
   'settings.basic.taskReminder.popup',
   'settings.basic.taskReminder.balloon',
   'settings.basic.taskReminder.sound',
+  'settings.basic.taskReminder.system',
   'settings.basic.taskReminder.enabled',
   'settings.basic.taskReminder.onlyWhenIdeUnfocused',
   'settings.basic.taskReminder.balloonNotificationsHint',

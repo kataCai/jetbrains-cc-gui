@@ -247,10 +247,11 @@
       },
       "taskReminder": {
         "label": "任务提醒 / 状态提醒",
-        "hint": "按任务状态配置弹窗、气泡和声音提醒。",
+        "hint": "按任务状态配置弹窗、气泡、声音和系统提醒。",
         "popup": "弹窗提醒",
         "balloon": "气泡提醒",
         "sound": "声音提醒",
+        "system": "系统提醒",
         "enabled": "已开启",
         "onlyWhenIdeUnfocused": "仅在 IDE 未聚焦时提醒",
         "state": {

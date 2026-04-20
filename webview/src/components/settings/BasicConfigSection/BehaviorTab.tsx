@@ -357,7 +357,7 @@ const BehaviorTab = ({
         </div>
         <small className={styles.formHint}>
           <span className="codicon codicon-info" />
-          <span>{t('settings.basic.taskReminder.hint', 'Configure popup, balloon, and sound reminders by task state.')}</span>
+          <span>{t('settings.basic.taskReminder.hint', 'Configure popup, balloon, sound, and system reminders by task state.')}</span>
         </small>
         <small className={styles.formHint}>
           <span className="codicon codicon-bell-dot" />
@@ -509,6 +509,34 @@ const BehaviorTab = ({
               </div>
             </div>
           )}
+        </div>
+
+
+        {/* System reminder */}
+        <div className={styles.customSoundSection}>
+          <div className={styles.fieldHeader}>
+            <span className="codicon codicon-device-desktop" />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskReminder.system', 'System')}</span>
+          </div>
+          <label style={{ display: 'block', marginBottom: '8px' }}>
+            <input
+              aria-label="System enabled"
+              type="checkbox"
+              checked={taskReminderConfig.system.enabled}
+              onChange={(event) => onTaskReminderEnabledChange('system', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.enabled', 'Enabled')}</span>
+          </label>
+          {renderReminderStates('system', 'System', taskReminderConfig.system.states)}
+          <label style={{ display: 'block' }}>
+            <input
+              aria-label="System only when IDE unfocused"
+              type="checkbox"
+              checked={taskReminderConfig.system.onlyWhenIdeUnfocused}
+              onChange={(event) => onTaskReminderOnlyWhenIdeUnfocusedChange('system', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
+          </label>
         </div>
       </div>
     </div>
