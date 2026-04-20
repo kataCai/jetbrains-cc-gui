@@ -86,6 +86,7 @@ public class CcgTaskNavigator {
                 return;
             }
             if (toolWindowSessionNavigator.navigate(project, sessionId)) {
+                toolWindowActivator.activate(project);
                 return;
             }
         }
@@ -122,8 +123,6 @@ public class CcgTaskNavigator {
         }
 
         contentManager.setSelectedContent(matchedContent);
-        toolWindow.show(null);
-        toolWindow.activate(null);
         return true;
     }
 
