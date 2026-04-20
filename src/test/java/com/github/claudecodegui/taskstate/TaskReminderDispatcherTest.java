@@ -3,6 +3,8 @@ package com.github.claudecodegui.taskstate;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.notifications.SystemReminderNotifier;
+import com.github.claudecodegui.notifications.TaskReminderNotificationPayload;
+import com.github.claudecodegui.session.ClaudeSession;
 import com.intellij.openapi.project.Project;
 import org.junit.Test;
 
@@ -49,6 +51,22 @@ public class TaskReminderDispatcherTest {
         assertTrue(jsCode.contains("__pendingTaskReminderDialogRequests"));
         assertTrue(jsCode.contains("\"state\":\"waiting_confirm\""));
         assertTrue(jsCode.contains("\"requestId\":\"req-2\""));
+    }
+
+    @Test
+    public void shouldIncludeSessionSummaryInPopupPayload() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        context.setSession(sessionWithSummary("Fix task reminder navigation"));
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderDispatcher dispatcher = createDispatcher(context, balloonNotifier, soundCalls, true);
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-1", "req-summary", "plan_approval_requested"), false);
+
+        assertEquals(1, context.executedJs.size());
+        String jsCode = context.executedJs.get(0);
+        assertTrue(jsCode.contains("\"taskSummary\":\"Fix task reminder navigation\""));
+        assertTrue(jsCode.contains("\"message\":\"Fix task reminder navigation\""));
     }
 
     @Test
@@ -208,6 +226,7 @@ public class TaskReminderDispatcherTest {
     @Test
     public void shouldDispatchSystemReminderWhenPolicyAllowsAndIdeIsUnfocused() {
         CapturingHandlerContext context = new CapturingHandlerContext();
+        context.setSession(sessionWithSummary("Summarize completed task"));
         RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
         RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
         AtomicInteger soundCalls = new AtomicInteger();
@@ -237,7 +256,7 @@ public class TaskReminderDispatcherTest {
         assertEquals(1, systemNotifier.callCount.get());
         assertEquals(0, balloonNotifier.callCount.get());
         assertEquals(0, soundCalls.get());
-        assertEquals("Task completed.", systemNotifier.messages.get(0));
+        assertEquals("Summarize completed task", systemNotifier.messages.get(0));
     }
 
     @Test
@@ -321,6 +340,12 @@ public class TaskReminderDispatcherTest {
         );
     }
 
+    private static ClaudeSession sessionWithSummary(String summary) {
+        ClaudeSession session = new ClaudeSession(null, null, null);
+        session.getState().setSummary(summary);
+        return session;
+    }
+
     /**
      * 捕获 executeJavaScriptOnEDT 的测试上下文。
      */
@@ -397,6 +422,15 @@ public class TaskReminderDispatcherTest {
 
         @Override
         public void showTaskReminder(Project project, TaskState state, String message) {
+            record(message);
+        }
+
+        @Override
+        public void showTaskReminder(Project project, TaskReminderNotificationPayload payload) {
+            record(payload != null ? payload.getMessage() : null);
+        }
+
+        private void record(String message) {
             callCount.incrementAndGet();
             messages.add(message);
         }
@@ -415,6 +449,15 @@ public class TaskReminderDispatcherTest {
 
         @Override
         public void showTaskReminder(Project project, TaskState state, String message) {
+            record(message);
+        }
+
+        @Override
+        public void showTaskReminder(Project project, TaskReminderNotificationPayload payload) {
+            record(payload != null ? payload.getMessage() : null);
+        }
+
+        private void record(String message) {
             callCount.incrementAndGet();
             messages.add(message);
         }

@@ -25,9 +25,11 @@ public class SystemReminderNotifierTest {
         RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
         trayFacade.headless = true;
         RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
         SystemReminderNotifier notifier = new SystemReminderNotifier(
             trayFacade,
             activator,
+            navigator,
             () -> createTestImage()
         );
 
@@ -42,9 +44,11 @@ public class SystemReminderNotifierTest {
     public void shouldReuseTrayIconAcrossMultipleReminders() {
         RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
         RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
         SystemReminderNotifier notifier = new SystemReminderNotifier(
             trayFacade,
             activator,
+            navigator,
             () -> createTestImage()
         );
         Project project = createProject(false);
@@ -63,9 +67,11 @@ public class SystemReminderNotifierTest {
         RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
         trayFacade.failOnCreate = true;
         RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
         SystemReminderNotifier notifier = new SystemReminderNotifier(
             trayFacade,
             activator,
+            navigator,
             SystemReminderNotifierTest::createTestImage
         );
 
@@ -77,31 +83,44 @@ public class SystemReminderNotifierTest {
     }
 
     @Test
-    public void shouldActivateLatestProjectWhenNotificationIsClicked() {
+    public void shouldNavigateToLatestTaskTargetWhenNotificationIsClicked() {
         RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
         RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
         SystemReminderNotifier notifier = new SystemReminderNotifier(
             trayFacade,
             activator,
+            navigator,
             SystemReminderNotifierTest::createTestImage
         );
         Project firstProject = createProject(false);
         Project secondProject = createProject(false);
 
-        notifier.showTaskReminder(firstProject, TaskState.COMPLETED, "First");
-        notifier.showTaskReminder(secondProject, TaskState.FINAL_ERROR, "Second");
+        notifier.showTaskReminder(
+            firstProject,
+            new TaskReminderNotificationPayload(TaskState.COMPLETED, "session-1", "req-1", "First", "First")
+        );
+        notifier.showTaskReminder(
+            secondProject,
+            new TaskReminderNotificationPayload(TaskState.FINAL_ERROR, "session-2", "req-2", "Second", "Second")
+        );
         trayFacade.clickLastTrayIcon();
 
-        assertSame(secondProject, activator.lastActivatedProject.get());
+        assertSame(secondProject, navigator.lastTarget.get().getProject());
+        assertEquals("session-2", navigator.lastTarget.get().getSessionId());
+        assertEquals("req-2", navigator.lastTarget.get().getRequestId());
+        assertNull(activator.lastActivatedProject.get());
     }
 
     @Test
     public void shouldSkipDisposedProject() {
         RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
         RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
         SystemReminderNotifier notifier = new SystemReminderNotifier(
             trayFacade,
             activator,
+            navigator,
             SystemReminderNotifierTest::createTestImage
         );
 
@@ -187,6 +206,19 @@ public class SystemReminderNotifierTest {
         @Override
         public void activate(Project project) {
             lastActivatedProject.set(project);
+        }
+    }
+
+    private static class RecordingTaskNavigator extends CcgTaskNavigator {
+        private final AtomicReference<TaskReminderNavigationTarget> lastTarget = new AtomicReference<>();
+
+        RecordingTaskNavigator() {
+            super(Runnable::run, (project, sessionId) -> false, (project, sessionId) -> false, new CcgToolWindowActivator());
+        }
+
+        @Override
+        public void navigate(TaskReminderNavigationTarget target) {
+            lastTarget.set(target);
         }
     }
 

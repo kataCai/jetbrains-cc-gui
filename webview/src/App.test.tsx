@@ -267,6 +267,30 @@ describe('App task reminder callback integration', () => {
     expect(screen.getByText('Please confirm this task in chat')).toBeTruthy();
   });
 
+  it('sends navigate_task_reminder when clicking open session', async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(typeof window.showTaskReminderDialog).toBe('function');
+    });
+
+    act(() => {
+      window.showTaskReminderDialog?.(JSON.stringify({
+        state: 'waiting_confirm',
+        message: 'Please confirm this task in chat',
+        sessionId: 's-open',
+        requestId: 'r-open',
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open session' }));
+
+    expect(mockSendBridgeEvent).toHaveBeenCalledWith(
+      'navigate_task_reminder',
+      JSON.stringify({ sessionId: 's-open', requestId: 'r-open' }),
+    );
+  });
+
   it('drains pending queue after callback registration and shows dialog', async () => {
     // 如果后端早于 React 初始化完成就塞入 pending 请求，App 挂载后应补回放。
     window.__pendingTaskReminderDialogRequests = [

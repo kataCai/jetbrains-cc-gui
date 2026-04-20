@@ -5,6 +5,8 @@ import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.notifications.SystemReminderNotifier;
+import com.github.claudecodegui.notifications.TaskReminderNotificationPayload;
+import com.github.claudecodegui.notifications.TaskReminderPayloadFactory;
 import com.github.claudecodegui.util.SoundNotificationService;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -49,6 +51,7 @@ public class TaskReminderDispatcher {
     private final ReminderSoundPlayer reminderSoundPlayer;
     private final IdeFocusChecker ideFocusChecker;
     private final ReminderMessageResolver reminderMessageResolver;
+    private final TaskReminderPayloadFactory payloadFactory;
     private final Gson gson = new Gson();
     // popup 鍜?balloon 鍒嗗埆缁存姢鍘婚噸缂撳瓨锛岄伩鍏嶄竴娆＄姸鎬佸彉鏇村湪 React 閲嶆寕杞姐€?
     // session 鎭㈠鎴栭噸澶嶆秷鎭帹閫佹椂澶氭寮瑰嚭鐩稿悓鎻愰啋銆?
@@ -68,7 +71,8 @@ public class TaskReminderDispatcher {
             new SystemReminderNotifier(),
             SoundNotificationService.getInstance()::playTaskReminderSound,
             () -> ApplicationManager.getApplication().isActive(),
-            TaskReminderDispatcher::buildDefaultReminderMessage
+            TaskReminderDispatcher::buildDefaultReminderMessage,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -89,7 +93,8 @@ public class TaskReminderDispatcher {
             new SystemReminderNotifier(),
             soundNotificationService::playTaskReminderSound,
             () -> ApplicationManager.getApplication().isActive(),
-            TaskReminderDispatcher::buildDefaultReminderMessage
+            TaskReminderDispatcher::buildDefaultReminderMessage,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -109,7 +114,8 @@ public class TaskReminderDispatcher {
             new SystemReminderNotifier(),
             reminderSoundPlayer,
             ideFocusChecker,
-            TaskReminderDispatcher::buildDefaultReminderMessage
+            TaskReminderDispatcher::buildDefaultReminderMessage,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -131,7 +137,8 @@ public class TaskReminderDispatcher {
             systemReminderNotifier,
             reminderSoundPlayer,
             ideFocusChecker,
-            TaskReminderDispatcher::buildDefaultReminderMessage
+            TaskReminderDispatcher::buildDefaultReminderMessage,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -173,7 +180,8 @@ public class TaskReminderDispatcher {
             new SystemReminderNotifier(),
             reminderSoundPlayer,
             ideFocusChecker,
-            reminderMessageResolver
+            reminderMessageResolver,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -194,7 +202,8 @@ public class TaskReminderDispatcher {
             systemReminderNotifier,
             reminderSoundPlayer,
             ideFocusChecker,
-            TaskReminderDispatcher::buildDefaultReminderMessage
+            TaskReminderDispatcher::buildDefaultReminderMessage,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -217,7 +226,8 @@ public class TaskReminderDispatcher {
             systemReminderNotifier,
             reminderSoundPlayer,
             ideFocusChecker,
-            reminderMessageResolver
+            reminderMessageResolver,
+            new TaskReminderPayloadFactory()
         );
     }
 
@@ -232,6 +242,28 @@ public class TaskReminderDispatcher {
         IdeFocusChecker ideFocusChecker,
         ReminderMessageResolver reminderMessageResolver
     ) {
+        this(
+            context,
+            policySupplier,
+            balloonNotifier,
+            systemReminderNotifier,
+            reminderSoundPlayer,
+            ideFocusChecker,
+            reminderMessageResolver,
+            new TaskReminderPayloadFactory()
+        );
+    }
+
+    public TaskReminderDispatcher(
+        HandlerContext context,
+        Supplier<TaskReminderPolicy> policySupplier,
+        ClaudeBalloonNotifier balloonNotifier,
+        SystemReminderNotifier systemReminderNotifier,
+        ReminderSoundPlayer reminderSoundPlayer,
+        IdeFocusChecker ideFocusChecker,
+        ReminderMessageResolver reminderMessageResolver,
+        TaskReminderPayloadFactory payloadFactory
+    ) {
         this.context = context;
         this.policySupplier = policySupplier;
         this.balloonNotifier = balloonNotifier;
@@ -239,6 +271,7 @@ public class TaskReminderDispatcher {
         this.reminderSoundPlayer = reminderSoundPlayer;
         this.ideFocusChecker = ideFocusChecker;
         this.reminderMessageResolver = reminderMessageResolver;
+        this.payloadFactory = payloadFactory != null ? payloadFactory : new TaskReminderPayloadFactory();
     }
 
     /**
@@ -258,6 +291,7 @@ public class TaskReminderDispatcher {
         TaskReminderPolicy policy = resolvePolicy();
         TaskReminderPolicy.ReminderDecision decision = policy.decide(snapshot, approvalDialogVisible, ideFocused);
         String reminderMessage = reminderMessageResolver.resolve(snapshot);
+        TaskReminderNotificationPayload payload = payloadFactory.create(context, snapshot, reminderMessage);
         String dedupKey = buildDedupKey(snapshot);
         boolean shouldShowBalloon = decision.shouldShowBalloon();
         boolean shouldShowPopup = decision.shouldShowPopup();
@@ -280,12 +314,12 @@ public class TaskReminderDispatcher {
         if (decision.shouldUpdateStatusBar()) {
             Project project = context.getProject();
             if (project != null && !project.isDisposed()) {
-                ClaudeNotifier.showTaskReminderStatus(project, snapshot.getState(), reminderMessage);
+                ClaudeNotifier.showTaskReminderStatus(project, snapshot.getState(), payload.getMessage());
             }
         }
 
         if (balloonDispatched) {
-            balloonNotifier.showTaskReminder(context.getProject(), snapshot.getState(), reminderMessage);
+            balloonNotifier.showTaskReminder(context.getProject(), payload);
         }
 
         if (decision.shouldPlaySound()) {
@@ -293,11 +327,11 @@ public class TaskReminderDispatcher {
         }
 
         if (systemDispatched && systemReminderNotifier != null) {
-            systemReminderNotifier.showTaskReminder(context.getProject(), snapshot.getState(), reminderMessage);
+            systemReminderNotifier.showTaskReminder(context.getProject(), payload);
         }
 
         if (popupDispatched) {
-            dispatchPopup(snapshot, reminderMessage);
+            dispatchPopup(payload);
         }
     }
 
@@ -314,7 +348,7 @@ public class TaskReminderDispatcher {
     public void dispatchTestPopup(String message) {
         TaskStateSnapshot snapshot = buildPreviewSnapshot(TaskState.WAITING_CONFIRM, "preview_popup");
         LOG.info("[TaskReminderDispatcher] Dispatching popup reminder preview to webview overlay");
-        dispatchPopup(snapshot, message);
+        dispatchPopup(payloadFactory.create(context, snapshot, message));
     }
 
     /**
@@ -341,18 +375,22 @@ public class TaskReminderDispatcher {
      * 鍚戝墠绔彂閫?task reminder popup 璇锋眰銆?
      * 濡傛灉 React 鍥炶皟灏氭湭娉ㄥ唽锛屽垯鍏堝啓鍏?window 渚х紦瀛橀槦鍒楋紝绛夊緟鍓嶇鍒濆鍖栧悗鍥炴斁銆?
      */
-    private void dispatchPopup(TaskStateSnapshot snapshot, String message) {
-        JsonObject payload = new JsonObject();
-        payload.addProperty("state", snapshot.getState().getValue());
-        payload.addProperty("message", message);
-        if (hasText(snapshot.getSessionId())) {
-            payload.addProperty("sessionId", snapshot.getSessionId());
+    private void dispatchPopup(TaskReminderNotificationPayload payload) {
+        if (payload == null || payload.getState() == null) {
+            return;
         }
-        if (hasText(snapshot.getRequestId())) {
-            payload.addProperty("requestId", snapshot.getRequestId());
+        JsonObject popupPayload = new JsonObject();
+        popupPayload.addProperty("state", payload.getState().getValue());
+        popupPayload.addProperty("message", payload.getMessage());
+        popupPayload.addProperty("taskSummary", payload.getTaskSummary());
+        if (hasText(payload.getSessionId())) {
+            popupPayload.addProperty("sessionId", payload.getSessionId());
+        }
+        if (hasText(payload.getRequestId())) {
+            popupPayload.addProperty("requestId", payload.getRequestId());
         }
 
-        String escapedPayload = context.escapeJs(gson.toJson(payload));
+        String escapedPayload = context.escapeJs(gson.toJson(popupPayload));
         // popup 鍙兘鏃╀簬 React App 瀹屾垚鍒濆鍖栵紝姝ゆ椂涓嶈兘鐩存帴涓㈠純璇锋眰銆?
         // 鍏堟妸 payload 鏆傚瓨鍦?window.__pendingTaskReminderDialogRequests锛?
         // 寰呭墠绔寕涓?showTaskReminderDialog 鍥炶皟鍚庡啀缁熶竴鍥炴斁銆?

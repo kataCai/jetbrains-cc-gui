@@ -142,8 +142,15 @@ const App = () => {
     setTaskReminderRequest(null);
   }, []);
 
-  const handleTaskReminderOpenSession = useCallback(() => {
+  const handleTaskReminderOpenSession = useCallback((request: TaskReminderDialogRequest) => {
     setCurrentView('chat');
+    sendBridgeEvent(
+      'navigate_task_reminder',
+      JSON.stringify({
+        sessionId: request.sessionId ?? null,
+        requestId: request.requestId ?? null,
+      }),
+    );
     setTaskReminderRequest(null);
   }, []);
 

@@ -26,13 +26,20 @@ public class SystemReminderNotifier {
 
     private final SystemTrayFacade systemTrayFacade;
     private final CcgToolWindowActivator toolWindowActivator;
+    private final CcgTaskNavigator taskNavigator;
     private final TrayImageLoader trayImageLoader;
     private final AtomicReference<Project> latestProjectRef = new AtomicReference<>();
+    private final AtomicReference<TaskReminderNavigationTarget> latestNavigationTargetRef = new AtomicReference<>();
 
     private volatile SystemTrayFacade.TrayIconHandle trayIconHandle;
 
     public SystemReminderNotifier() {
-        this(new SystemTrayFacade(), new CcgToolWindowActivator(), SystemReminderNotifier::loadDefaultTrayImage);
+        this(
+            new SystemTrayFacade(),
+            new CcgToolWindowActivator(),
+            new CcgTaskNavigator(),
+            SystemReminderNotifier::loadDefaultTrayImage
+        );
     }
 
     /**
@@ -41,10 +48,12 @@ public class SystemReminderNotifier {
     public SystemReminderNotifier(
         SystemTrayFacade systemTrayFacade,
         CcgToolWindowActivator toolWindowActivator,
+        CcgTaskNavigator taskNavigator,
         TrayImageLoader trayImageLoader
     ) {
         this.systemTrayFacade = systemTrayFacade;
         this.toolWindowActivator = toolWindowActivator;
+        this.taskNavigator = taskNavigator != null ? taskNavigator : new CcgTaskNavigator();
         this.trayImageLoader = trayImageLoader;
     }
 
@@ -52,6 +61,21 @@ public class SystemReminderNotifier {
      * 发送系统通知；环境不支持时静默跳过，不影响主流程。
      */
     public void showTaskReminder(Project project, TaskState state, String message) {
+        showTaskReminder(
+            project,
+            new TaskReminderNotificationPayload(state, null, null, message, message)
+        );
+    }
+
+    public void showTaskReminder(Project project, TaskReminderNotificationPayload payload) {
+        if (payload == null) {
+            return;
+        }
+        latestNavigationTargetRef.set(new TaskReminderNavigationTarget(project, payload.getSessionId(), payload.getRequestId()));
+        showTaskReminderInternal(project, payload.getState(), payload.getMessage());
+    }
+
+    private void showTaskReminderInternal(Project project, TaskState state, String message) {
         if (project == null || project.isDisposed() || state == null || message == null || message.trim().isEmpty()) {
             return;
         }
@@ -96,7 +120,7 @@ public class SystemReminderNotifier {
                 trayIconHandle = systemTrayFacade.createTrayIcon(
                     image,
                     TRAY_TOOLTIP,
-                    () -> toolWindowActivator.activate(latestProjectRef.get())
+                    this::handleNotificationClick
                 );
                 return trayIconHandle;
             } catch (Exception e) {
@@ -112,6 +136,15 @@ public class SystemReminderNotifier {
             case COMPLETED, RECOVERED -> SystemTrayFacade.TrayMessageType.INFO;
             case WAITING_CONFIRM, RETRYING, RUNNING, PENDING -> SystemTrayFacade.TrayMessageType.WARNING;
         };
+    }
+
+    private void handleNotificationClick() {
+        TaskReminderNavigationTarget target = latestNavigationTargetRef.get();
+        if (target != null && target.getProject() != null && !target.getProject().isDisposed()) {
+            taskNavigator.navigate(target);
+            return;
+        }
+        toolWindowActivator.activate(latestProjectRef.get());
     }
 
     private static Image loadDefaultTrayImage() throws IOException {

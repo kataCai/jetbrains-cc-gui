@@ -23,7 +23,9 @@ import com.github.claudecodegui.handler.SessionHandler;
 import com.github.claudecodegui.handler.SettingsHandler;
 import com.github.claudecodegui.handler.SkillHandler;
 import com.github.claudecodegui.handler.TabHandler;
+import com.github.claudecodegui.handler.TaskReminderNavigationHandler;
 import com.github.claudecodegui.handler.WindowEventHandler;
+import com.github.claudecodegui.notifications.CcgTaskNavigator;
 import com.github.claudecodegui.handler.file.FileExportHandler;
 import com.github.claudecodegui.handler.file.FileHandler;
 import com.github.claudecodegui.handler.file.UndoFileHandler;
@@ -276,6 +278,7 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(new AgentHandler(handlerContext));
         messageDispatcher.registerHandler(new PromptHandler(handlerContext));
         messageDispatcher.registerHandler(new TabHandler(handlerContext));
+        messageDispatcher.registerHandler(new TaskReminderNavigationHandler(handlerContext, new CcgTaskNavigator()));
         messageDispatcher.registerHandler(new RewindHandler(handlerContext));
         messageDispatcher.registerHandler(new UndoFileHandler(handlerContext));
         messageDispatcher.registerHandler(new DependencyHandler(handlerContext));
