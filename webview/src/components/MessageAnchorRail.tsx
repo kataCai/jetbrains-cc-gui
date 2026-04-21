@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClaudeMessage } from '../types';
 import { getMessageKey } from '../utils/messageUtils';
+import { isToolResultOnlyUserMessage } from '../utils/turnScope';
 
 interface AnchorItem {
   id: string;
@@ -73,7 +74,7 @@ export const MessageAnchorRail = memo(function MessageAnchorRail({
     const userMessages: AnchorItem[] = [];
     const startIndex = collapsedCount;
     for (let i = startIndex; i < messages.length; i++) {
-      if (messages[i].type === 'user') {
+      if (messages[i].type === 'user' && !isToolResultOnlyUserMessage(messages[i])) {
         userMessages.push({
           id: getMessageKey(messages[i], i),
           position: 0,

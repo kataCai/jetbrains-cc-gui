@@ -286,6 +286,18 @@ public class TaskReminderDispatcher {
      * @param approvalDialogOpen 褰撳墠鏄惁宸茬粡鏈夊鎵瑰脊绐楁墦寮€锛岀敤浜庢姂鍒堕噸澶?popup
      */
     public void dispatch(TaskStateSnapshot snapshot, boolean approvalDialogVisible) {
+        dispatch(snapshot, approvalDialogVisible, null);
+    }
+
+    /**
+     * 允许调用方在状态切换瞬间直接传入本轮任务摘要，
+     * 避免会话消息列表尚未刷新时提醒文案慢一拍。
+     */
+    public void dispatch(
+        TaskStateSnapshot snapshot,
+        boolean approvalDialogVisible,
+        String preferredTaskSummary
+    ) {
         if (snapshot == null || snapshot.getState() == null || context == null) {
             return;
         }
@@ -293,7 +305,12 @@ public class TaskReminderDispatcher {
         TaskReminderPolicy policy = resolvePolicy();
         TaskReminderPolicy.ReminderDecision decision = policy.decide(snapshot, approvalDialogVisible, ideFocused);
         String reminderMessage = reminderMessageResolver.resolve(snapshot);
-        String liveTaskSummary = payloadFactory.resolveTaskSummaryCandidate(context, snapshot, reminderMessage);
+        String liveTaskSummary = payloadFactory.resolveTaskSummaryCandidate(
+            context,
+            snapshot,
+            reminderMessage,
+            preferredTaskSummary
+        );
         String effectiveTaskSummary = resolveReminderTaskSummary(snapshot, liveTaskSummary);
         TaskReminderNotificationPayload payload = payloadFactory.create(
             context,

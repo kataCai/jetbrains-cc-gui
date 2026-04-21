@@ -209,12 +209,18 @@ public class SessionHandler extends BaseMessageHandler {
             if (project != null) {
                 ClaudeNotifier.setWaiting(project);
             }
-            // “开始发送”在真正调用 session.send 之前就标记，
-            // 这样等待 Node/SDK 返回首个流式事件前，状态栏和提醒系统已经能同步进入 RUNNING。
-            notifySendStarted();
-
             // [FIX] Pass agent prompt and file tags directly to session
-            context.getSession().send(finalPrompt, finalAgentPrompt, finalFileTagPaths, finalRequestedPermissionMode)
+            CompletableFuture<Void> sendFuture = context.getSession().send(
+                finalPrompt,
+                finalAgentPrompt,
+                finalFileTagPaths,
+                finalRequestedPermissionMode
+            );
+            // 先让 session.send 把本轮用户消息写入会话内存态，再触发 RUNNING 提醒；
+            // 否则提醒摘要会读取到上一轮最后一条消息，表现为“通知慢一拍”。 
+            notifySendStarted(finalPrompt);
+
+            sendFuture
                 .thenRun(() -> {
                     notifySendCompleted();
                     // Claude now triggers success on actual stream_end callback.
@@ -369,12 +375,19 @@ public class SessionHandler extends BaseMessageHandler {
             if (project != null) {
                 ClaudeNotifier.setWaiting(project);
             }
-            // 附件发送和普通文本发送复用同一套任务状态收敛逻辑，
-            // 这样 UI 不需要区分“是否带附件”就能拿到一致的状态流。
-            notifySendStarted();
-
             // [FIX] Pass agent prompt and file tags directly to session
-            context.getSession().send(prompt, attachments, finalAgentPrompt, finalFileTagPaths, finalRequestedPermissionMode)
+            CompletableFuture<Void> sendFuture = context.getSession().send(
+                prompt,
+                attachments,
+                finalAgentPrompt,
+                finalFileTagPaths,
+                finalRequestedPermissionMode
+            );
+            // 附件发送也需要等 session 先写入当前这轮用户消息，
+            // 否则 RUNNING 提醒会沿用上一轮摘要。
+            notifySendStarted(prompt);
+
+            sendFuture
                 .thenRun(() -> {
                     notifySendCompleted();
                     // Claude now triggers success on actual stream_end callback.
@@ -442,10 +455,10 @@ public class SessionHandler extends BaseMessageHandler {
         });
     }
 
-    private void notifySendStarted() {
+    private void notifySendStarted(String preferredTaskSummary) {
         if (taskStateService != null) {
             taskStateService.onSendStarted(getSessionId());
-            dispatchTaskReminder(false);
+            dispatchTaskReminder(false, preferredTaskSummary);
         }
     }
 
@@ -465,8 +478,16 @@ public class SessionHandler extends BaseMessageHandler {
     }
 
     private void dispatchTaskReminder(boolean approvalDialogOpen) {
+        dispatchTaskReminder(approvalDialogOpen, null);
+    }
+
+    private void dispatchTaskReminder(boolean approvalDialogOpen, String preferredTaskSummary) {
         if (taskReminderDispatcher != null && taskStateService != null) {
-            taskReminderDispatcher.dispatch(taskStateService.getCurrentSnapshot(), approvalDialogOpen);
+            taskReminderDispatcher.dispatch(
+                taskStateService.getCurrentSnapshot(),
+                approvalDialogOpen,
+                preferredTaskSummary
+            );
         }
     }
 

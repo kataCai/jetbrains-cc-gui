@@ -1,0 +1,227 @@
+package com.github.claudecodegui.handler;
+
+import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
+import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
+import com.github.claudecodegui.taskstate.TaskState;
+import com.github.claudecodegui.taskstate.TaskStateService;
+import com.github.claudecodegui.taskstate.TaskStateSnapshot;
+import com.intellij.mock.MockApplication;
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Disposer;
+import org.junit.Test;
+
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * 验证发送开始时的任务提醒摘要要跟随当前输入，
+ * 不能因为提醒触发早于 session.send 而落后一轮。
+ */
+public class SessionHandlerTaskReminderTest {
+
+    @Test
+    public void shouldUseCurrentPromptForRunningReminderOnFirstDispatch() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-reminder-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-current", projectDir.toString());
+            session.getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "5+5=?"));
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            boolean handled = handler.handle("send_message", "{\"text\":\"1+1=\"}");
+
+            assertTrue(handled);
+            assertTrue("first dispatch timed out", dispatcher.awaitFirstDispatch());
+            assertEquals(TaskState.RUNNING, dispatcher.states.get(0));
+            assertEquals("1+1=", dispatcher.latestUserMessagesAtDispatch.get(0));
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
+    @Test
+    public void shouldPassCurrentPromptToReminderDispatcherWhenSessionHistoryStillPointsToPreviousTurn() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-reminder-stale-history-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-current", projectDir.toString());
+            session.getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "2+2=?"));
+            session.addUserMessageDuringSend = false;
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            boolean handled = handler.handle("send_message", "{\"text\":\"1+1 =\"}");
+
+            assertTrue(handled);
+            assertTrue("first dispatch timed out", dispatcher.awaitFirstDispatch());
+            assertEquals(TaskState.RUNNING, dispatcher.states.get(0));
+            assertEquals("2+2=?", dispatcher.latestUserMessagesAtDispatch.get(0));
+            assertEquals("1+1 =", dispatcher.preferredTaskSummaries.get(0));
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
+    private static HandlerContext createContext(Path projectDir, ClaudeSession session) {
+        HandlerContext context = new HandlerContext(
+            createProject(projectDir),
+            new FixedNodeClaudeSDKBridge(),
+            new CodexSDKBridge(),
+            null,
+            new HandlerContext.JsCallback() {
+                @Override
+                public void callJavaScript(String functionName, String... args) {
+                }
+
+                @Override
+                public String escapeJs(String str) {
+                    return str;
+                }
+            }
+        );
+        context.setSession(session);
+        return context;
+    }
+
+    private static Project createProject(Path projectDir) {
+        return (Project) Proxy.newProxyInstance(
+            Project.class.getClassLoader(),
+            new Class<?>[]{Project.class},
+            (proxy, method, args) -> switch (method.getName()) {
+                case "getBasePath" -> projectDir.toString();
+                case "getName" -> "session-handler-test";
+                case "isDisposed" -> false;
+                case "isOpen" -> true;
+                case "getDisposed" -> null;
+                case "toString" -> "session-handler-test-project";
+                case "hashCode" -> System.identityHashCode(proxy);
+                case "equals" -> proxy == args[0];
+                default -> null;
+            }
+        );
+    }
+
+    private static class FixedNodeClaudeSDKBridge extends ClaudeSDKBridge {
+        @Override
+        public String getCachedNodeVersion() {
+            return "18.0.0";
+        }
+    }
+
+    private static class RecordingClaudeSession extends ClaudeSession {
+        private boolean addUserMessageDuringSend = true;
+
+        RecordingClaudeSession(Project project) {
+            super(project, new FixedNodeClaudeSDKBridge(), new CodexSDKBridge());
+        }
+
+        @Override
+        public CompletableFuture<Void> send(
+            String input,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode
+        ) {
+            if (addUserMessageDuringSend) {
+                getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, input));
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private static class RecordingTaskReminderDispatcher extends TaskReminderDispatcher {
+        private final CountDownLatch firstDispatchLatch = new CountDownLatch(1);
+        private final List<TaskState> states = new ArrayList<>();
+        private final List<String> latestUserMessagesAtDispatch = new ArrayList<>();
+        private final List<String> preferredTaskSummaries = new ArrayList<>();
+
+        RecordingTaskReminderDispatcher(HandlerContext context) {
+            super(context);
+        }
+
+        @Override
+        public void dispatch(TaskStateSnapshot snapshot, boolean approvalDialogVisible) {
+            states.add(snapshot.getState());
+            latestUserMessagesAtDispatch.add(findLatestUserMessage(snapshot));
+            firstDispatchLatch.countDown();
+        }
+
+        @Override
+        public void dispatch(TaskStateSnapshot snapshot, boolean approvalDialogVisible, String preferredTaskSummary) {
+            states.add(snapshot.getState());
+            latestUserMessagesAtDispatch.add(findLatestUserMessage(snapshot));
+            preferredTaskSummaries.add(preferredTaskSummary);
+            firstDispatchLatch.countDown();
+        }
+
+        boolean awaitFirstDispatch() throws InterruptedException {
+            return firstDispatchLatch.await(5, TimeUnit.SECONDS);
+        }
+
+        private String findLatestUserMessage(TaskStateSnapshot snapshot) {
+            HandlerContext context = (HandlerContext) readField(TaskReminderDispatcher.class, this, "context");
+            ClaudeSession session = context != null ? context.getSession() : null;
+            if (session == null) {
+                return null;
+            }
+            List<ClaudeSession.Message> messages = session.getMessages();
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ClaudeSession.Message message = messages.get(i);
+                if (message != null && message.type == ClaudeSession.Message.Type.USER) {
+                    return message.content;
+                }
+            }
+            return null;
+        }
+
+        private static Object readField(Class<?> type, Object target, String name) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError("failed to read field: " + name, e);
+            }
+        }
+    }
+}

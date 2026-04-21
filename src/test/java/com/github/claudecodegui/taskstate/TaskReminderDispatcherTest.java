@@ -278,6 +278,73 @@ public class TaskReminderDispatcherTest {
         assertEquals("Summarize completed task", systemNotifier.messages.get(0));
     }
 
+
+    @Test
+    public void shouldIgnoreToolResultPlaceholderAndFallbackToSessionSummary() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        context.setSession(sessionWithSummaryAndToolResultPlaceholder(
+            "Readable session summary"
+        ));
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderDispatcher dispatcher = createDispatcher(context, balloonNotifier, soundCalls, true);
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-tool-result", "req-tool-result", "plan_approval_requested"), false);
+
+        assertEquals(1, context.executedJs.size());
+        String jsCode = context.executedJs.get(0);
+        assertTrue(jsCode.contains("\"taskSummary\":\"Readable session summary\""));
+        assertTrue(jsCode.contains("\"message\":\"Readable session summary\""));
+    }
+
+    @Test
+    public void shouldNotCacheToolResultPlaceholderAcrossStateChanges() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        ClaudeSession session = sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "Fix the reminder text for this round"
+        );
+        session.getState().addMessage(toolResultPlaceholderMessage());
+        context.setSession(session);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.of(TaskState.WAITING_CONFIRM),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-placeholder-cache", "req-placeholder-cache", "plan_approval_requested"), false);
+        session.getState().addMessage(new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "Prepare the next unrelated task"
+        ));
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-placeholder-cache", null, "send_completed"), false);
+
+        assertEquals(1, context.executedJs.size());
+        String popupJsCode = context.executedJs.get(0);
+        assertTrue(popupJsCode.contains("\"taskSummary\":\"Fix the reminder text for this round\""));
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("Fix the reminder text for this round", systemNotifier.messages.get(0));
+    }
+
     @Test
     public void shouldPreferLatestUserMessageForSystemReminderPayload() {
         CapturingHandlerContext context = new CapturingHandlerContext();
@@ -313,6 +380,91 @@ public class TaskReminderDispatcherTest {
 
         assertEquals(1, systemNotifier.callCount.get());
         assertEquals("Summarize the latest task state change", systemNotifier.messages.get(0));
+    }
+
+    @Test
+    public void shouldUseQuestionHeadlineInsteadOfMultilinePromptBodyAcrossReminderStates() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        ClaudeSession session = sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "3+4 = ?\nPlease only return the final result.\nThis line must not appear in reminder text."
+        );
+        context.setSession(session);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.of(TaskState.WAITING_CONFIRM),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-question-headline", "req-question-headline", "plan_approval_requested"), false);
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-question-headline", null, "send_completed"), false);
+
+        assertEquals(1, context.executedJs.size());
+        String popupJsCode = context.executedJs.get(0);
+        assertTrue(popupJsCode, popupJsCode.contains("\"taskSummary\":\"3+4 \\u003d ?\""));
+        assertTrue(popupJsCode, popupJsCode.contains("\"message\":\"3+4 \\u003d ?\""));
+        assertTrue(!popupJsCode.contains("Please only return the final result."));
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("3+4 = ?", systemNotifier.messages.get(0));
+    }
+
+    @Test
+    public void shouldPreferExplicitRunningSummaryWhenSessionHistoryStillPointsToPreviousQuestion() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        ClaudeSession session = sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "2+2=?"
+        );
+        context.setSession(session);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.of(TaskState.RUNNING),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.RUNNING, "session-explicit-summary", null, "send_started"), false, "1+1 =");
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-explicit-summary", null, "send_completed"), false);
+
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("1+1 =", systemNotifier.messages.get(0));
+        assertEquals(0, balloonNotifier.callCount.get());
+        assertEquals(0, soundCalls.get());
     }
 
     @Test
@@ -453,6 +605,25 @@ public class TaskReminderDispatcherTest {
         ClaudeSession session = sessionWithSummary(summary);
         session.getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, latestUserMessage));
         return session;
+    }
+
+    private static ClaudeSession sessionWithSummaryAndToolResultPlaceholder(String summary) {
+        ClaudeSession session = sessionWithSummary(summary);
+        session.getState().addMessage(toolResultPlaceholderMessage());
+        return session;
+    }
+
+    private static ClaudeSession.Message toolResultPlaceholderMessage() {
+        com.google.gson.JsonObject raw = new com.google.gson.JsonObject();
+        com.google.gson.JsonObject message = new com.google.gson.JsonObject();
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        com.google.gson.JsonObject block = new com.google.gson.JsonObject();
+        block.addProperty("type", "tool_result");
+        block.addProperty("tool_use_id", "toolu_test");
+        content.add(block);
+        message.add("content", content);
+        raw.add("message", message);
+        return new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "[tool_result]", raw);
     }
 
     /**

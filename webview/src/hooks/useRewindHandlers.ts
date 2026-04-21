@@ -5,6 +5,7 @@ import type { RewindRequest } from '../components/RewindDialog';
 import type { RewindableMessage } from '../components/RewindSelectDialog';
 import { rewindFiles } from '../utils/bridge';
 import { formatTime } from '../utils/helpers';
+import { isToolResultOnlyUserMessage } from '../utils/turnScope';
 
 export interface UseRewindHandlersOptions {
   t: TFunction;
@@ -47,22 +48,6 @@ export function useRewindHandlers(options: UseRewindHandlersOptions): UseRewindH
       addToast(t('rewind.notAvailable'), 'warning');
       return;
     }
-
-    const isToolResultOnlyUserMessage = (msg: ClaudeMessage): boolean => {
-      if (msg.type !== 'user') return false;
-      if ((msg.content ?? '').trim() === '[tool_result]') return true;
-
-      const raw = msg.raw;
-      if (!raw || typeof raw === 'string') return false;
-
-      const rawObj = raw as { content?: unknown[]; message?: { content?: unknown[] } };
-      const content = rawObj.content ?? rawObj.message?.content;
-      if (!Array.isArray(content)) return false;
-
-      return content.some((block) =>
-        block && typeof block === 'object' && (block as { type?: string }).type === 'tool_result'
-      );
-    };
 
     let targetIndex = messageIndex;
     let targetMessage: ClaudeMessage = message;
