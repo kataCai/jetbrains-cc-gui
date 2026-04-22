@@ -13,7 +13,24 @@ import static org.junit.Assert.assertTrue;
 public class WindowsForegroundWindowActivatorTest {
 
     @Test
-    public void shouldUseDirectForegroundActivationWhenFirstAttemptSucceeds() {
+    public void shouldNotRestoreVisibleWindowWhenActivatingForeground() {
+        List<String> operations = new ArrayList<>();
+        WindowsForegroundWindowActivator activator = new WindowsForegroundWindowActivator(
+            project -> 1000L,
+            new RecordingWin32Facade(operations, true)
+        );
+
+        boolean activated = activator.tryActivate(createProject(false), false);
+
+        assertTrue(activated);
+        assertEquals(
+            List.of("bringWindowToTop", "setForegroundWindow", "setFocus"),
+            operations
+        );
+    }
+
+    @Test
+    public void shouldNotRestoreWindowWhenUsingDefaultActivation() {
         List<String> operations = new ArrayList<>();
         WindowsForegroundWindowActivator activator = new WindowsForegroundWindowActivator(
             project -> 1001L,
@@ -21,6 +38,23 @@ public class WindowsForegroundWindowActivatorTest {
         );
 
         boolean activated = activator.tryActivate(createProject(false));
+
+        assertTrue(activated);
+        assertEquals(
+            List.of("bringWindowToTop", "setForegroundWindow", "setFocus"),
+            operations
+        );
+    }
+
+    @Test
+    public void shouldRestoreMinimizedWindowBeforeActivatingForeground() {
+        List<String> operations = new ArrayList<>();
+        WindowsForegroundWindowActivator activator = new WindowsForegroundWindowActivator(
+            project -> 1003L,
+            new RecordingWin32Facade(operations, true)
+        );
+
+        boolean activated = activator.tryActivate(createProject(false), true);
 
         assertTrue(activated);
         assertEquals(
@@ -37,19 +71,17 @@ public class WindowsForegroundWindowActivatorTest {
             new RecordingWin32Facade(operations, false)
         );
 
-        boolean activated = activator.tryActivate(createProject(false));
+        boolean activated = activator.tryActivate(createProject(false), false);
 
         assertTrue(activated);
         assertEquals(
             List.of(
-                "showWindow",
                 "bringWindowToTop",
                 "setForegroundWindow",
                 "getForegroundWindow",
                 "getCurrentThreadId",
                 "getWindowThreadProcessId",
                 "attachThreadInput:true",
-                "showWindow",
                 "bringWindowToTop",
                 "setForegroundWindow",
                 "setFocus",

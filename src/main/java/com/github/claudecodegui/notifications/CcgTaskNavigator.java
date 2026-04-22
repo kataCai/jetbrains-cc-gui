@@ -86,7 +86,8 @@ public class CcgTaskNavigator {
                 return;
             }
             if (toolWindowSessionNavigator.navigate(project, sessionId)) {
-                toolWindowActivator.activate(project);
+                // 已命中具体会话时只揭示面板，避免再次强制聚焦 ToolWindow 内容区。
+                toolWindowActivator.reveal(project);
                 return;
             }
         }

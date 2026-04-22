@@ -81,7 +81,8 @@ public class CcgTaskNavigatorTest {
         navigator.navigate(new TaskReminderNavigationTarget(project, "session-located", "req-3"));
 
         assertEquals("session-located", toolWindowSession.get());
-        assertSame(project, activator.lastActivatedProject.get());
+        assertSame(project, activator.lastRevealedProject.get());
+        assertNull(activator.lastActivatedProject.get());
     }
 
     private static Project createProject(boolean disposed) {
@@ -110,10 +111,16 @@ public class CcgTaskNavigatorTest {
 
     private static class RecordingToolWindowActivator extends CcgToolWindowActivator {
         private final AtomicReference<Project> lastActivatedProject = new AtomicReference<>();
+        private final AtomicReference<Project> lastRevealedProject = new AtomicReference<>();
 
         @Override
         public void activate(Project project) {
             lastActivatedProject.set(project);
+        }
+
+        @Override
+        public void reveal(Project project) {
+            lastRevealedProject.set(project);
         }
     }
 }

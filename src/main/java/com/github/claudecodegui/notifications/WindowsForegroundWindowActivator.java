@@ -57,6 +57,14 @@ public class WindowsForegroundWindowActivator {
     }
 
     public boolean tryActivate(Project project) {
+        return tryActivate(project, false);
+    }
+
+    /**
+     * restoreWindow 由上层显式传入，只在窗口已最小化时恢复，
+     * 避免原生前台激活把全屏/最大化窗口误恢复为普通窗口。
+     */
+    public boolean tryActivate(Project project, boolean restoreWindow) {
         if (project == null || project.isDisposed()) {
             return false;
         }
@@ -66,7 +74,7 @@ public class WindowsForegroundWindowActivator {
             return false;
         }
 
-        if (activateWindow(hwnd)) {
+        if (activateWindow(hwnd, restoreWindow)) {
             return true;
         }
 
@@ -87,7 +95,7 @@ public class WindowsForegroundWindowActivator {
             if (!attached) {
                 return false;
             }
-            return activateWindow(hwnd);
+            return activateWindow(hwnd, false);
         } catch (Exception e) {
             LOG.warn("[WindowsForegroundWindowActivator] Failed to activate foreground window: " + e.getMessage(), e);
             return false;
@@ -98,8 +106,10 @@ public class WindowsForegroundWindowActivator {
         }
     }
 
-    private boolean activateWindow(long hwnd) {
-        win32Facade.showWindow(hwnd, WinUser.SW_RESTORE);
+    private boolean activateWindow(long hwnd, boolean restoreWindow) {
+        if (restoreWindow) {
+            win32Facade.showWindow(hwnd, WinUser.SW_RESTORE);
+        }
         win32Facade.bringWindowToTop(hwnd);
         boolean activated = win32Facade.setForegroundWindow(hwnd);
         if (activated) {

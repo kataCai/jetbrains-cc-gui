@@ -68,7 +68,7 @@ public class CcgToolWindowActivator {
 
     @FunctionalInterface
     interface NativeProjectWindowActivator {
-        boolean tryActivate(Project project);
+        boolean tryActivate(Project project, boolean restoreWindow);
     }
 
     public CcgToolWindowActivator() {
@@ -107,11 +107,24 @@ public class CcgToolWindowActivator {
      * 激活 IDE 并展开 CCG 工具窗口。
      */
     public void activate(Project project) {
+        open(project, true);
+    }
+
+    /**
+     * 仅揭示 CCG 面板，不再强制把焦点切入 ToolWindow 内容区。
+     * 系统通知点击场景只需要把 IDE 和对应面板带回前台；继续强制 activate ToolWindow
+     * 会额外触发 IntelliJ 的内容聚焦链路，在 Windows 全屏场景下更容易引起宿主窗口状态变化。
+     */
+    public void reveal(Project project) {
+        open(project, false);
+    }
+
+    private void open(Project project, boolean activateToolWindowContents) {
         if (project == null || project.isDisposed()) {
             return;
         }
 
-        uiInvoker.invokeLater(() -> activateNow(project));
+        uiInvoker.invokeLater(() -> activateNow(project, activateToolWindowContents));
     }
 
     void activateProjectWindow(Project project) {
@@ -125,7 +138,9 @@ public class CcgToolWindowActivator {
         }
 
         // 先走跨平台的窗口恢复与前置，再按平台补强原生前台激活。
-        if (projectWindow.isMinimized()) {
+        // 只有最小化窗口才允许恢复窗口状态；普通/全屏窗口只做前置与聚焦。
+        boolean minimized = projectWindow.isMinimized();
+        if (minimized) {
             projectWindow.restore();
         }
         projectWindow.show();
@@ -136,13 +151,14 @@ public class CcgToolWindowActivator {
             return;
         }
 
-        boolean nativeActivated = platformDetector.isWindows() && nativeProjectWindowActivator.tryActivate(project);
+        boolean nativeActivated = platformDetector.isWindows()
+            && nativeProjectWindowActivator.tryActivate(project, minimized);
         if (!nativeActivated && !projectWindow.isActive()) {
             projectWindow.requestAttention();
         }
     }
 
-    private void activateNow(Project project) {
+    private void activateNow(Project project, boolean activateToolWindowContents) {
         if (project.isDisposed()) {
             return;
         }
@@ -154,7 +170,9 @@ public class CcgToolWindowActivator {
             return;
         }
         toolWindow.show();
-        toolWindow.activate();
+        if (activateToolWindowContents) {
+            toolWindow.activate();
+        }
     }
 
     private static ProjectWindowHandle findProjectWindow(Project project) {
@@ -194,6 +212,7 @@ public class CcgToolWindowActivator {
         @Override
         public void restore() {
             if (frame != null) {
+                // 这里只处理最小化恢复，不能把其他窗口状态（例如全屏）强制改成普通窗口。
                 frame.setExtendedState(Frame.NORMAL);
             }
         }

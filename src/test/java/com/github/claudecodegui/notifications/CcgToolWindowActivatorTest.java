@@ -5,8 +5,10 @@ import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 public class CcgToolWindowActivatorTest {
 
@@ -20,7 +22,7 @@ public class CcgToolWindowActivatorTest {
             project -> window,
             project -> toolWindow,
             () -> false,
-            project -> false
+            (project, restoreWindow) -> false
         );
 
         activator.activate(createProject(false));
@@ -41,7 +43,7 @@ public class CcgToolWindowActivatorTest {
             project -> window,
             project -> toolWindow,
             () -> false,
-            project -> false
+            (project, restoreWindow) -> false
         );
 
         activator.activate(createProject(false));
@@ -62,7 +64,7 @@ public class CcgToolWindowActivatorTest {
             project -> window,
             project -> toolWindow,
             () -> true,
-            project -> {
+            (project, restoreWindow) -> {
                 operations.add("nativeActivate");
                 return true;
             }
@@ -86,7 +88,7 @@ public class CcgToolWindowActivatorTest {
             project -> window,
             project -> toolWindow,
             () -> true,
-            project -> {
+            (project, restoreWindow) -> {
                 operations.add("nativeActivate");
                 return false;
             }
@@ -109,6 +111,54 @@ public class CcgToolWindowActivatorTest {
     }
 
     @Test
+    public void shouldPassVisibleWindowStateToNativeActivatorWithoutRestore() {
+        List<String> operations = new ArrayList<>();
+        RecordingProjectWindow window = new RecordingProjectWindow(false, false, operations);
+        RecordingToolWindow toolWindow = new RecordingToolWindow(operations);
+        AtomicBoolean restoreWindow = new AtomicBoolean(true);
+        CcgToolWindowActivator activator = new CcgToolWindowActivator(
+            Runnable::run,
+            project -> window,
+            project -> toolWindow,
+            () -> true,
+            (project, minimized) -> {
+                operations.add("nativeActivate");
+                restoreWindow.set(minimized);
+                return true;
+            }
+        );
+
+        activator.activate(createProject(false));
+
+        assertFalse(restoreWindow.get());
+        assertEquals(
+            List.of("showWindow", "toFront", "requestFocus", "nativeActivate", "showToolWindow", "activateToolWindow"),
+            operations
+        );
+    }
+
+    @Test
+    public void shouldRevealToolWindowWithoutActivatingContents() {
+        List<String> operations = new ArrayList<>();
+        RecordingProjectWindow window = new RecordingProjectWindow(false, false, operations);
+        RecordingToolWindow toolWindow = new RecordingToolWindow(operations);
+        CcgToolWindowActivator activator = new CcgToolWindowActivator(
+            Runnable::run,
+            project -> window,
+            project -> toolWindow,
+            () -> false,
+            (project, restoreWindow) -> false
+        );
+
+        activator.reveal(createProject(false));
+
+        assertEquals(
+            List.of("showWindow", "toFront", "requestFocus", "requestAttention", "showToolWindow"),
+            operations
+        );
+    }
+
+    @Test
     public void shouldStillShowToolWindowWhenProjectWindowIsUnavailable() {
         List<String> operations = new ArrayList<>();
         RecordingToolWindow toolWindow = new RecordingToolWindow(operations);
@@ -117,7 +167,7 @@ public class CcgToolWindowActivatorTest {
             project -> null,
             project -> toolWindow,
             () -> true,
-            project -> {
+            (project, restoreWindow) -> {
                 operations.add("nativeActivate");
                 return true;
             }
