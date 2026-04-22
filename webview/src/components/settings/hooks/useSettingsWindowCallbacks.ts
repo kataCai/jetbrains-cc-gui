@@ -5,6 +5,7 @@ import type { ProviderConfig, CodexProviderConfig } from '../../../types/provide
 import type { AgentConfig } from '../../../types/agent';
 import type { PromptConfig } from '../../../types/prompt';
 import type { TaskReminderConfig } from '../../../types/taskReminder';
+import type { RemoteCollabConfig } from './useRemoteCollabSettings';
 import {
   mergeLegacySoundConfig,
   normalizeTaskReminderConfig,
@@ -42,6 +43,9 @@ export interface SettingsWindowCallbacksDeps {
   // Canonical task reminder setter
   setTaskReminderConfig?: (
     config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
+  ) => void;
+  setRemoteCollabConfig?: (
+    config: RemoteCollabConfig | ((prev: RemoteCollabConfig) => RemoteCollabConfig)
   ) => void;
 
   // Hook functions
@@ -283,6 +287,15 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
+    window.updateRemoteCollabConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setRemoteCollabConfig?.(data);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse remote collab config:', error);
+      }
+    };
+
     // Agent callbacks
     const previousUpdateAgents = window.updateAgents;
     window.updateAgents = (jsonStr: string) => {
@@ -416,6 +429,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     // 设置页初始化时优先拉取 canonical taskReminder 配置；
     // 如有必要，Java 侧会再兼容性地下发 legacy sound config。
     sendToJava('get_task_reminder_config:');
+    sendToJava('get_remote_collab_config:');
     sendToJava('get_commit_generation_enabled:');
     sendToJava('get_status_bar_widget_enabled:');
 
@@ -443,6 +457,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateCommitPrompt = undefined;
       window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;
+      window.updateRemoteCollabConfig = undefined;
       window.updateCommitGenerationEnabled = undefined;
       window.updateStatusBarWidgetEnabled = undefined;
       window.updateAgents = previousUpdateAgents;

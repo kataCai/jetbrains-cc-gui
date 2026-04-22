@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ToolWindowLifecycleDisposableService implements Disposable {
 
     private final AtomicBoolean projectCloseListenerRegistered = new AtomicBoolean(false);
+    private final AtomicBoolean remoteCollabCloseListenerRegistered = new AtomicBoolean(false);
 
     public ToolWindowLifecycleDisposableService(@NotNull Project project) {
         Objects.requireNonNull(project, "project");
@@ -34,6 +35,15 @@ public final class ToolWindowLifecycleDisposableService implements Disposable {
      */
     public boolean markProjectCloseListenerRegistered() {
         return this.projectCloseListenerRegistered.compareAndSet(false, true);
+    }
+
+    /**
+     * Mark the remote collaboration lifecycle listener as registered.
+     *
+     * @return true when the caller should perform registration.
+     */
+    public boolean markRemoteCollabCloseListenerRegistered() {
+        return this.remoteCollabCloseListenerRegistered.compareAndSet(false, true);
     }
 
     @Override

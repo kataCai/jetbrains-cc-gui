@@ -38,6 +38,7 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
     private final AtomicReference<String> currentModel = new AtomicReference<>("");
     private final AtomicReference<String> currentMode = new AtomicReference<>("default");
     private final AtomicReference<String> currentAgent = new AtomicReference<>("");
+    private final AtomicReference<String> currentRemoteHint = new AtomicReference<>("");
 
     // Timer management for proper resource cleanup
     private Timer hideTimer;
@@ -131,12 +132,18 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
         refreshDisplay(null);
     }
 
+    public void setRemoteHint(String remoteHint) {
+        this.currentRemoteHint.set(remoteHint == null ? "" : remoteHint);
+        refreshDisplay(null);
+    }
+
     private void refreshDisplay(String details) {
         String status = currentStatus.get();
         String model = currentModel.get();
         String mode = currentMode.get();
         String agent = currentAgent.get();
         String tokenInfo = currentTokenInfo.get();
+        String remoteHint = currentRemoteHint.get();
 
         String icon = switch (status) {
             case "thinking" -> "💭";
@@ -188,6 +195,9 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
         if (tokenInfo != null && !tokenInfo.isEmpty()) {
             text.append(" ").append(tokenInfo);
         }
+        if (remoteHint != null && !remoteHint.isEmpty()) {
+            text.append(" ").append(remoteHint);
+        }
 
         StringBuilder tooltip = new StringBuilder(ClaudeCodeGuiBundle.message("status.tooltip.status", status));
         if (model != null && !model.isEmpty()) {
@@ -198,6 +208,9 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
         }
         if (agent != null && !agent.isEmpty()) {
             tooltip.append(ClaudeCodeGuiBundle.message("status.tooltip.agent", agent));
+        }
+        if (remoteHint != null && !remoteHint.isEmpty()) {
+            tooltip.append("\n").append("Remote: ").append(remoteHint);
         }
         if (details != null) {
             tooltip.append(ClaudeCodeGuiBundle.message("status.tooltip.details", details));

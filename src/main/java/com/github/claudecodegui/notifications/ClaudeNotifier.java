@@ -8,7 +8,8 @@ import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Simple utility to update the Claude Status Bar Widget.
+ * Claude 通知与状态栏更新工具。
+ * 统一收口状态栏文案、任务完成提示音以及远程协作提示，避免不同入口各自拼状态文本。
  */
 public class ClaudeNotifier {
 
@@ -102,6 +103,19 @@ public class ClaudeNotifier {
         });
     }
 
+    public static void updateRemoteCollabStatus(
+        @NotNull Project project,
+        String connectionStatus,
+        boolean receivingUpdates
+    ) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            ClaudeStatusBarWidget widget = ClaudeStatusBarWidget.Factory.getWidget(project);
+            if (widget != null) {
+                widget.setRemoteHint(buildRemoteHint(connectionStatus, receivingUpdates));
+            }
+        });
+    }
+
     private static String formatNumber(int num) {
         if (num < 1000) return String.valueOf(num);
         if (num < 1000000) return String.format("%.1fk", num / 1000.0);
@@ -124,5 +138,18 @@ public class ClaudeNotifier {
                 widget.show(text, tooltip, duration);
             }
         });
+    }
+
+    private static String buildRemoteHint(String connectionStatus, boolean receivingUpdates) {
+        if (connectionStatus == null || connectionStatus.isBlank() || "disabled".equals(connectionStatus)) {
+            return "";
+        }
+        return switch (connectionStatus) {
+            case "connected" -> receivingUpdates ? "[TG 已连接]" : "[TG 仅发送]";
+            case "connecting" -> "[TG 连接中]";
+            case "error" -> "[TG 异常]";
+            case "disconnected" -> "[TG 未绑定]";
+            default -> "[TG " + connectionStatus + "]";
+        };
     }
 }

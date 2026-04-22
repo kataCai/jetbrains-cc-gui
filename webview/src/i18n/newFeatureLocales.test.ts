@@ -25,6 +25,12 @@ const REQUIRED_NEW_FEATURE_KEYS = [
   'taskReminder.retry',
   'taskReminder.close',
   'taskReminder.later',
+  'settings.remoteCollab.title',
+  'settings.remoteCollab.description',
+  'settings.remoteCollab.enableTitle',
+  'settings.remoteCollab.telegramConfig',
+  'settings.remoteCollab.connectionStatus',
+  'settings.remoteCollab.sendTestMessage',
   'chat.composerMode',
   'chat.chatMode',
   'chat.planMode',
@@ -55,5 +61,16 @@ describe('new feature locale coverage', () => {
   it.each(REQUIRED_NEW_FEATURE_KEYS)('defines %s in English and Chinese locales', (keyPath) => {
     expect(getValue(en as Record<string, unknown>, keyPath)).toEqual(expect.any(String));
     expect(getValue(zh as Record<string, unknown>, keyPath)).toEqual(expect.any(String));
+  });
+
+  it('keeps remote collaboration Chinese copy readable', () => {
+    const remoteCollab = getValue(zh as Record<string, unknown>, 'settings.remoteCollab') as Record<string, unknown>;
+    expect(remoteCollab).toBeTruthy();
+
+    for (const value of Object.values(remoteCollab)) {
+      expect(typeof value).toBe('string');
+      expect(value as string).not.toContain('???');
+      expect(value as string).not.toContain('????');
+    }
   });
 });

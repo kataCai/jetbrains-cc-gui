@@ -17,6 +17,7 @@ import AgentSection from './AgentSection';
 import PromptSection from './PromptSection';
 import CommitSection from './CommitSection';
 import OtherSettingsSection from './OtherSettingsSection';
+import RemoteCollabSection from './RemoteCollabSection';
 import { SkillsSettingsSection } from '../skills';
 import SettingsDialogs from './SettingsDialogs';
 
@@ -29,6 +30,7 @@ import {
   useSettingsPageState,
   useSettingsThemeSync,
   useSettingsBasicActions,
+  useRemoteCollabSettings,
 } from './hooks';
 
 import styles from './style.module.less';
@@ -161,6 +163,15 @@ const SettingsView = ({
     onAutoOpenFileEnabledChangeProp,
   });
 
+  const {
+    remoteCollabConfig,
+    setRemoteCollabConfig,
+    handleRemoteCollabEnabledChange,
+    handleSaveTelegramConfig,
+    handleStartTelegramBinding,
+    handleSendRemoteTestMessage,
+  } = useRemoteCollabSettings();
+
   // Use provider management hook
   const {
     providers,
@@ -279,6 +290,7 @@ const SettingsView = ({
     onStreamingEnabledChangeProp,
     onSendShortcutChangeProp,
     setTaskReminderConfig,
+    setRemoteCollabConfig,
     setCommitGenerationEnabled,
     setStatusBarWidgetEnabled,
   });
@@ -487,6 +499,16 @@ const SettingsView = ({
             ) : (
               <PlaceholderSection type="permissions" />
             )}
+          </div>
+
+          <div style={{ display: currentTab === 'remote' ? 'block' : 'none' }}>
+            <RemoteCollabSection
+              remoteCollabConfig={remoteCollabConfig}
+              onEnabledChange={handleRemoteCollabEnabledChange}
+              onSaveTelegramConfig={handleSaveTelegramConfig}
+              onStartTelegramBinding={handleStartTelegramBinding}
+              onSendRemoteTestMessage={handleSendRemoteTestMessage}
+            />
           </div>
 
           {/* Commit AI configuration */}

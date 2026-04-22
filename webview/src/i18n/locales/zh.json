@@ -801,6 +801,35 @@
         "selectHint": "选择要导出的提示词",
         "confirmExport": "确认导出"
       }
+    },
+    "remoteCollab": {
+      "title": "远程协作",
+      "description": "将任务状态、待处理操作和回答同步到 Telegram，让手机端也能继续当前 IDE 的本地执行流程。",
+      "enableTitle": "启用远程协作",
+      "enableDesc": "关闭后将停止 Telegram 状态推送，手机端回复也不会再被当前 IDE 接收。",
+      "pollingTitle": "启用 polling 接收",
+      "pollingDesc": "第一版通过 getUpdates 轮询接收绑定消息、按钮点击和文本回复。",
+      "singleActiveTitle": "单活跃实例策略",
+      "singleActiveDesc": "建议同一个 Bot Token 只允许一个 IDE 实例接收入站更新，避免 polling 冲突。",
+      "telegramConfig": "Telegram 配置",
+      "botToken": "Bot Token",
+      "pollInterval": "轮询间隔（秒）",
+      "saveTelegram": "保存 Telegram 配置",
+      "startBinding": "开始 Telegram 绑定",
+      "statusPanel": "连接状态",
+      "connectionStatus": "连接状态",
+      "receiverStatus": "当前接收实例状态",
+      "receiverActive": "当前 IDE 实例正在接收 Telegram 更新。",
+      "receiverInactive": "当前 IDE 实例未接收 Telegram 更新。",
+      "receiverHintSingle": "已启用 singleActive 单活跃策略。",
+      "receiverHintMulti": "允许多个实例并存，但仍建议只保留一个 polling 实例。",
+      "boundUser": "绑定用户",
+      "chatId": "Chat ID",
+      "botUsername": "Bot 用户名",
+      "lastError": "最近错误：",
+      "testPanel": "测试消息",
+      "testMessage": "消息内容",
+      "sendTestMessage": "发送测试消息"
     }
   },
   "history": {

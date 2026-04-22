@@ -5,8 +5,15 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.permission.PermissionRequest;
 import com.github.claudecodegui.permission.PermissionService;
+import com.github.claudecodegui.remote.RemoteCollabService;
+import com.github.claudecodegui.remote.RemotePendingRequest;
+import com.github.claudecodegui.remote.RemoteRequestRegistry;
+import com.github.claudecodegui.remote.RemoteRequestType;
+import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
+import com.github.claudecodegui.taskstate.TaskStateEvent;
 import com.github.claudecodegui.taskstate.TaskStateService;
+import com.github.claudecodegui.taskstate.TaskStateSnapshot;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
@@ -14,15 +21,18 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 
 import javax.swing.*;
+import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Permission handler.
- * Handles permission dialog display and decision processing.
+ * 权限相关消息处理器。
+ * 除了本地权限弹窗展示与回写外，也负责把 AskUserQuestion / PlanApproval 注册到远程协作链路，
+ * 保证手机端操作和 IDE 前端操作最终都汇聚到同一条 completion 路径。
  */
 public class PermissionHandler extends BaseMessageHandler {
 
@@ -41,11 +51,9 @@ public class PermissionHandler extends BaseMessageHandler {
     // Permission request map
     private final Map<String, CompletableFuture<Integer>> pendingPermissionRequests = new ConcurrentHashMap<>();
 
-    // AskUserQuestion request map (requestId -> CompletableFuture<JsonObject>)
-    private final Map<String, CompletableFuture<JsonObject>> pendingAskUserQuestionRequests = new ConcurrentHashMap<>();
-
-    // PlanApproval request map (requestId -> CompletableFuture<JsonObject>)
-    private final Map<String, CompletableFuture<JsonObject>> pendingPlanApprovalRequests = new ConcurrentHashMap<>();
+    // 这里保留 requestId 集合，只负责当前窗口级清理；真正的 completion 路径统一走 RemoteRequestRegistry。
+    private final Set<String> pendingAskUserQuestionRequestIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> pendingPlanApprovalRequestIds = ConcurrentHashMap.newKeySet();
 
     // Permission denied callback
     public interface PermissionDeniedCallback {
@@ -54,8 +62,10 @@ public class PermissionHandler extends BaseMessageHandler {
 
     private final TaskStateService taskStateService;
     private final TaskReminderDispatcher taskReminderDispatcher;
-    // 浠呯敤浜庢彁閱掔瓥鐣ュ垽鏂細濡傛灉瀹℃壒寮圭獥宸茬粡鍦ㄥ墠鍙版墦寮€锛屽氨涓嶅啀棰濆寮瑰嚭 task reminder popup锛?
-    // 閬垮厤鐢ㄦ埛闈㈠涓ゅ眰鍐呭鍑犱箮鐩稿悓鐨勫脊绐椼€?
+    private final RemoteRequestRegistry remoteRequestRegistry;
+    private final RemoteCollabService remoteCollabService;
+    // 仅用于提醒策略判断：如果审批弹窗已经在前台打开，就不再额外弹出 task reminder popup，
+    // 避免用户同时面对两层内容几乎相同的弹窗。
     private volatile boolean planApprovalDialogVisible;
     private PermissionDeniedCallback deniedCallback;
 
@@ -72,9 +82,42 @@ public class PermissionHandler extends BaseMessageHandler {
         TaskStateService taskStateService,
         TaskReminderDispatcher taskReminderDispatcher
     ) {
+        this(
+            context,
+            taskStateService,
+            taskReminderDispatcher,
+            RemoteRequestRegistry.getGlobalInstance(),
+            RemoteCollabService.getInstance()
+        );
+    }
+
+    PermissionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher,
+        RemoteRequestRegistry remoteRequestRegistry
+    ) {
+        this(
+            context,
+            taskStateService,
+            taskReminderDispatcher,
+            remoteRequestRegistry,
+            RemoteCollabService.getInstance()
+        );
+    }
+
+    PermissionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher,
+        RemoteRequestRegistry remoteRequestRegistry,
+        RemoteCollabService remoteCollabService
+    ) {
         super(context);
         this.taskStateService = taskStateService;
         this.taskReminderDispatcher = taskReminderDispatcher;
+        this.remoteRequestRegistry = remoteRequestRegistry;
+        this.remoteCollabService = remoteCollabService;
     }
 
     public void setPermissionDeniedCallback(PermissionDeniedCallback callback) {
@@ -171,7 +214,7 @@ public class PermissionHandler extends BaseMessageHandler {
      * Show permission request dialog (from PermissionRequest).
      */
     public void showPermissionDialog(PermissionRequest request) {
-        LOG.info("[PermissionHandler] 鏄剧ず鏉冮檺璇锋眰瀵硅瘽妗? " + request.getToolName());
+        LOG.info("[PermissionHandler] 显示权限请求对话框: " + request.getToolName());
 
         try {
             Gson gson = new Gson();
@@ -221,7 +264,7 @@ public class PermissionHandler extends BaseMessageHandler {
             targetWindow.executeJavaScriptCode(jsCode);
 
         } catch (Exception e) {
-            LOG.error("[PermissionHandler] 鏄剧ず鏉冮檺寮圭獥澶辫触: " + e.getMessage(), e);
+            LOG.error("[PermissionHandler] 显示权限弹窗失败: " + e.getMessage(), e);
             this.context.getSession().handlePermissionDecision(
                 request.getChannelId(),
                 false,
@@ -306,8 +349,8 @@ public class PermissionHandler extends BaseMessageHandler {
         LOG.info("[PERM_CLEAR] Clearing all pending permission requests");
 
         int permissionCount = pendingPermissionRequests.size();
-        int askUserCount = pendingAskUserQuestionRequests.size();
-        int planCount = pendingPlanApprovalRequests.size();
+        int askUserCount = pendingAskUserQuestionRequestIds.size();
+        int planCount = pendingPlanApprovalRequestIds.size();
 
         // Cancel all pending permission requests
         for (Map.Entry<String, CompletableFuture<Integer>> entry : pendingPermissionRequests.entrySet()) {
@@ -315,25 +358,21 @@ public class PermissionHandler extends BaseMessageHandler {
         }
         pendingPermissionRequests.clear();
 
-        // Cancel all pending AskUserQuestion requests
-        for (Map.Entry<String, CompletableFuture<JsonObject>> entry : pendingAskUserQuestionRequests.entrySet()) {
-            entry.getValue().complete(null);
+        for (String requestId : new ArrayList<>(pendingAskUserQuestionRequestIds)) {
+            completeRemotePendingRequest(requestId, new JsonObject(), pendingAskUserQuestionRequestIds);
         }
-        pendingAskUserQuestionRequests.clear();
 
-        // Cancel all pending PlanApproval requests
-        for (Map.Entry<String, CompletableFuture<JsonObject>> entry : pendingPlanApprovalRequests.entrySet()) {
-            JsonObject rejected = new com.google.gson.JsonObject();
-            rejected.addProperty("approved", false);
-            rejected.addProperty("targetMode", "default");
-            rejected.addProperty("message", "Session changed");
-            entry.getValue().complete(rejected);
+        for (String requestId : new ArrayList<>(pendingPlanApprovalRequestIds)) {
+            completeRemotePendingRequest(
+                requestId,
+                createPlanApprovalResult(false, "default", "Session changed"),
+                pendingPlanApprovalRequestIds
+            );
         }
-        pendingPlanApprovalRequests.clear();
 
         if (taskStateService != null) {
-            // 娓?session 鏃朵笉浠呰娓呮帀寰呭鎵?future锛屼篃瑕佹妸鑱氬悎浠诲姟鐘舵€侀噸缃洖 PENDING锛?
-            // 鍚﹀垯鏂扮殑浼氳瘽鍙兘缁ф壙涓婁竴杞?WAITING_CONFIRM / FINAL_ERROR 鐨勫熬鐘舵€併€?
+            // 清理 session 时不仅要清掉待确认 future，也要把聚合任务状态重置回 PENDING，
+            // 否则新的会话可能继承上一轮 WAITING_CONFIRM / FINAL_ERROR 的尾状态。
             taskStateService.onSessionCleared(context.getSession() != null ? context.getSession().getSessionId() : null);
             dispatchTaskReminder(false);
         }
@@ -353,7 +392,13 @@ public class PermissionHandler extends BaseMessageHandler {
         LOG.debug("[ASK_USER_QUESTION][SHOW_DIALOG] requestId=" + requestId);
         LOG.debug("[ASK_USER_QUESTION][SHOW_DIALOG] questionsData=" + questionsData.toString());
 
-        pendingAskUserQuestionRequests.put(requestId, future);
+        registerRemotePendingRequest(
+            requestId,
+            RemoteRequestType.ASK_USER_QUESTION,
+            questionsData,
+            future,
+            pendingAskUserQuestionRequestIds
+        );
 
         try {
             Gson gson = new Gson();
@@ -378,15 +423,13 @@ public class PermissionHandler extends BaseMessageHandler {
             CompletableFuture.delayedExecutor(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
                 if (!future.isDone()) {
                     LOG.warn("[ASK_USER_QUESTION][SHOW_DIALOG] Timeout! Removing pending request for requestId=" + requestId);
-                    pendingAskUserQuestionRequests.remove(requestId);
-                    // Return empty answers on timeout
-                    future.complete(new JsonObject());
+                    completeRemotePendingRequest(requestId, new JsonObject(), pendingAskUserQuestionRequestIds);
                 }
             });
 
         } catch (Exception e) {
             LOG.error("[ASK_USER_QUESTION][SHOW_DIALOG] ERROR: " + e.getMessage(), e);
-            pendingAskUserQuestionRequests.remove(requestId);
+            removeRemotePendingRequest(requestId, pendingAskUserQuestionRequestIds);
             future.complete(new JsonObject());
         }
 
@@ -407,11 +450,8 @@ public class PermissionHandler extends BaseMessageHandler {
                 ? response.get("answers").getAsJsonObject()
                 : new JsonObject();
 
-            CompletableFuture<JsonObject> pendingFuture = pendingAskUserQuestionRequests.remove(requestId);
-
-            if (pendingFuture != null) {
+            if (completeRemotePendingRequest(requestId, answers, pendingAskUserQuestionRequestIds)) {
                 LOG.debug("[ASK_USER_QUESTION][HANDLE_RESPONSE] Completing future with answers: " + answers.toString());
-                pendingFuture.complete(answers);
             } else {
                 LOG.warn("[ASK_USER_QUESTION][HANDLE_RESPONSE] No pending request found for requestId: " + requestId);
             }
@@ -430,13 +470,20 @@ public class PermissionHandler extends BaseMessageHandler {
         LOG.debug("[PLAN_APPROVAL][SHOW_DIALOG] requestId=" + requestId);
         LOG.debug("[PLAN_APPROVAL][SHOW_DIALOG] planData=" + planData.toString());
 
-        pendingPlanApprovalRequests.put(requestId, future);
+        registerRemotePendingRequest(
+            requestId,
+            RemoteRequestType.PLAN_APPROVAL,
+            planData,
+            future,
+            pendingPlanApprovalRequestIds
+        );
         planApprovalDialogVisible = false;
         if (taskStateService != null) {
-            // 这里先按“审批弹窗即将占位”分发 WAITING_CONFIRM，
-            // 避免 reminder popup 比真正的审批弹窗更早弹出。
+            // 进入 WAITING_CONFIRM 时立即同步任务提醒，
+            // 避免远程提醒比本地审批弹窗更早出现造成重复打扰。
             taskStateService.onPlanApprovalRequested(requestId);
             dispatchTaskReminder(true);
+            publishRemoteTaskEvent(planData);
         }
 
         try {
@@ -462,31 +509,28 @@ public class PermissionHandler extends BaseMessageHandler {
             CompletableFuture.delayedExecutor(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
                 if (!future.isDone()) {
                     LOG.warn("[PLAN_APPROVAL][SHOW_DIALOG] Timeout requestId=" + requestId);
-                    pendingPlanApprovalRequests.remove(requestId);
+                    completeRemotePendingRequest(
+                        requestId,
+                        createPlanApprovalResult(false, "default", "Plan approval timed out"),
+                        pendingPlanApprovalRequestIds
+                    );
                     planApprovalDialogVisible = false;
                     if (taskStateService != null) {
-                        // 瓒呮椂鍚庣洿鎺ヨ惤鍒?FINAL_ERROR锛岄伩鍏嶇晫闈竴鐩村仠鐣欏湪鈥滅瓑寰呯‘璁も€濈殑鍋囪薄銆?
+                        // 超时后直接进入 FINAL_ERROR，并同步远程状态，
+                        // 避免手机端仍停留在“等待确认”的旧提示。
                         taskStateService.onPlanApprovalTimedOut(requestId);
                         dispatchTaskReminder(false);
+                        publishRemoteTaskEvent(planData);
                     }
                     // Return rejection on timeout
-                    JsonObject timeoutResponse = new JsonObject();
-                    timeoutResponse.addProperty("approved", false);
-                    timeoutResponse.addProperty("targetMode", "default");
-                    timeoutResponse.addProperty("message", "Plan approval timed out");
-                    future.complete(timeoutResponse);
                 }
             });
 
         } catch (Exception e) {
             LOG.error("[PLAN_APPROVAL][SHOW_DIALOG] ERROR: " + e.getMessage(), e);
-            pendingPlanApprovalRequests.remove(requestId);
+            removeRemotePendingRequest(requestId, pendingPlanApprovalRequestIds);
             planApprovalDialogVisible = false;
-            JsonObject errorResponse = new JsonObject();
-            errorResponse.addProperty("approved", false);
-            errorResponse.addProperty("targetMode", "default");
-            errorResponse.addProperty("message", "Error showing plan approval dialog");
-            future.complete(errorResponse);
+            future.complete(createPlanApprovalResult(false, "default", "Error showing plan approval dialog"));
         }
 
         return future;
@@ -542,24 +586,23 @@ public class PermissionHandler extends BaseMessageHandler {
                 ? response.get("message").getAsString()
                 : "plan_approval_rejected";
 
-            CompletableFuture<JsonObject> pendingFuture = pendingPlanApprovalRequests.remove(requestId);
-
-            if (pendingFuture != null) {
-                JsonObject result = new JsonObject();
-                result.addProperty("approved", approved);
-                result.addProperty("targetMode", targetMode);
+            if (completeRemotePendingRequest(
+                requestId,
+                createPlanApprovalResult(approved, targetMode, reason),
+                pendingPlanApprovalRequestIds
+            )) {
                 LOG.debug("[PLAN_APPROVAL][HANDLE_RESPONSE] Completing future: approved=" + approved + ", targetMode=" + targetMode);
-                pendingFuture.complete(result);
                 planApprovalDialogVisible = false;
                 if (taskStateService != null) {
-                    // 瀹℃壒閫氳繃鍚庢仮澶?RUNNING锛涙嫆缁濆悗杩涘叆 CANCELLED銆?
-                    // 杩欓噷涓嶇敤璁╁墠绔嚜琛岀寽娴嬬粨鏋滐紝缁熶竴鐢辩姸鎬佹湇鍔＄粰鍑虹粨璁恒€?
+                    // 审批通过后恢复 RUNNING，拒绝后进入 CANCELLED，
+                    // 并让远程通道复用同一份聚合快照，避免不同端各自猜测结果。
                     if (approved) {
                         taskStateService.onPlanApprovalApproved(requestId);
                     } else {
                         taskStateService.onPlanApprovalRejected(requestId, reason);
                     }
                     dispatchTaskReminder(false);
+                    publishRemoteTaskEvent(null);
                 }
             } else {
                 LOG.warn("[PLAN_APPROVAL][HANDLE_RESPONSE] No pending request found for requestId: " + requestId);
@@ -569,14 +612,106 @@ public class PermissionHandler extends BaseMessageHandler {
         }
     }
 
+    private void registerRemotePendingRequest(
+        String requestId,
+        RemoteRequestType requestType,
+        JsonObject payload,
+        CompletableFuture<JsonObject> future,
+        Set<String> localRequestIds
+    ) {
+        localRequestIds.add(requestId);
+        remoteRequestRegistry.register(new RemotePendingRequest(
+            requestId,
+            requestType,
+            getCurrentSessionId(),
+            resolveProjectPath(payload),
+            payload,
+            result -> {
+                localRequestIds.remove(requestId);
+                future.complete(result == null ? new JsonObject() : result);
+            }
+        ));
+    }
+
+    private boolean completeRemotePendingRequest(String requestId, JsonObject result, Set<String> localRequestIds) {
+        boolean completed = remoteRequestRegistry.complete(requestId, result);
+        if (!completed) {
+            localRequestIds.remove(requestId);
+        }
+        return completed;
+    }
+
+    private void removeRemotePendingRequest(String requestId, Set<String> localRequestIds) {
+        remoteRequestRegistry.remove(requestId);
+        localRequestIds.remove(requestId);
+    }
+
+    private JsonObject createPlanApprovalResult(boolean approved, String targetMode, String message) {
+        JsonObject result = new JsonObject();
+        result.addProperty("approved", approved);
+        result.addProperty("targetMode", targetMode == null || targetMode.isEmpty() ? "default" : targetMode);
+        result.addProperty("message", message == null ? "" : message);
+        return result;
+    }
+
+    private String getCurrentSessionId() {
+        return context.getSession() != null ? context.getSession().getSessionId() : null;
+    }
+
+    private String resolveProjectPath(JsonObject payload) {
+        if (payload != null && payload.has("cwd") && !payload.get("cwd").isJsonNull()) {
+            return payload.get("cwd").getAsString();
+        }
+        return context.getProject() != null ? context.getProject().getBasePath() : null;
+    }
+
     private void dispatchTaskReminder(boolean approvalDialogVisible) {
         if (taskReminderDispatcher != null && taskStateService != null) {
-            // ReminderDispatcher 鏄敮涓€鐨勬彁閱掑垎鍙戝嚭鍙ｏ紝鍚庣浠讳綍鐘舵€佸彉鍖栭兘閫氳繃鍚屼竴璺緞鍙戝線
-            // popup / balloon / status bar / sound锛岄伩鍏嶅涓?handler 閲嶅鍐冲畾閫氱煡绛栫暐銆?
+            // ReminderDispatcher 统一负责 popup、balloon、status bar、sound 等提醒形式，
+            // 这里仅传递当前快照与审批弹窗可见性，避免 handler 自己分叉提醒逻辑。
             taskReminderDispatcher.dispatch(taskStateService.getCurrentSnapshot(), approvalDialogVisible);
         }
     }
+
+    private void publishRemoteTaskEvent(JsonObject payload) {
+        if (remoteCollabService == null || taskStateService == null) {
+            return;
+        }
+        TaskStateSnapshot snapshot = taskStateService.getCurrentSnapshot();
+        if (snapshot == null || snapshot.getState() == null) {
+            return;
+        }
+        remoteCollabService.publishTaskEvent(new RemoteTaskEvent(
+            snapshot.getSessionId() != null ? snapshot.getSessionId() : getCurrentSessionId(),
+            resolveProjectPath(payload),
+            snapshot.getRequestId(),
+            snapshot.getState().getValue(),
+            snapshot.getState().getValue(),
+            resolveRemoteTaskSummary(snapshot, payload)
+        ));
+    }
+
+    private String resolveRemoteTaskSummary(TaskStateSnapshot snapshot, JsonObject payload) {
+        if (payload != null) {
+            String question = readString(payload, "question");
+            if (question != null) {
+                return question;
+            }
+            String title = readString(payload, "title");
+            if (title != null) {
+                return title;
+            }
+        }
+        TaskStateEvent latestEvent = snapshot.getLatestEvent();
+        return latestEvent != null ? latestEvent.getReason() : null;
+    }
+
+    private String readString(JsonObject payload, String key) {
+        if (payload == null || !payload.has(key) || payload.get(key).isJsonNull()) {
+            return null;
+        }
+        String value = payload.get(key).getAsString();
+        return value == null || value.trim().isEmpty() ? null : value;
+    }
 }
-
-
 

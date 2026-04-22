@@ -47,3 +47,14 @@ export type {
   UseSettingsBasicActionsProps,
   UseSettingsBasicActionsReturn,
 } from './useSettingsBasicActions';
+
+export {
+  useRemoteCollabSettings,
+  DEFAULT_REMOTE_COLLAB_CONFIG,
+  normalizeRemoteCollabConfig,
+} from './useRemoteCollabSettings';
+export type {
+  RemoteCollabConfig,
+  TelegramRemoteCollabConfig,
+  UseRemoteCollabSettingsReturn,
+} from './useRemoteCollabSettings';

@@ -10,8 +10,8 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
 /**
- * Settings and usage statistics message handler.
- * Delegates to focused sub-handlers for each concern.
+ * 设置页总入口处理器。
+ * 自身只负责消息分发，把不同领域的设置项委托给更聚焦的子 handler，避免一个类同时承担过多设置逻辑。
  */
 public class SettingsHandler extends BaseMessageHandler {
 
@@ -24,6 +24,7 @@ public class SettingsHandler extends BaseMessageHandler {
     private final ModelProviderHandler modelProviderHandler;
     private final NodePathHandler nodePathHandler;
     private final ProjectConfigHandler projectConfigHandler;
+    private final RemoteCollabSettingsHandler remoteCollabSettingsHandler;
 
     private static final String[] SUPPORTED_TYPES = {
         "get_mode",
@@ -67,7 +68,12 @@ public class SettingsHandler extends BaseMessageHandler {
         "test_sound",
         "test_task_reminder_popup",
         "test_task_reminder_balloon",
-        "browse_sound_file"
+        "browse_sound_file",
+        "get_remote_collab_config",
+        "set_remote_collab_enabled",
+        "save_telegram_config",
+        "start_telegram_binding",
+        "send_remote_test_message"
     };
 
     public SettingsHandler(HandlerContext context, TaskReminderDispatcher taskReminderDispatcher) {
@@ -79,6 +85,7 @@ public class SettingsHandler extends BaseMessageHandler {
         this.modelProviderHandler = new ModelProviderHandler(context, usagePushService);
         this.nodePathHandler = new NodePathHandler(context);
         this.projectConfigHandler = new ProjectConfigHandler(context);
+        this.remoteCollabSettingsHandler = new RemoteCollabSettingsHandler(context);
         // Register theme change listener to automatically notify frontend when IDE theme changes
         registerThemeChangeListener();
     }
@@ -87,6 +94,10 @@ public class SettingsHandler extends BaseMessageHandler {
      * Register theme change listener.
      */
     private void registerThemeChangeListener() {
+        if (ApplicationManager.getApplication() == null || ApplicationManager.getApplication().isDisposed()) {
+            LOG.debug("[SettingsHandler] Skip theme change listener registration because application is unavailable");
+            return;
+        }
         ThemeConfigService.registerThemeChangeListener(themeConfig -> {
             ApplicationManager.getApplication().invokeLater(() -> {
                 callJavaScript("window.onIdeThemeChanged", escapeJs(themeConfig.toString()));
@@ -230,6 +241,21 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "browse_sound_file":
                 soundSettingsHandler.handleBrowseSoundFile();
+                return true;
+            case "get_remote_collab_config":
+                remoteCollabSettingsHandler.handleGetRemoteCollabConfig();
+                return true;
+            case "set_remote_collab_enabled":
+                remoteCollabSettingsHandler.handleSetRemoteCollabEnabled(content);
+                return true;
+            case "save_telegram_config":
+                remoteCollabSettingsHandler.handleSaveTelegramConfig(content);
+                return true;
+            case "start_telegram_binding":
+                remoteCollabSettingsHandler.handleStartTelegramBinding(content);
+                return true;
+            case "send_remote_test_message":
+                remoteCollabSettingsHandler.handleSendRemoteTestMessage(content);
                 return true;
             default:
                 return false;

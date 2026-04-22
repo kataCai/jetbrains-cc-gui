@@ -306,6 +306,11 @@ interface Window {
   showSuccessI18n?: (i18nKey: string) => void;
 
   /**
+   * Update remote collaboration configuration
+   */
+  updateRemoteCollabConfig?: (json: string) => void;
+
+  /**
    * Update skills list
    */
   updateSkills?: (json: string) => void;

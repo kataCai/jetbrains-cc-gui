@@ -39,6 +39,8 @@ public class CodemossSettingsService {
     public static final String CODEX_RUNTIME_ACCESS_CLI_LOGIN = "cli_login";
     private static final String TASK_REMINDER_KEY = "taskReminder";
     private static final String SOUND_NOTIFICATION_KEY = "soundNotification";
+    private static final String REMOTE_COLLAB_KEY = "remoteCollab";
+    private static final String TELEGRAM_KEY = "telegram";
 
     private final Gson gson;
 
@@ -258,6 +260,7 @@ public class CodemossSettingsService {
         config.add("codex", codex);
 
         config.add(TASK_REMINDER_KEY, createDefaultTaskReminderConfig());
+        config.add(REMOTE_COLLAB_KEY, createDefaultRemoteCollabConfig());
 
         return config;
     }
@@ -1239,6 +1242,63 @@ public class CodemossSettingsService {
         LOG.info("[CodemossSettings] Set status bar widget enabled: " + enabled);
     }
 
+    // ==================== Remote Collaboration Config Management ====================
+
+    /**
+     * Get canonical remote collaboration configuration.
+     */
+    public JsonObject getRemoteCollabConfig() throws IOException {
+        JsonObject config = readConfig();
+        boolean changed = migrateRemoteCollabConfig(config);
+        if (changed) {
+            writeConfig(config);
+        }
+        return config.getAsJsonObject(REMOTE_COLLAB_KEY).deepCopy();
+    }
+
+    /**
+     * Save the whole remote collaboration configuration tree.
+     */
+    public void saveRemoteCollabConfig(JsonObject remoteCollabConfig) throws IOException {
+        JsonObject config = readConfig();
+        config.add(REMOTE_COLLAB_KEY, normalizeRemoteCollabConfig(remoteCollabConfig));
+        writeConfig(config);
+    }
+
+    /**
+     * Check whether remote collaboration is enabled.
+     */
+    public boolean isRemoteCollabEnabled() throws IOException {
+        return getRemoteCollabConfig().get("enabled").getAsBoolean();
+    }
+
+    /**
+     * Set remote collaboration enabled flag.
+     */
+    public void setRemoteCollabEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject remoteCollab = ensureRemoteCollabConfig(config);
+        remoteCollab.addProperty("enabled", enabled);
+        writeConfig(config);
+    }
+
+    /**
+     * Get canonical Telegram configuration subtree.
+     */
+    public JsonObject getTelegramConfig() throws IOException {
+        return getRemoteCollabConfig().getAsJsonObject(TELEGRAM_KEY).deepCopy();
+    }
+
+    /**
+     * Save Telegram configuration subtree while preserving the root enabled flag.
+     */
+    public void saveTelegramConfig(JsonObject telegramConfig) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject remoteCollab = ensureRemoteCollabConfig(config);
+        remoteCollab.add(TELEGRAM_KEY, normalizeTelegramConfig(telegramConfig));
+        writeConfig(config);
+    }
+
     // ==================== Codex Provider Management ====================
 
     public List<JsonObject> getCodexProviders() throws IOException {
@@ -1372,5 +1432,100 @@ public class CodemossSettingsService {
 
     public void saveCodexProviderOrder(List<String> orderedIds) throws IOException {
         codexProviderManager.saveProviderOrder(orderedIds);
+    }
+
+    private JsonObject ensureRemoteCollabConfig(JsonObject config) {
+        if (migrateRemoteCollabConfig(config)) {
+            // migration already updated the in-memory tree
+        }
+        return config.getAsJsonObject(REMOTE_COLLAB_KEY);
+    }
+
+    private boolean migrateRemoteCollabConfig(JsonObject config) {
+        JsonObject source = config.has(REMOTE_COLLAB_KEY) && config.get(REMOTE_COLLAB_KEY).isJsonObject()
+            ? config.getAsJsonObject(REMOTE_COLLAB_KEY)
+            : null;
+        JsonObject normalized = normalizeRemoteCollabConfig(source);
+        if (!config.has(REMOTE_COLLAB_KEY) || !normalized.toString().equals(config.getAsJsonObject(REMOTE_COLLAB_KEY).toString())) {
+            config.add(REMOTE_COLLAB_KEY, normalized);
+            return true;
+        }
+        return false;
+    }
+
+    private JsonObject normalizeRemoteCollabConfig(JsonObject source) {
+        JsonObject normalized = createDefaultRemoteCollabConfig();
+        if (source == null) {
+            return normalized;
+        }
+
+        if (source.has("enabled") && !source.get("enabled").isJsonNull()) {
+            normalized.addProperty("enabled", source.get("enabled").getAsBoolean());
+        }
+
+        JsonObject telegramSource = source.has(TELEGRAM_KEY) && source.get(TELEGRAM_KEY).isJsonObject()
+            ? source.getAsJsonObject(TELEGRAM_KEY)
+            : null;
+        normalized.add(TELEGRAM_KEY, normalizeTelegramConfig(telegramSource));
+        return normalized;
+    }
+
+    private JsonObject normalizeTelegramConfig(JsonObject source) {
+        JsonObject normalized = createDefaultTelegramConfig();
+        if (source == null) {
+            return normalized;
+        }
+
+        copyStringProperty(source, normalized, "botToken");
+        copyStringProperty(source, normalized, "botUsername");
+        copyStringProperty(source, normalized, "chatId");
+        copyStringProperty(source, normalized, "boundUserId");
+        copyStringProperty(source, normalized, "boundUsername");
+        copyStringProperty(source, normalized, "bindingToken");
+        copyStringProperty(source, normalized, "connectionStatus");
+        copyStringProperty(source, normalized, "lastError");
+
+        if (source.has("pollingEnabled") && !source.get("pollingEnabled").isJsonNull()) {
+            normalized.addProperty("pollingEnabled", source.get("pollingEnabled").getAsBoolean());
+        }
+        if (source.has("singleActive") && !source.get("singleActive").isJsonNull()) {
+            normalized.addProperty("singleActive", source.get("singleActive").getAsBoolean());
+        }
+        if (source.has("pollIntervalSeconds") && !source.get("pollIntervalSeconds").isJsonNull()) {
+            int interval = Math.max(1, source.get("pollIntervalSeconds").getAsInt());
+            normalized.addProperty("pollIntervalSeconds", interval);
+        }
+        return normalized;
+    }
+
+    private void copyStringProperty(JsonObject source, JsonObject target, String key) {
+        if (!source.has(key) || source.get(key).isJsonNull()) {
+            return;
+        }
+        String value = source.get(key).getAsString();
+        target.addProperty(key, value == null ? "" : value);
+    }
+
+    private JsonObject createDefaultRemoteCollabConfig() {
+        JsonObject remoteCollab = new JsonObject();
+        remoteCollab.addProperty("enabled", false);
+        remoteCollab.add(TELEGRAM_KEY, createDefaultTelegramConfig());
+        return remoteCollab;
+    }
+
+    private JsonObject createDefaultTelegramConfig() {
+        JsonObject telegram = new JsonObject();
+        telegram.addProperty("botToken", "");
+        telegram.addProperty("botUsername", "");
+        telegram.addProperty("chatId", "");
+        telegram.addProperty("boundUserId", "");
+        telegram.addProperty("boundUsername", "");
+        telegram.addProperty("bindingToken", "");
+        telegram.addProperty("pollingEnabled", true);
+        telegram.addProperty("pollIntervalSeconds", 1);
+        telegram.addProperty("singleActive", true);
+        telegram.addProperty("connectionStatus", "disabled");
+        telegram.addProperty("lastError", "");
+        return telegram;
     }
 }

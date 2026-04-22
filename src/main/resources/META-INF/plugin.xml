@@ -81,6 +81,9 @@
         <!-- Monitor Run/Debug Service Output -->
         <postStartupActivity implementation="com.github.claudecodegui.service.RunConfigMonitorService"/>
 
+        <!-- Initialize Telegram / remote collaboration runtime on project open -->
+        <postStartupActivity implementation="com.github.claudecodegui.startup.RemoteCollabStartupActivity"/>
+
         <!-- StatusBar widget for task notification -->
         <statusBarWidgetFactory id="ClaudeStatusBarWidget"
                                 implementation="com.github.claudecodegui.notifications.ClaudeStatusBarWidget$Factory"/>

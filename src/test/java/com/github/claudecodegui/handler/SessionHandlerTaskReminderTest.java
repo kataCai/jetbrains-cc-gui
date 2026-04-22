@@ -3,6 +3,12 @@ package com.github.claudecodegui.handler;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.remote.RemoteCollabService;
+import com.github.claudecodegui.remote.RemoteConnectionStatus;
+import com.github.claudecodegui.remote.RemotePendingRequest;
+import com.github.claudecodegui.remote.RemoteRequestRegistry;
+import com.github.claudecodegui.remote.RemoteTaskChannel;
+import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.taskstate.TaskState;
@@ -16,6 +22,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import org.junit.Test;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -102,6 +109,44 @@ public class SessionHandlerTaskReminderTest {
         }
     }
 
+    @Test
+    public void shouldPublishRemoteTaskEventsForSendLifecycle() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-remote-event-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-remote", projectDir.toString());
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            RecordingRemoteTaskChannel channel = new RecordingRemoteTaskChannel(2);
+            RemoteCollabService remoteCollabService = newRemoteCollabService();
+            remoteCollabService.setTaskChannel(channel);
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher, remoteCollabService);
+
+            boolean handled = handler.handle("send_message", "{\"text\":\"3+4 = ?\"}");
+
+            assertTrue(handled);
+            assertTrue("remote task events timed out", channel.awaitEvents());
+            assertEquals(2, channel.events.size());
+            assertEquals("running", channel.events.get(0).getTaskState());
+            assertEquals("3+4 = ?", channel.events.get(0).getSummary());
+            assertEquals("completed", channel.events.get(1).getTaskState());
+            assertEquals("3+4 = ?", channel.events.get(1).getSummary());
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
     private static HandlerContext createContext(Path projectDir, ClaudeSession session) {
         HandlerContext context = new HandlerContext(
             createProject(projectDir),
@@ -139,6 +184,12 @@ public class SessionHandlerTaskReminderTest {
                 default -> null;
             }
         );
+    }
+
+    private static RemoteCollabService newRemoteCollabService() throws Exception {
+        Constructor<RemoteCollabService> constructor = RemoteCollabService.class.getDeclaredConstructor(RemoteRequestRegistry.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(new RemoteRequestRegistry());
     }
 
     private static class FixedNodeClaudeSDKBridge extends ClaudeSDKBridge {
@@ -222,6 +273,47 @@ public class SessionHandlerTaskReminderTest {
             } catch (ReflectiveOperationException e) {
                 throw new AssertionError("failed to read field: " + name, e);
             }
+        }
+    }
+
+    private static class RecordingRemoteTaskChannel implements RemoteTaskChannel {
+        private final CountDownLatch eventLatch;
+        private final List<RemoteTaskEvent> events = new ArrayList<>();
+
+        RecordingRemoteTaskChannel(int expectedEvents) {
+            this.eventLatch = new CountDownLatch(expectedEvents);
+        }
+
+        @Override
+        public String getChannelId() {
+            return "test-remote-channel";
+        }
+
+        @Override
+        public RemoteConnectionStatus getConnectionStatus() {
+            return RemoteConnectionStatus.CONNECTED;
+        }
+
+        @Override
+        public void initialize() {
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public void publishTaskEvent(RemoteTaskEvent event) {
+            events.add(event);
+            eventLatch.countDown();
+        }
+
+        @Override
+        public void publishPendingRequest(RemotePendingRequest request) {
+        }
+
+        boolean awaitEvents() throws InterruptedException {
+            return eventLatch.await(5, TimeUnit.SECONDS);
         }
     }
 }

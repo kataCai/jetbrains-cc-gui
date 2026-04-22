@@ -27,6 +27,7 @@ describe('useSettingsWindowCallbacks', () => {
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
     setTaskReminderConfig: vi.fn(),
+    setRemoteCollabConfig: vi.fn(),
     updateProviders: vi.fn(),
     updateActiveProvider: vi.fn(),
     loadProviders: vi.fn(),
@@ -64,6 +65,7 @@ describe('useSettingsWindowCallbacks', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_codex_sandbox_mode:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_commit_prompt:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_task_reminder_config:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_remote_collab_config:');
   });
 
   it('writes canonical task reminder config when updateTaskReminderConfig is received', () => {
@@ -133,5 +135,23 @@ describe('useSettingsWindowCallbacks', () => {
     expect(nextConfig.sound.states).toEqual(['final_error']);
     expect(nextConfig.sound.selectedSound).toBe('custom');
     expect(nextConfig.sound.customSoundPath).toBe('/tmp/a.wav');
+  });
+
+  it('writes remote collaboration config when updateRemoteCollabConfig is received', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    const config = {
+      enabled: true,
+      telegram: {
+        botToken: 'bot-token',
+        connectionStatus: 'connected',
+        currentInstanceReceivesUpdates: true,
+      },
+    };
+
+    window.updateRemoteCollabConfig?.(JSON.stringify(config));
+
+    expect(deps.setRemoteCollabConfig).toHaveBeenCalledWith(config);
   });
 });

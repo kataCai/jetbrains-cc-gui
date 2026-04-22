@@ -8,9 +8,13 @@ import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.model.NodeDetectionResult;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
+import com.github.claudecodegui.remote.RemoteCollabService;
+import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.session.SessionState;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
+import com.github.claudecodegui.taskstate.TaskStateEvent;
 import com.github.claudecodegui.taskstate.TaskStateService;
+import com.github.claudecodegui.taskstate.TaskStateSnapshot;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -27,8 +31,9 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Session management message handler.
- * Handles sending messages, interrupting, restarting, and creating new sessions.
+ * 会话管理消息处理器。
+ * 负责发送消息、会话切换与重置，同时把当前任务摘要同步到任务提醒和远程协作通道，
+ * 让本地弹窗、状态栏、Telegram 看到的是同一份“当前问题”。
  */
 public class SessionHandler extends BaseMessageHandler {
 
@@ -44,6 +49,7 @@ public class SessionHandler extends BaseMessageHandler {
 
     private final TaskStateService taskStateService;
     private final TaskReminderDispatcher taskReminderDispatcher;
+    private final RemoteCollabService remoteCollabService;
 
     public SessionHandler(HandlerContext context) {
         this(context, null, null);
@@ -58,9 +64,19 @@ public class SessionHandler extends BaseMessageHandler {
         TaskStateService taskStateService,
         TaskReminderDispatcher taskReminderDispatcher
     ) {
+        this(context, taskStateService, taskReminderDispatcher, RemoteCollabService.getInstance());
+    }
+
+    SessionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher,
+        RemoteCollabService remoteCollabService
+    ) {
         super(context);
         this.taskStateService = taskStateService;
         this.taskReminderDispatcher = taskReminderDispatcher;
+        this.remoteCollabService = remoteCollabService;
     }
 
     @Override
@@ -430,6 +446,7 @@ public class SessionHandler extends BaseMessageHandler {
                 // 后续提醒策略可以据此决定是否只更新状态栏、不打断用户。
                 taskStateService.onCancelled(getSessionId(), "interrupt_session");
                 dispatchTaskReminder(false);
+                publishRemoteTaskEvent(null);
             }
             ApplicationManager.getApplication().invokeLater(() -> {
                 // [FIX] Notify frontend that stream has ended and reset loading state
@@ -450,6 +467,7 @@ public class SessionHandler extends BaseMessageHandler {
                 // 因此先结束旧轮状态，再由下一次 send_started 拉起新一轮 RUNNING。
                 taskStateService.onCancelled(getSessionId(), "restart_session");
                 dispatchTaskReminder(false);
+                publishRemoteTaskEvent(null);
             }
             ApplicationManager.getApplication().invokeLater(() -> {});
         });
@@ -459,6 +477,7 @@ public class SessionHandler extends BaseMessageHandler {
         if (taskStateService != null) {
             taskStateService.onSendStarted(getSessionId());
             dispatchTaskReminder(false, preferredTaskSummary);
+            publishRemoteTaskEvent(preferredTaskSummary);
         }
     }
 
@@ -466,6 +485,7 @@ public class SessionHandler extends BaseMessageHandler {
         if (taskStateService != null) {
             taskStateService.onSendCompleted(getSessionId());
             dispatchTaskReminder(false);
+            publishRemoteTaskEvent(null);
         }
     }
 
@@ -474,6 +494,7 @@ public class SessionHandler extends BaseMessageHandler {
             // 失败原因尽量沿用真实异常，方便前端弹窗、状态栏和日志看到同一份上下文。
             taskStateService.onSendFailed(getSessionId(), throwable != null ? throwable.getMessage() : "send_failed");
             dispatchTaskReminder(false);
+            publishRemoteTaskEvent(null);
         }
     }
 
@@ -489,6 +510,50 @@ public class SessionHandler extends BaseMessageHandler {
                 preferredTaskSummary
             );
         }
+    }
+
+    private void publishRemoteTaskEvent(String preferredTaskSummary) {
+        if (remoteCollabService == null || taskStateService == null) {
+            return;
+        }
+        TaskStateSnapshot snapshot = taskStateService.getCurrentSnapshot();
+        if (snapshot == null) {
+            return;
+        }
+        remoteCollabService.publishTaskEvent(new RemoteTaskEvent(
+            snapshot.getSessionId() != null ? snapshot.getSessionId() : getSessionId(),
+            resolveProjectPath(),
+            snapshot.getRequestId(),
+            snapshot.getState().getValue(),
+            snapshot.getState().getValue(),
+            resolveRemoteEventSummary(snapshot, preferredTaskSummary)
+        ));
+    }
+
+    private String resolveProjectPath() {
+        if (context.getProject() != null && context.getProject().getBasePath() != null) {
+            return context.getProject().getBasePath();
+        }
+        ClaudeSession session = context.getSession();
+        return session != null ? session.getCwd() : null;
+    }
+
+    private String resolveRemoteEventSummary(TaskStateSnapshot snapshot, String preferredTaskSummary) {
+        if (preferredTaskSummary != null && !preferredTaskSummary.trim().isEmpty()) {
+            return preferredTaskSummary;
+        }
+        ClaudeSession session = context.getSession();
+        if (session != null) {
+            List<ClaudeSession.Message> messages = session.getMessages();
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ClaudeSession.Message message = messages.get(i);
+                if (message != null && message.type == ClaudeSession.Message.Type.USER && message.content != null) {
+                    return message.content;
+                }
+            }
+        }
+        TaskStateEvent latestEvent = snapshot.getLatestEvent();
+        return latestEvent != null ? latestEvent.getReason() : null;
     }
 
     private String getSessionId() {

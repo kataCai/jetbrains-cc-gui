@@ -1,5 +1,9 @@
 package com.github.claudecodegui.permission;
 
+import com.github.claudecodegui.remote.RemoteCollabService;
+import com.github.claudecodegui.remote.RemotePendingRequest;
+import com.github.claudecodegui.remote.RemoteRequestRegistry;
+import com.github.claudecodegui.remote.RemoteRequestType;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
@@ -17,6 +21,7 @@ import java.util.concurrent.*;
 public class PermissionService {
 
     private static final Logger LOG = Logger.getInstance(PermissionService.class);
+    private static final int REMOTE_PENDING_TIMEOUT_SECONDS = 300;
 
     private final Project project;
     private final Path permissionDir;
@@ -32,6 +37,7 @@ public class PermissionService {
     private final PermissionDialogRouter dialogRouter;
     private final PermissionFileProtocol fileProtocol;
     private final PermissionRequestWatcher requestWatcher;
+    private final RemoteCollabService remoteCollabService;
 
     // Track request files currently being processed to avoid duplicate handling
     private final Set<String> processingRequests = ConcurrentHashMap.newKeySet();
@@ -111,17 +117,16 @@ public class PermissionService {
     // ── Constructor & Factory Methods ──────────────────────────────────
 
     private PermissionService(Project project, String sessionId) {
+        this(project, sessionId, resolvePermissionDir(), RemoteCollabService.getInstance());
+    }
+
+    PermissionService(Project project, String sessionId, Path permissionDir, RemoteCollabService remoteCollabService) {
         this.project = project;
         this.sessionId = sessionId;
+        this.permissionDir = permissionDir;
+        this.remoteCollabService = remoteCollabService;
 
-        String envDir = System.getenv("CLAUDE_PERMISSION_DIR");
-        if (envDir != null && !envDir.trim().isEmpty()) {
-            this.permissionDir = Paths.get(envDir);
-            debugLog("INIT", "Using permission dir from env CLAUDE_PERMISSION_DIR: " + envDir);
-        } else {
-            this.permissionDir = Paths.get(System.getProperty("java.io.tmpdir"), "claude-permission");
-            debugLog("INIT", "Env CLAUDE_PERMISSION_DIR not set, using tmp dir: " + this.permissionDir);
-        }
+        debugLog("INIT", "Using permission dir: " + this.permissionDir);
         debugLog("INIT", "Session ID: " + this.sessionId);
         try {
             Files.createDirectories(permissionDir);
@@ -136,6 +141,14 @@ public class PermissionService {
         this.fileProtocol = new PermissionFileProtocol(permissionDir, sessionId, gson, (tag, message) -> debugLog(tag, message));
         this.requestWatcher = new PermissionRequestWatcher(
                 permissionDir, sessionId, fileProtocol, (tag, message) -> debugLog(tag, message));
+    }
+
+    private static Path resolvePermissionDir() {
+        String envDir = System.getenv("CLAUDE_PERMISSION_DIR");
+        if (envDir != null && !envDir.trim().isEmpty()) {
+            return Paths.get(envDir);
+        }
+        return Paths.get(System.getProperty("java.io.tmpdir"), "claude-permission");
     }
 
     public String getSessionId() { return this.sessionId; }
@@ -466,6 +479,8 @@ public class PermissionService {
 
         if (shower != null) {
             dispatchAskQuestionDialog(shower, requestId, request, fileName);
+        } else if (dispatchAskQuestionRemoteFallback(requestId, request, fileName)) {
+            debugLog("ASK_REMOTE", "Routed AskUserQuestion to remote collaboration: " + requestId);
         } else {
             debugLog("ASK_NO_DIALOG", "No dialog shower, denying");
             fileProtocol.writeAskUserQuestionResponse(requestId, new JsonObject());
@@ -495,6 +510,33 @@ public class PermissionService {
         });
     }
 
+    private boolean dispatchAskQuestionRemoteFallback(String requestId, JsonObject request, String fileName) {
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        RemotePendingRequest pendingRequest = createRemotePendingRequest(
+                requestId,
+                RemoteRequestType.ASK_USER_QUESTION,
+                request,
+                future::complete
+        );
+        if (!publishRemotePendingRequest(pendingRequest)) {
+            return false;
+        }
+
+        future.thenAccept(answers -> {
+            try {
+                fileProtocol.writeAskUserQuestionResponse(requestId, answers == null ? new JsonObject() : answers);
+            } finally {
+                processingRequests.remove(fileName);
+            }
+        }).exceptionally(ex -> {
+            fileProtocol.writeAskUserQuestionResponse(requestId, new JsonObject());
+            processingRequests.remove(fileName);
+            return null;
+        });
+        scheduleRemoteFallbackTimeout(requestId, future, () -> new JsonObject(), fileName);
+        return true;
+    }
+
     // ── PlanApproval Request Handling ──────────────────────────────────
 
     private void handlePlanApprovalRequest(Path requestFile) {
@@ -513,6 +555,8 @@ public class PermissionService {
             PlanApprovalDialogShower shower = dialogRouter.findPlanApprovalDialogShower(request);
             if (shower != null) {
                 dispatchPlanApprovalDialog(shower, requestId, request, fileName);
+            } else if (dispatchPlanApprovalRemoteFallback(requestId, request, fileName)) {
+                debugLog("PLAN_REMOTE", "Routed PlanApproval to remote collaboration: " + requestId);
             } else {
                 debugLog("PLAN_NO_DIALOG", "No dialog shower, denying");
                 fileProtocol.writePlanApprovalResponse(requestId, false, "default");
@@ -548,6 +592,99 @@ public class PermissionService {
             processingRequests.remove(fileName);
             return null;
         });
+    }
+
+    private boolean dispatchPlanApprovalRemoteFallback(String requestId, JsonObject request, String fileName) {
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        RemotePendingRequest pendingRequest = createRemotePendingRequest(
+                requestId,
+                RemoteRequestType.PLAN_APPROVAL,
+                request,
+                future::complete
+        );
+        if (!publishRemotePendingRequest(pendingRequest)) {
+            return false;
+        }
+
+        future.thenAccept(response -> {
+            try {
+                JsonObject result = response == null ? new JsonObject() : response;
+                boolean approved = result.has("approved") && result.get("approved").getAsBoolean();
+                String targetMode = result.has("targetMode") ? result.get("targetMode").getAsString() : "default";
+                fileProtocol.writePlanApprovalResponse(requestId, approved, targetMode);
+            } finally {
+                processingRequests.remove(fileName);
+            }
+        }).exceptionally(ex -> {
+            fileProtocol.writePlanApprovalResponse(requestId, false, "default");
+            processingRequests.remove(fileName);
+            return null;
+        });
+        scheduleRemoteFallbackTimeout(requestId, future, () -> createTimedOutPlanResponse(), fileName);
+        return true;
+    }
+
+    private boolean publishRemotePendingRequest(RemotePendingRequest pendingRequest) {
+        if (remoteCollabService == null || pendingRequest == null) {
+            return false;
+        }
+        remoteCollabService.registerPendingRequest(pendingRequest);
+        if (remoteCollabService.publishPendingRequest(pendingRequest)) {
+            return true;
+        }
+        RemoteRequestRegistry registry = remoteCollabService.getRequestRegistry();
+        if (registry != null) {
+            registry.remove(pendingRequest.getRequestId());
+        }
+        return false;
+    }
+
+    private RemotePendingRequest createRemotePendingRequest(
+            String requestId,
+            RemoteRequestType requestType,
+            JsonObject request,
+            java.util.function.Consumer<JsonObject> completer
+    ) {
+        return new RemotePendingRequest(
+                requestId,
+                requestType,
+                sessionId,
+                extractProjectPath(request),
+                request,
+                completer
+        );
+    }
+
+    private String extractProjectPath(JsonObject request) {
+        if (request != null && request.has("cwd") && !request.get("cwd").isJsonNull()) {
+            return request.get("cwd").getAsString();
+        }
+        return project != null ? project.getBasePath() : null;
+    }
+
+    private void scheduleRemoteFallbackTimeout(
+            String requestId,
+            CompletableFuture<JsonObject> future,
+            java.util.function.Supplier<JsonObject> timeoutResponseSupplier,
+            String fileName
+    ) {
+        CompletableFuture.delayedExecutor(REMOTE_PENDING_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
+            if (future.isDone()) {
+                return;
+            }
+            if (remoteCollabService != null && remoteCollabService.getRequestRegistry() != null) {
+                remoteCollabService.getRequestRegistry().remove(requestId);
+            }
+            future.complete(timeoutResponseSupplier.get());
+            processingRequests.remove(fileName);
+        });
+    }
+
+    private JsonObject createTimedOutPlanResponse() {
+        JsonObject result = new JsonObject();
+        result.addProperty("approved", false);
+        result.addProperty("targetMode", "default");
+        return result;
     }
 
     // ── Diff Review ────────────────────────────────────────────────────

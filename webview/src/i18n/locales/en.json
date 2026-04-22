@@ -796,6 +796,35 @@
         "selectHint": "Select prompts to export",
         "confirmExport": "Confirm Export"
       }
+    },
+    "remoteCollab": {
+      "title": "Remote Collaboration",
+      "description": "Sync task states, pending actions, and answers to Telegram so your phone can continue the local IDE flow.",
+      "enableTitle": "Enable remote collaboration",
+      "enableDesc": "When disabled, Telegram stops sending updates and no phone replies will be received.",
+      "pollingTitle": "Enable polling receiver",
+      "pollingDesc": "The first version uses getUpdates polling for binding, buttons, and text replies.",
+      "singleActiveTitle": "Single active instance policy",
+      "singleActiveDesc": "Recommend allowing only one IDE instance per Bot Token to receive updates and avoid polling conflicts.",
+      "telegramConfig": "Telegram Settings",
+      "botToken": "Bot Token",
+      "pollInterval": "Polling interval (seconds)",
+      "saveTelegram": "Save Telegram settings",
+      "startBinding": "Start Telegram binding",
+      "statusPanel": "Connection Status",
+      "connectionStatus": "Connection Status",
+      "receiverStatus": "Current receiver status",
+      "receiverActive": "This IDE instance is receiving updates.",
+      "receiverInactive": "This IDE instance is not receiving updates.",
+      "receiverHintSingle": "singleActive is enabled.",
+      "receiverHintMulti": "Multiple instances are allowed, but only one polling instance is recommended.",
+      "boundUser": "Bound user",
+      "chatId": "Chat ID",
+      "botUsername": "Bot username",
+      "lastError": "Last error: ",
+      "testPanel": "Test Message",
+      "testMessage": "Message",
+      "sendTestMessage": "Send test message"
     }
   },
   "history": {
