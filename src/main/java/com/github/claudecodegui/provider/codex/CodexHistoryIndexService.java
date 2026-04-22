@@ -10,6 +10,9 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -26,6 +29,12 @@ class CodexHistoryIndexService {
      * Batch size for concurrent reads when walking the sorted candidate list.
      */
     private static final int READ_BATCH_SIZE = 32;
+
+    /**
+     * Dedicated thread pool for lite-read I/O to avoid starving the IDE's common ForkJoinPool.
+     */
+    private static final ExecutorService LITE_READ_POOL =
+            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     private final Path sessionsDir;
     private final CodexHistoryParser parser;
@@ -73,10 +82,11 @@ class CodexHistoryIndexService {
 
         if (updateType == SessionIndexManager.UpdateType.NONE) {
             LOG.info("[CodexHistoryIndexService] Using file index for " + cacheKey + ", sessions: " + projectIndex.sessions.size());
-            List<CodexHistoryReader.SessionInfo> sessions = restoreSessionsFromIndex(projectIndex);
-            sessions = applySortAndLimit(sessions, limit, offset);
+            List<CodexHistoryReader.SessionInfo> restored = restoreSessionsFromIndex(projectIndex);
+            List<CodexHistoryReader.SessionInfo> sessions = applySortAndLimit(restored, limit, offset);
+            // Update memory cache (full list, reuse already-restored list)
             if (limit == 0 && offset == 0) {
-                cache.updateCodexCache(cacheKey, sessionsDir, restoreSessionsFromIndex(projectIndex));
+                cache.updateCodexCache(cacheKey, sessionsDir, restored);
             }
             return sessions;
         }
@@ -304,7 +314,6 @@ class CodexHistoryIndexService {
             );
 
             for (ReadResult rr : batchResults) {
-                i++;
                 if (rr.info == null) {
                     continue;
                 }
@@ -322,6 +331,8 @@ class CodexHistoryIndexService {
                     break;
                 }
             }
+            // Always advance past the entire batch to avoid re-processing failed candidates
+            i = batchEnd;
         }
 
         return deduplicateSessions(sessions);
@@ -352,13 +363,13 @@ class CodexHistoryIndexService {
                     long mtime = info != null ? safeStatMillis(path) : 0L;
                     return new ReadResult(info, path, mtime);
                 }
-            }));
+            }, LITE_READ_POOL));
         }
 
         List<ReadResult> results = new ArrayList<>();
         for (CompletableFuture<ReadResult> future : futures) {
             try {
-                ReadResult rr = future.get();
+                ReadResult rr = future.get(10, TimeUnit.SECONDS);
                 if (rr.info != null && this.parser.isValidSession(rr.info)) {
                     results.add(rr);
                 }

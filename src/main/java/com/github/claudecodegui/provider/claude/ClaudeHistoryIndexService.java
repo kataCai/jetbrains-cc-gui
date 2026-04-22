@@ -11,7 +11,11 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -27,6 +31,17 @@ class ClaudeHistoryIndexService {
      * Batch size for concurrent reads when walking the sorted candidate list.
      */
     private static final int READ_BATCH_SIZE = 32;
+
+    /**
+     * Dedicated thread pool for lite-read I/O to avoid starving the IDE's common ForkJoinPool.
+     */
+    private static final ExecutorService LITE_READ_POOL =
+            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    private static final Pattern UUID_PATTERN = Pattern.compile(
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            Pattern.CASE_INSENSITIVE
+    );
 
     private final Path projectsDir;
     private final ClaudeHistoryParser parser;
@@ -81,9 +96,9 @@ class ClaudeHistoryIndexService {
             List<ClaudeHistoryReader.SessionInfo> restored = restoreSessionsFromIndex(projectIndex);
             // Apply pagination if needed
             List<ClaudeHistoryReader.SessionInfo> paged = applySortAndLimit(restored, limit, offset);
-            // Update memory cache (full list)
+            // Update memory cache (full list, reuse already-restored list)
             if (limit == 0 && offset == 0) {
-                cache.updateClaudeCache(projectPath, projectDir, restoreSessionsFromIndex(projectIndex));
+                cache.updateClaudeCache(projectPath, projectDir, restored);
             }
             return paged;
         }
@@ -279,8 +294,8 @@ class ClaudeHistoryIndexService {
             return null;
         }
         String sessionId = fileName.substring(0, fileName.length() - 6);
-        // UUID pattern validation (case-insensitive)
-        if (!sessionId.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) {
+        // UUID pattern validation (case-insensitive, pre-compiled)
+        if (!UUID_PATTERN.matcher(sessionId).matches()) {
             return null;
         }
         return sessionId.toLowerCase(); // Normalize to lowercase for consistency
@@ -321,7 +336,6 @@ class ClaudeHistoryIndexService {
             );
 
             for (ReadResult rr : batchResults) {
-                i++;
                 if (rr.info == null) {
                     continue;
                 }
@@ -339,6 +353,8 @@ class ClaudeHistoryIndexService {
                     break;
                 }
             }
+            // Always advance past the entire batch to avoid re-processing failed candidates
+            i = batchEnd;
         }
 
         // Final sort by lastTimestamp to ensure correct order
@@ -373,13 +389,13 @@ class ClaudeHistoryIndexService {
                     long mtime = info != null ? safeStatMillis(path) : 0L;
                     return new ReadResult(info, mtime);
                 }
-            }));
+            }, LITE_READ_POOL));
         }
 
         List<ReadResult> results = new ArrayList<>();
         for (CompletableFuture<ReadResult> future : futures) {
             try {
-                ReadResult rr = future.get();
+                ReadResult rr = future.get(10, TimeUnit.SECONDS);
                 if (rr.info != null) {
                     results.add(rr);
                 }

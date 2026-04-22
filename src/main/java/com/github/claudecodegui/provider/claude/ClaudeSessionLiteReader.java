@@ -181,7 +181,7 @@ public class ClaudeSessionLiteReader {
         if (!UUID_PATTERN.matcher(sessionId).matches()) {
             return null;
         }
-        return sessionId;
+        return sessionId.toLowerCase();
     }
 
     /**
