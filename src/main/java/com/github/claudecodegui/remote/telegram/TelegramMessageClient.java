@@ -24,6 +24,7 @@ public class TelegramMessageClient {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
     private static final String PARSE_MODE_MARKDOWN = "Markdown";
+    private static final int RESPONSE_SNIPPET_LIMIT = 200;
 
     private final String botToken;
     private final HttpTransport transport;
@@ -107,13 +108,39 @@ public class TelegramMessageClient {
                 throw new IOException("Telegram API " + method + " failed: " + description);
             }
             return response;
-        } catch (IllegalStateException | ClassCastException e) {
-            throw new IOException("Invalid Telegram API response for " + method, e);
+        } catch (RuntimeException e) {
+            // 这里统一兜住代理/网关返回 HTML、纯文本等非 JSON 内容的场景，
+            // 避免设置页直接把 Gson 的底层解析异常暴露给用户，便于快速判断是网络/代理问题。
+            throw new IOException(
+                "Invalid Telegram API response for " + method + ": " + summarizeResponse(responseBody),
+                e
+            );
         }
     }
 
     private String buildUrl(String method) {
         return API_BASE + "/bot" + botToken + "/" + method;
+    }
+
+    /**
+     * 仅保留一小段响应摘要，帮助定位被代理页、网关错误页或纯文本错误响应污染的场景，
+     * 同时避免把整段响应直接拼进异常导致日志过长。
+     */
+    private String summarizeResponse(String responseBody) {
+        if (responseBody == null) {
+            return "<null>";
+        }
+        String normalized = responseBody
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
+            .trim();
+        if (normalized.isEmpty()) {
+            return "<empty>";
+        }
+        if (normalized.length() <= RESPONSE_SNIPPET_LIMIT) {
+            return normalized;
+        }
+        return normalized.substring(0, RESPONSE_SNIPPET_LIMIT) + "...";
     }
 
     interface HttpTransport {

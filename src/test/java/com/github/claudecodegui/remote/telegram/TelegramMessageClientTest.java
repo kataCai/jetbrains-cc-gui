@@ -59,6 +59,20 @@ public class TelegramMessageClientTest {
         }
     }
 
+    @Test
+    public void shouldIncludeResponseSnippetWhenTelegramReturnsMalformedJson() throws Exception {
+        RecordingTransport transport = new RecordingTransport("<html>502 Bad Gateway</html>");
+        TelegramMessageClient client = new TelegramMessageClient("bot-token", transport);
+
+        try {
+            client.getMe();
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("Invalid Telegram API response for getMe"));
+            assertTrue(expected.getMessage().contains("502 Bad Gateway"));
+        }
+    }
+
     private static class RecordingTransport implements TelegramMessageClient.HttpTransport {
         private final String responseBody;
         private String lastUrl;
