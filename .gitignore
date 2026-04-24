@@ -75,3 +75,4 @@ logs/*.log
 .ace-tool/
 .workflow
 .worktrees/
+data/gotify.db
