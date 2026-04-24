@@ -146,11 +146,15 @@
       },
       "nodePath": {
         "label": "Node.js 路径",
-        "placeholder": "例如 C:\\Program Files\\nodejs\\node.exe 或 /usr/local/bin/node",
+        "placeholder": "Windows: C:\\Program Files\\nodejs\\node.exe (必须以 .exe 结尾) | macOS/Linux: /usr/local/bin/node",
         "hint": "在终端中运行",
         "hintCommand": "node -p \"process.execPath\"",
-        "hintText": "获取实际的 Node.js 可执行文件路径。为空时插件会自动尝试检测 Node.js。",
-        "versionTooLow": "Node.js 版本过低，插件需要 v{{minVersion}} 或更高版本才能正常运行"
+        "hintText": "获取实际的 Node.js 可执行文件路径。为空时插件会自动尝试检测 Node.js。⚠️ Windows 用户注意：路径必须指向完整的可执行文件（node.exe），不能只填写目录。",
+        "versionTooLow": "Node.js 版本过低，插件需要 v{{minVersion}} 或更高版本才能正常运行",
+        "invalidPath": "路径无效：{{reason}}",
+        "pathNotFound": "文件不存在，请检查路径是否正确",
+        "invalidFileName": "Windows 下路径必须以 node.exe 结尾，macOS/Linux 下必须以 node 结尾",
+        "cannotExecute": "文件存在但无法执行，请检查文件权限"
       },
       "workingDirectory": {
         "label": "工作目录",
