@@ -28,6 +28,8 @@ describe('useSettingsWindowCallbacks', () => {
     setCodexConfigLoading: vi.fn(),
     setTaskReminderConfig: vi.fn(),
     setRemoteCollabConfig: vi.fn(),
+    setRemoteCollabDebugSnapshot: vi.fn(),
+    setRemoteCollabProviderOperationResult: vi.fn(),
     updateProviders: vi.fn(),
     updateActiveProvider: vi.fn(),
     loadProviders: vi.fn(),
@@ -153,5 +155,28 @@ describe('useSettingsWindowCallbacks', () => {
     window.updateRemoteCollabConfig?.(JSON.stringify(config));
 
     expect(deps.setRemoteCollabConfig).toHaveBeenCalledWith(config);
+  });
+
+  it('writes debug snapshot and provider operation result when remote debug callbacks are received', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    const snapshot = {
+      recentRequests: [{ requestId: 'req-1' }],
+      recentErrors: [{ providerId: 'telegram', message: 'timeout' }],
+      recentActions: [{ providerId: 'telegram', actionKey: 'test_connection' }],
+    };
+    const operationResult = {
+      operationType: 'test',
+      providerId: 'telegram',
+      actionKey: 'send_test_message',
+      result: { message: 'ok' },
+    };
+
+    window.updateRemoteCollabDebugSnapshot?.(JSON.stringify(snapshot));
+    window.updateRemoteCollabProviderOperationResult?.(JSON.stringify(operationResult));
+
+    expect(deps.setRemoteCollabDebugSnapshot).toHaveBeenCalledWith(snapshot);
+    expect(deps.setRemoteCollabProviderOperationResult).toHaveBeenCalledWith(operationResult);
   });
 });

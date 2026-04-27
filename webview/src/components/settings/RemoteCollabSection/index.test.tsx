@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import RemoteCollabSection from './index';
-import type { RemoteCollabConfig } from '../hooks/useRemoteCollabSettings';
+import type {
+  RemoteCollabConfig,
+  RemoteCollabDebugSnapshot,
+} from '../hooks/useRemoteCollabSettings';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -9,9 +12,9 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const createConfig = (): RemoteCollabConfig => ({
-  enabled: true,
-  telegram: {
+const createConfig = (): RemoteCollabConfig => {
+  const telegram = {
+    enabled: true,
     botToken: 'bot-token',
     botUsername: 'cc_gui_bot',
     chatId: '42',
@@ -24,7 +27,64 @@ const createConfig = (): RemoteCollabConfig => ({
     connectionStatus: 'connected',
     lastError: '',
     currentInstanceReceivesUpdates: true,
-  },
+  };
+
+  return {
+    enabled: true,
+    debug: { enabled: false },
+    interactiveProviderId: 'telegram',
+    notifyProviderIds: ['telegram'],
+    providerOptions: [
+      {
+        providerId: 'telegram',
+        displayName: 'Telegram',
+        description: 'Inline chat collaboration',
+        capabilities: ['TASK_EVENT_PUSH', 'INLINE_ACTION_CALLBACK'],
+        registered: true,
+        enabled: true,
+        connectionStatus: 'connected',
+        config: telegram,
+        currentInstanceReceivesUpdates: true,
+      },
+      {
+        providerId: 'gotify_web',
+        displayName: 'Gotify + Web',
+        description: 'Workspace based collaboration',
+        capabilities: ['TASK_EVENT_PUSH', 'RESULT_POLLING'],
+        registered: false,
+        enabled: false,
+        connectionStatus: 'disabled',
+        config: {
+          enabled: false,
+          serverUrl: '',
+          apiToken: '',
+          workspaceBaseUrl: '',
+          resultPollIntervalSeconds: 3,
+          connectionStatus: 'disabled',
+          lastError: '',
+        },
+      },
+    ],
+    providers: {
+      telegram,
+      gotify_web: {
+        enabled: false,
+        serverUrl: '',
+        apiToken: '',
+        workspaceBaseUrl: '',
+        resultPollIntervalSeconds: 3,
+        connectionStatus: 'disabled',
+        lastError: '',
+      },
+    },
+    telegram,
+  };
+};
+
+const createDebugSnapshot = (): RemoteCollabDebugSnapshot => ({
+  recentRequests: [{ requestId: 'req-1' }, { requestId: 'req-2' }],
+  recentErrors: [{ message: 'timeout' }],
+  recentActions: [{ actionKey: 'test_connection' }],
 });
 
 describe('RemoteCollabSection', () => {
@@ -32,15 +92,24 @@ describe('RemoteCollabSection', () => {
     render(
       <RemoteCollabSection
         remoteCollabConfig={createConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
         onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
         onSaveTelegramConfig={vi.fn()}
         onStartTelegramBinding={vi.fn()}
         onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
       />
     );
 
     expect(screen.getByRole('heading', { name: 'Remote Collaboration' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Telegram Settings' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Supported Providers' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Connection Status' })).toBeTruthy();
     expect(screen.getByDisplayValue('CC GUI Telegram test message')).toBeTruthy();
   });
@@ -53,22 +122,30 @@ describe('RemoteCollabSection', () => {
     render(
       <RemoteCollabSection
         remoteCollabConfig={createConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
         onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
         onSaveTelegramConfig={onSaveTelegramConfig}
         onStartTelegramBinding={onStartTelegramBinding}
         onSendRemoteTestMessage={onSendRemoteTestMessage}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
       />
     );
 
     fireEvent.change(screen.getByPlaceholderText('123456:ABCDEF...'), {
       target: { value: 'new-token' },
     });
-    fireEvent.change(screen.getByRole('spinbutton'), {
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], {
       target: { value: '5' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save Telegram settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start Telegram binding' }));
-    fireEvent.change(screen.getByRole('textbox'), {
+    fireEvent.change(screen.getByDisplayValue('CC GUI Telegram test message'), {
       target: { value: 'Remote ping' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send test message' }));
@@ -81,5 +158,119 @@ describe('RemoteCollabSection', () => {
     );
     expect(onStartTelegramBinding).toHaveBeenCalledTimes(1);
     expect(onSendRemoteTestMessage).toHaveBeenCalledWith('Remote ping');
+  });
+
+  it('shows debug controls and refreshes snapshot when debug mode is enabled', () => {
+    const onDebugEnabledChange = vi.fn();
+    const onRefreshDebugSnapshot = vi.fn();
+    const config = createConfig();
+    config.debug.enabled = true;
+
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={config}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={{
+          operationType: 'test',
+          providerId: 'telegram',
+          actionKey: 'send_test_message',
+          result: {
+            message: 'sent',
+          },
+        }}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={onDebugEnabledChange}
+        onRefreshDebugSnapshot={onRefreshDebugSnapshot}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Enable remote debug tools'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh debug snapshot' }));
+
+    expect(screen.getByText('Recent request count')).toBeTruthy();
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByText('Last provider action')).toBeTruthy();
+    expect(screen.getByText('telegram / send_test_message')).toBeTruthy();
+    expect(onDebugEnabledChange).toHaveBeenCalledWith(false);
+    expect(onRefreshDebugSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows provider cards and saves gotify web settings through generic provider action', () => {
+    const onSaveRemoteCollabProviderConfig = vi.fn();
+
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={createConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={onSaveRemoteCollabProviderConfig}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText('Telegram').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Gotify + Web').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByPlaceholderText('https://gotify.example.com'), {
+      target: { value: 'https://gotify.example.com' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('https://workspace.example.com'), {
+      target: { value: 'https://workspace.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Gotify/Web settings' }));
+
+    expect(onSaveRemoteCollabProviderConfig).toHaveBeenCalledWith(
+      'gotify_web',
+      expect.objectContaining({
+        serverUrl: 'https://gotify.example.com',
+        workspaceBaseUrl: 'https://workspace.example.com',
+      })
+    );
+  });
+
+  it('saves routing policy from the shared policy panel', () => {
+    const onSaveRemoteCollabRoutingPolicy = vi.fn();
+
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={createConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={onSaveRemoteCollabRoutingPolicy}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Interactive provider: Gotify + Web'));
+    fireEvent.click(screen.getByLabelText('Notify provider: Gotify + Web'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing policy' }));
+
+    expect(onSaveRemoteCollabRoutingPolicy).toHaveBeenCalledWith({
+      interactiveProviderId: 'gotify_web',
+      notifyProviderIds: ['telegram', 'gotify_web'],
+    });
   });
 });

@@ -5,7 +5,11 @@ import type { ProviderConfig, CodexProviderConfig } from '../../../types/provide
 import type { AgentConfig } from '../../../types/agent';
 import type { PromptConfig } from '../../../types/prompt';
 import type { TaskReminderConfig } from '../../../types/taskReminder';
-import type { RemoteCollabConfig } from './useRemoteCollabSettings';
+import type {
+  RemoteCollabConfig,
+  RemoteCollabDebugSnapshot,
+  RemoteCollabProviderOperationResult,
+} from './useRemoteCollabSettings';
 import {
   mergeLegacySoundConfig,
   normalizeTaskReminderConfig,
@@ -47,6 +51,8 @@ export interface SettingsWindowCallbacksDeps {
   setRemoteCollabConfig?: (
     config: RemoteCollabConfig | ((prev: RemoteCollabConfig) => RemoteCollabConfig)
   ) => void;
+  setRemoteCollabDebugSnapshot?: (snapshot: RemoteCollabDebugSnapshot) => void;
+  setRemoteCollabProviderOperationResult?: (result: RemoteCollabProviderOperationResult) => void;
 
   // Hook functions
   updateProviders: (providers: ProviderConfig[]) => void;
@@ -296,6 +302,30 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
+    /**
+     * 调试快照用于 Remote Collab 调试面板的只读展示，因此桥接层只负责透传 JSON。
+     */
+    window.updateRemoteCollabDebugSnapshot = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setRemoteCollabDebugSnapshot?.(data);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse remote collab debug snapshot:', error);
+      }
+    };
+
+    /**
+     * 记录最近一次 provider 测试/动作结果，便于设置页调试面板展示执行反馈。
+     */
+    window.updateRemoteCollabProviderOperationResult = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setRemoteCollabProviderOperationResult?.(data);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse remote collab provider operation result:', error);
+      }
+    };
+
     // Agent callbacks
     const previousUpdateAgents = window.updateAgents;
     window.updateAgents = (jsonStr: string) => {
@@ -458,6 +488,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;
       window.updateRemoteCollabConfig = undefined;
+      window.updateRemoteCollabDebugSnapshot = undefined;
+      window.updateRemoteCollabProviderOperationResult = undefined;
       window.updateCommitGenerationEnabled = undefined;
       window.updateStatusBarWidgetEnabled = undefined;
       window.updateAgents = previousUpdateAgents;

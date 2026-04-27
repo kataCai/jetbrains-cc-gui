@@ -55,6 +55,12 @@ export {
 } from './useRemoteCollabSettings';
 export type {
   RemoteCollabConfig,
+  RemoteCollabDebugConfig,
+  RemoteCollabDebugSnapshot,
+  RemoteCollabRoutingPolicy,
+  RemoteCollabProviderOption,
+  RemoteCollabProviderOperationResult,
+  GotifyWebRemoteCollabConfig,
   TelegramRemoteCollabConfig,
   UseRemoteCollabSettingsReturn,
 } from './useRemoteCollabSettings';

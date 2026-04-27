@@ -7,6 +7,7 @@ import com.github.claudecodegui.model.PromptScope;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.intellij.openapi.diagnostic.Logger;
@@ -21,6 +22,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -40,7 +43,13 @@ public class CodemossSettingsService {
     private static final String TASK_REMINDER_KEY = "taskReminder";
     private static final String SOUND_NOTIFICATION_KEY = "soundNotification";
     private static final String REMOTE_COLLAB_KEY = "remoteCollab";
+    private static final String DEBUG_KEY = "debug";
+    private static final String ENABLED_KEY = "enabled";
+    private static final String INTERACTIVE_PROVIDER_ID_KEY = "interactiveProviderId";
+    private static final String NOTIFY_PROVIDER_IDS_KEY = "notifyProviderIds";
+    private static final String PROVIDERS_KEY = "providers";
     private static final String TELEGRAM_KEY = "telegram";
+    private static final String GOTIFY_WEB_KEY = "gotify_web";
 
     private final Gson gson;
 
@@ -1283,10 +1292,74 @@ public class CodemossSettingsService {
     }
 
     /**
+     * Check whether remote collaboration debug tools are enabled.
+     */
+    public boolean isRemoteCollabDebugEnabled() throws IOException {
+        return getRemoteCollabConfig()
+                .getAsJsonObject(DEBUG_KEY)
+                .get(ENABLED_KEY)
+                .getAsBoolean();
+    }
+
+    /**
+     * Persist the debug mode switch for remote collaboration.
+     * 这里只控制调试工具显隐，不改变正常远程协作链路是否启用。
+     */
+    public void setRemoteCollabDebugEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject remoteCollab = ensureRemoteCollabConfig(config);
+        remoteCollab.getAsJsonObject(DEBUG_KEY).addProperty(ENABLED_KEY, enabled);
+        writeConfig(config);
+    }
+
+    /**
+     * 保存远程协作公共路由策略。
+     * 这里只更新 interactiveProviderId / notifyProviderIds，避免 provider 细项配置被整棵覆盖。
+     */
+    public void saveRemoteCollabRoutingPolicy(String interactiveProviderId, JsonArray notifyProviderIds) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject remoteCollab = ensureRemoteCollabConfig(config);
+        JsonObject routingSource = new JsonObject();
+        routingSource.addProperty(
+            INTERACTIVE_PROVIDER_ID_KEY,
+            normalizeString(interactiveProviderId, TELEGRAM_KEY)
+        );
+        routingSource.add(
+            NOTIFY_PROVIDER_IDS_KEY,
+            notifyProviderIds == null ? new JsonArray() : notifyProviderIds.deepCopy()
+        );
+        remoteCollab.addProperty(
+            INTERACTIVE_PROVIDER_ID_KEY,
+            normalizeString(interactiveProviderId, TELEGRAM_KEY)
+        );
+        remoteCollab.add(
+            NOTIFY_PROVIDER_IDS_KEY,
+            normalizeNotifyProviderIds(routingSource, remoteCollab.get(INTERACTIVE_PROVIDER_ID_KEY).getAsString())
+        );
+        writeConfig(config);
+    }
+
+    /**
      * Get canonical Telegram configuration subtree.
      */
     public JsonObject getTelegramConfig() throws IOException {
-        return getRemoteCollabConfig().getAsJsonObject(TELEGRAM_KEY).deepCopy();
+        return getRemoteCollabConfig()
+                .getAsJsonObject(PROVIDERS_KEY)
+                .getAsJsonObject(TELEGRAM_KEY)
+                .deepCopy();
+    }
+
+    /**
+     * Get canonical provider configuration subtree by providerId.
+     * 当前阶段主要给设置页的通用 provider 配置保存入口使用，避免每新增一种方案都再加一组专用 getter/setter。
+     */
+    public JsonObject getRemoteCollabProviderConfig(String providerId) throws IOException {
+        JsonObject providers = getRemoteCollabConfig().getAsJsonObject(PROVIDERS_KEY);
+        String normalizedProviderId = normalizeString(providerId, "");
+        if (!providers.has(normalizedProviderId) || !providers.get(normalizedProviderId).isJsonObject()) {
+            return new JsonObject();
+        }
+        return providers.getAsJsonObject(normalizedProviderId).deepCopy();
     }
 
     /**
@@ -1295,7 +1368,24 @@ public class CodemossSettingsService {
     public void saveTelegramConfig(JsonObject telegramConfig) throws IOException {
         JsonObject config = readConfig();
         JsonObject remoteCollab = ensureRemoteCollabConfig(config);
-        remoteCollab.add(TELEGRAM_KEY, normalizeTelegramConfig(telegramConfig));
+        remoteCollab.getAsJsonObject(PROVIDERS_KEY).add(TELEGRAM_KEY, normalizeTelegramConfig(telegramConfig));
+        writeConfig(config);
+    }
+
+    /**
+     * Save provider configuration subtree.
+     * 已知 provider 走规范化逻辑，未知 provider 先按对象深拷贝保留，避免实验性扩展点被当前实现抹掉。
+     */
+    public void saveRemoteCollabProviderConfig(String providerId, JsonObject providerConfig) throws IOException {
+        String normalizedProviderId = normalizeString(providerId, "");
+        if (normalizedProviderId.isEmpty()) {
+            throw new IllegalArgumentException("providerId cannot be blank");
+        }
+
+        JsonObject config = readConfig();
+        JsonObject providers = ensureRemoteCollabConfig(config).getAsJsonObject(PROVIDERS_KEY);
+        JsonObject normalizedConfig = normalizeProviderConfig(normalizedProviderId, providerConfig);
+        providers.add(normalizedProviderId, normalizedConfig);
         writeConfig(config);
     }
 
@@ -1459,23 +1549,44 @@ public class CodemossSettingsService {
             return normalized;
         }
 
-        if (source.has("enabled") && !source.get("enabled").isJsonNull()) {
-            normalized.addProperty("enabled", source.get("enabled").getAsBoolean());
+        if (source.has(ENABLED_KEY) && !source.get(ENABLED_KEY).isJsonNull()) {
+            normalized.addProperty(ENABLED_KEY, source.get(ENABLED_KEY).getAsBoolean());
         }
 
-        JsonObject telegramSource = source.has(TELEGRAM_KEY) && source.get(TELEGRAM_KEY).isJsonObject()
-            ? source.getAsJsonObject(TELEGRAM_KEY)
-            : null;
-        normalized.add(TELEGRAM_KEY, normalizeTelegramConfig(telegramSource));
+        JsonObject providers = createDefaultProviderConfigs();
+        JsonObject providerSource = getOptionalObject(source, PROVIDERS_KEY);
+        JsonObject telegramSource = getOptionalObject(providerSource, TELEGRAM_KEY);
+        if (telegramSource == null) {
+            telegramSource = getOptionalObject(source, TELEGRAM_KEY);
+        }
+        JsonObject gotifyWebSource = getOptionalObject(providerSource, GOTIFY_WEB_KEY);
+        if (gotifyWebSource == null) {
+            gotifyWebSource = getOptionalObject(source, GOTIFY_WEB_KEY);
+        }
+
+        providers.add(TELEGRAM_KEY, normalizeTelegramConfig(telegramSource));
+        providers.add(GOTIFY_WEB_KEY, normalizeGotifyWebConfig(gotifyWebSource));
+        mergeUnknownProviderConfigs(providerSource, providers);
+        normalized.add(PROVIDERS_KEY, providers);
+
+        JsonObject debugSource = getOptionalObject(source, DEBUG_KEY);
+        normalized.add(DEBUG_KEY, normalizeRemoteCollabDebugConfig(debugSource));
+        normalized.addProperty(INTERACTIVE_PROVIDER_ID_KEY, normalizeString(getOptionalString(source, INTERACTIVE_PROVIDER_ID_KEY), TELEGRAM_KEY));
+        normalized.add(NOTIFY_PROVIDER_IDS_KEY, normalizeNotifyProviderIds(source, normalized.get(INTERACTIVE_PROVIDER_ID_KEY).getAsString()));
         return normalized;
     }
 
+    /**
+     * 统一兼容旧版 Telegram 配置和新版 provider 配置。
+     * 这里保留 `saveTelegramConfig/getTelegramConfig` 兼容入口，避免 Telegram 迁移到 provider 前影响既有调用链。
+     */
     private JsonObject normalizeTelegramConfig(JsonObject source) {
         JsonObject normalized = createDefaultTelegramConfig();
         if (source == null) {
             return normalized;
         }
 
+        copyBooleanProperty(source, normalized, ENABLED_KEY);
         copyStringProperty(source, normalized, "botToken");
         copyStringProperty(source, normalized, "botUsername");
         copyStringProperty(source, normalized, "chatId");
@@ -1484,18 +1595,49 @@ public class CodemossSettingsService {
         copyStringProperty(source, normalized, "bindingToken");
         copyStringProperty(source, normalized, "connectionStatus");
         copyStringProperty(source, normalized, "lastError");
-
-        if (source.has("pollingEnabled") && !source.get("pollingEnabled").isJsonNull()) {
-            normalized.addProperty("pollingEnabled", source.get("pollingEnabled").getAsBoolean());
-        }
-        if (source.has("singleActive") && !source.get("singleActive").isJsonNull()) {
-            normalized.addProperty("singleActive", source.get("singleActive").getAsBoolean());
-        }
-        if (source.has("pollIntervalSeconds") && !source.get("pollIntervalSeconds").isJsonNull()) {
-            int interval = Math.max(1, source.get("pollIntervalSeconds").getAsInt());
-            normalized.addProperty("pollIntervalSeconds", interval);
-        }
+        copyBooleanProperty(source, normalized, "pollingEnabled");
+        copyBooleanProperty(source, normalized, "singleActive");
+        copyPositiveIntProperty(source, normalized, "pollIntervalSeconds");
         return normalized;
+    }
+
+    /**
+     * Gotify + Web 方案当前仍未真正接线，但配置模型需要先准备好默认值与迁移规则，
+     * 这样后续接入 handler / UI / provider 时无需再次改动配置存储结构。
+     */
+    private JsonObject normalizeGotifyWebConfig(JsonObject source) {
+        JsonObject normalized = createDefaultGotifyWebConfig();
+        if (source == null) {
+            return normalized;
+        }
+
+        copyBooleanProperty(source, normalized, ENABLED_KEY);
+        copyStringProperty(source, normalized, "serverUrl");
+        copyStringProperty(source, normalized, "apiToken");
+        copyStringProperty(source, normalized, "workspaceBaseUrl");
+        copyStringProperty(source, normalized, "connectionStatus");
+        copyStringProperty(source, normalized, "lastError");
+        copyPositiveIntProperty(source, normalized, "resultPollIntervalSeconds");
+        return normalized;
+    }
+
+    private JsonObject normalizeRemoteCollabDebugConfig(JsonObject source) {
+        JsonObject normalized = createDefaultRemoteCollabDebugConfig();
+        if (source == null) {
+            return normalized;
+        }
+        copyBooleanProperty(source, normalized, ENABLED_KEY);
+        return normalized;
+    }
+
+    private JsonObject normalizeProviderConfig(String providerId, JsonObject providerConfig) {
+        if (TELEGRAM_KEY.equals(providerId)) {
+            return normalizeTelegramConfig(providerConfig);
+        }
+        if (GOTIFY_WEB_KEY.equals(providerId)) {
+            return normalizeGotifyWebConfig(providerConfig);
+        }
+        return providerConfig == null ? new JsonObject() : providerConfig.deepCopy();
     }
 
     private void copyStringProperty(JsonObject source, JsonObject target, String key) {
@@ -1506,15 +1648,48 @@ public class CodemossSettingsService {
         target.addProperty(key, value == null ? "" : value);
     }
 
+    private void copyBooleanProperty(JsonObject source, JsonObject target, String key) {
+        if (!source.has(key) || source.get(key).isJsonNull()) {
+            return;
+        }
+        target.addProperty(key, source.get(key).getAsBoolean());
+    }
+
+    private void copyPositiveIntProperty(JsonObject source, JsonObject target, String key) {
+        if (!source.has(key) || source.get(key).isJsonNull()) {
+            return;
+        }
+        target.addProperty(key, Math.max(1, source.get(key).getAsInt()));
+    }
+
     private JsonObject createDefaultRemoteCollabConfig() {
         JsonObject remoteCollab = new JsonObject();
-        remoteCollab.addProperty("enabled", false);
-        remoteCollab.add(TELEGRAM_KEY, createDefaultTelegramConfig());
+        remoteCollab.addProperty(ENABLED_KEY, false);
+        remoteCollab.add(DEBUG_KEY, createDefaultRemoteCollabDebugConfig());
+        remoteCollab.addProperty(INTERACTIVE_PROVIDER_ID_KEY, TELEGRAM_KEY);
+        JsonArray notifyProviderIds = new JsonArray();
+        notifyProviderIds.add(TELEGRAM_KEY);
+        remoteCollab.add(NOTIFY_PROVIDER_IDS_KEY, notifyProviderIds);
+        remoteCollab.add(PROVIDERS_KEY, createDefaultProviderConfigs());
         return remoteCollab;
+    }
+
+    private JsonObject createDefaultRemoteCollabDebugConfig() {
+        JsonObject debug = new JsonObject();
+        debug.addProperty(ENABLED_KEY, false);
+        return debug;
+    }
+
+    private JsonObject createDefaultProviderConfigs() {
+        JsonObject providers = new JsonObject();
+        providers.add(TELEGRAM_KEY, createDefaultTelegramConfig());
+        providers.add(GOTIFY_WEB_KEY, createDefaultGotifyWebConfig());
+        return providers;
     }
 
     private JsonObject createDefaultTelegramConfig() {
         JsonObject telegram = new JsonObject();
+        telegram.addProperty(ENABLED_KEY, true);
         telegram.addProperty("botToken", "");
         telegram.addProperty("botUsername", "");
         telegram.addProperty("chatId", "");
@@ -1527,5 +1702,75 @@ public class CodemossSettingsService {
         telegram.addProperty("connectionStatus", "disabled");
         telegram.addProperty("lastError", "");
         return telegram;
+    }
+
+    private JsonObject createDefaultGotifyWebConfig() {
+        JsonObject gotifyWeb = new JsonObject();
+        gotifyWeb.addProperty(ENABLED_KEY, false);
+        gotifyWeb.addProperty("serverUrl", "");
+        gotifyWeb.addProperty("apiToken", "");
+        gotifyWeb.addProperty("workspaceBaseUrl", "");
+        gotifyWeb.addProperty("resultPollIntervalSeconds", 3);
+        gotifyWeb.addProperty("connectionStatus", "disabled");
+        gotifyWeb.addProperty("lastError", "");
+        return gotifyWeb;
+    }
+
+    /**
+     * 保留未知 provider 配置，避免当前阶段的配置升级把后续扩展点或手工写入的实验配置直接丢掉。
+     */
+    private void mergeUnknownProviderConfigs(JsonObject sourceProviders, JsonObject targetProviders) {
+        if (sourceProviders == null) {
+            return;
+        }
+        for (Map.Entry<String, JsonElement> entry : sourceProviders.entrySet()) {
+            String providerId = normalizeString(entry.getKey(), "");
+            if (providerId.isEmpty() || targetProviders.has(providerId) || !entry.getValue().isJsonObject()) {
+                continue;
+            }
+            targetProviders.add(providerId, entry.getValue().getAsJsonObject().deepCopy());
+        }
+    }
+
+    private JsonArray normalizeNotifyProviderIds(JsonObject source, String interactiveProviderId) {
+        LinkedHashSet<String> normalizedIds = new LinkedHashSet<>();
+        if (source != null && source.has(NOTIFY_PROVIDER_IDS_KEY) && source.get(NOTIFY_PROVIDER_IDS_KEY).isJsonArray()) {
+            for (JsonElement element : source.getAsJsonArray(NOTIFY_PROVIDER_IDS_KEY)) {
+                if (element == null || element.isJsonNull()) {
+                    continue;
+                }
+                String providerId = normalizeString(element.getAsString(), "");
+                if (!providerId.isEmpty()) {
+                    normalizedIds.add(providerId);
+                }
+            }
+        }
+        if (normalizedIds.isEmpty()) {
+            normalizedIds.add(normalizeString(interactiveProviderId, TELEGRAM_KEY));
+        }
+        JsonArray notifyProviderIds = new JsonArray();
+        for (String providerId : new ArrayList<>(normalizedIds)) {
+            notifyProviderIds.add(providerId);
+        }
+        return notifyProviderIds;
+    }
+
+    private JsonObject getOptionalObject(JsonObject source, String key) {
+        if (source == null || !source.has(key) || source.get(key).isJsonNull() || !source.get(key).isJsonObject()) {
+            return null;
+        }
+        return source.getAsJsonObject(key);
+    }
+
+    private String getOptionalString(JsonObject source, String key) {
+        if (source == null || !source.has(key) || source.get(key).isJsonNull()) {
+            return "";
+        }
+        return source.get(key).getAsString();
+    }
+
+    private String normalizeString(String value, String defaultValue) {
+        String normalized = value == null ? "" : value.trim();
+        return normalized.isEmpty() ? defaultValue : normalized;
     }
 }

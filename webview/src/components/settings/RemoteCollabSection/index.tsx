@@ -1,36 +1,67 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { RemoteCollabConfig, TelegramRemoteCollabConfig } from '../hooks/useRemoteCollabSettings';
+import RemoteDebugSection from '../RemoteDebugSection';
+import type {
+  GotifyWebRemoteCollabConfig,
+  RemoteCollabConfig,
+  RemoteCollabDebugSnapshot,
+  RemoteCollabProviderOperationResult,
+  RemoteCollabRoutingPolicy,
+  TelegramRemoteCollabConfig,
+} from '../hooks/useRemoteCollabSettings';
+import ProviderList from './ProviderList';
+import RoutingPolicyPanel from './RoutingPolicyPanel';
 import styles from './style.module.less';
 
 interface RemoteCollabSectionProps {
   remoteCollabConfig: RemoteCollabConfig;
+  remoteCollabDebugSnapshot: RemoteCollabDebugSnapshot;
+  remoteCollabProviderOperationResult: RemoteCollabProviderOperationResult | null;
   onEnabledChange: (enabled: boolean) => void;
+  onSaveRemoteCollabRoutingPolicy: (policy: RemoteCollabRoutingPolicy) => void;
+  onSaveRemoteCollabProviderConfig: (providerId: string, config: unknown) => void;
   onSaveTelegramConfig: (telegram: TelegramRemoteCollabConfig) => void;
   onStartTelegramBinding: () => void;
   onSendRemoteTestMessage: (message: string) => void;
+  onTestRemoteCollabProvider: (providerId: string, actionKey?: string, request?: Record<string, unknown>) => void;
+  onRunRemoteCollabProviderAction: (providerId: string, actionKey: string, request?: Record<string, unknown>) => void;
+  onDebugEnabledChange: (enabled: boolean) => void;
+  onRefreshDebugSnapshot: () => void;
 }
 
 /**
  * 远程协作设置区块。
- * 这里只维护表单草稿态和展示逻辑，真正的配置落盘与绑定动作都通过回调交给 Hook/后端桥接处理。
+ * 当前阶段已经拆出“公共路由策略 + provider 列表 + Telegram/Gotify 表单 + 调试面板”，
+ * 让多方案骨架与每个 provider 的细项配置保持解耦。
  */
 const RemoteCollabSection = ({
   remoteCollabConfig,
+  remoteCollabDebugSnapshot,
+  remoteCollabProviderOperationResult,
   onEnabledChange,
+  onSaveRemoteCollabRoutingPolicy,
+  onSaveRemoteCollabProviderConfig,
   onSaveTelegramConfig,
   onStartTelegramBinding,
   onSendRemoteTestMessage,
+  onTestRemoteCollabProvider,
+  onRunRemoteCollabProviderAction,
+  onDebugEnabledChange,
+  onRefreshDebugSnapshot,
 }: RemoteCollabSectionProps) => {
   const { t } = useTranslation();
   const [telegramDraft, setTelegramDraft] = useState<TelegramRemoteCollabConfig>(remoteCollabConfig.telegram);
+  const [gotifyDraft, setGotifyDraft] = useState<GotifyWebRemoteCollabConfig>(remoteCollabConfig.providers.gotify_web);
   const [testMessage, setTestMessage] = useState('CC GUI Telegram test message');
 
-  // 当后端推送了新的运行时状态（如绑定成功、当前实例是否接收更新）时，
-  // 需要回填到本地草稿，避免设置页还停留在旧值。
+  // 后端回推运行时配置后，需要回填本地草稿，避免用户刚保存后界面仍停留在旧值。
   useEffect(() => {
     setTelegramDraft(remoteCollabConfig.telegram);
   }, [remoteCollabConfig.telegram]);
+
+  useEffect(() => {
+    setGotifyDraft(remoteCollabConfig.providers.gotify_web);
+  }, [remoteCollabConfig.providers.gotify_web]);
 
   return (
     <div className={styles.configSection}>
@@ -66,6 +97,78 @@ const RemoteCollabSection = ({
           </label>
         </div>
 
+        <div className={styles.toggleRow}>
+          <div className={styles.toggleText}>
+            <span className={styles.toggleTitle}>
+              {t('settings.remoteCollab.debugModeTitle', { defaultValue: 'Enable remote debug tools' })}
+            </span>
+            <span className={styles.toggleDesc}>
+              {t('settings.remoteCollab.debugModeDesc', {
+                defaultValue: 'Show request snapshots and provider action results for Telegram, Gotify/Web, and future adapters.',
+              })}
+            </span>
+          </div>
+          <label
+            className={styles.toggleSwitch}
+            aria-label={t('settings.remoteCollab.debugModeTitle', { defaultValue: 'Enable remote debug tools' })}
+          >
+            <input
+              type="checkbox"
+              className={styles.toggleInput}
+              checked={remoteCollabConfig.debug.enabled}
+              onChange={(e) => onDebugEnabledChange(e.target.checked)}
+            />
+            <span className={styles.toggleSlider} />
+          </label>
+        </div>
+
+        <div className={styles.summaryGrid}>
+          <div className={styles.summaryCard}>
+            <span className={styles.statusLabel}>
+              {t('settings.remoteCollab.interactiveProvider', { defaultValue: 'Interactive provider' })}
+            </span>
+            <span className={styles.statusValue}>{remoteCollabConfig.interactiveProviderId || '-'}</span>
+          </div>
+          <div className={styles.summaryCard}>
+            <span className={styles.statusLabel}>
+              {t('settings.remoteCollab.notifyProviders', { defaultValue: 'Notify providers' })}
+            </span>
+            <span className={styles.statusValue}>{remoteCollabConfig.notifyProviderIds.join(', ') || '-'}</span>
+          </div>
+        </div>
+
+        <RoutingPolicyPanel
+          providerOptions={remoteCollabConfig.providerOptions}
+          interactiveProviderId={remoteCollabConfig.interactiveProviderId}
+          notifyProviderIds={remoteCollabConfig.notifyProviderIds}
+          onSave={onSaveRemoteCollabRoutingPolicy}
+        />
+      </div>
+
+      <div className={styles.panel}>
+        <h4 className={styles.panelTitle}>
+          {t('settings.remoteCollab.providersPanel', { defaultValue: 'Supported Providers' })}
+        </h4>
+        <ProviderList providerOptions={remoteCollabConfig.providerOptions} />
+      </div>
+
+      {remoteCollabConfig.debug.enabled && (
+        <div className={styles.panel}>
+          <RemoteDebugSection
+            debugSnapshot={remoteCollabDebugSnapshot}
+            providerOperationResult={remoteCollabProviderOperationResult}
+            telegramConfig={telegramDraft}
+            gotifyConfig={gotifyDraft}
+            onStartTelegramBinding={onStartTelegramBinding}
+            onSendRemoteTestMessage={onSendRemoteTestMessage}
+            onTestRemoteCollabProvider={onTestRemoteCollabProvider}
+            onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
+            onRefresh={onRefreshDebugSnapshot}
+          />
+        </div>
+      )}
+
+      <div className={styles.panel}>
         <div className={styles.toggleRow}>
           <div className={styles.toggleText}>
             <span className={styles.toggleTitle}>
@@ -158,6 +261,66 @@ const RemoteCollabSection = ({
             onClick={onStartTelegramBinding}
           >
             {t('settings.remoteCollab.startBinding', { defaultValue: 'Start Telegram binding' })}
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.panel}>
+        <h4 className={styles.panelTitle}>
+          {t('settings.remoteCollab.gotifyConfig', { defaultValue: 'Gotify/Web Settings' })}
+        </h4>
+        <div className={styles.fieldGrid}>
+          <label className={styles.field}>
+            <span className={styles.label}>{t('settings.remoteCollab.gotifyServerUrl', { defaultValue: 'Gotify server URL' })}</span>
+            <input
+              className={styles.input}
+              type="text"
+              value={gotifyDraft.serverUrl}
+              onChange={(e) => setGotifyDraft((prev) => ({ ...prev, serverUrl: e.target.value }))}
+              placeholder="https://gotify.example.com"
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>{t('settings.remoteCollab.gotifyWorkspaceUrl', { defaultValue: 'Workspace base URL' })}</span>
+            <input
+              className={styles.input}
+              type="text"
+              value={gotifyDraft.workspaceBaseUrl}
+              onChange={(e) => setGotifyDraft((prev) => ({ ...prev, workspaceBaseUrl: e.target.value }))}
+              placeholder="https://workspace.example.com"
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>{t('settings.remoteCollab.gotifyApiToken', { defaultValue: 'API token' })}</span>
+            <input
+              className={styles.input}
+              type="password"
+              value={gotifyDraft.apiToken}
+              onChange={(e) => setGotifyDraft((prev) => ({ ...prev, apiToken: e.target.value }))}
+              placeholder="gotify-token"
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>{t('settings.remoteCollab.gotifyPollInterval', { defaultValue: 'Result poll interval (seconds)' })}</span>
+            <input
+              className={styles.numberInput}
+              type="number"
+              min={1}
+              value={gotifyDraft.resultPollIntervalSeconds}
+              onChange={(e) => setGotifyDraft((prev) => ({
+                ...prev,
+                resultPollIntervalSeconds: Math.max(1, Number(e.target.value) || 1),
+              }))}
+            />
+          </label>
+        </div>
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={`${styles.button} ${styles.primaryButton}`}
+            onClick={() => onSaveRemoteCollabProviderConfig('gotify_web', gotifyDraft)}
+          >
+            {t('settings.remoteCollab.saveGotify', { defaultValue: 'Save Gotify/Web settings' })}
           </button>
         </div>
       </div>

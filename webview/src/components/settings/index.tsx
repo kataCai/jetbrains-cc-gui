@@ -165,11 +165,21 @@ const SettingsView = ({
 
   const {
     remoteCollabConfig,
+    remoteCollabDebugSnapshot,
+    remoteCollabProviderOperationResult,
     setRemoteCollabConfig,
+    setRemoteCollabDebugSnapshot,
+    setRemoteCollabProviderOperationResult,
     handleRemoteCollabEnabledChange,
+    handleRemoteCollabDebugEnabledChange,
+    handleSaveRemoteCollabRoutingPolicy,
+    handleSaveRemoteCollabProviderConfig,
     handleSaveTelegramConfig,
     handleStartTelegramBinding,
     handleSendRemoteTestMessage,
+    handleTestRemoteCollabProvider,
+    handleRunRemoteCollabProviderAction,
+    requestRemoteCollabDebugSnapshot,
   } = useRemoteCollabSettings();
 
   // Use provider management hook
@@ -291,6 +301,8 @@ const SettingsView = ({
     onSendShortcutChangeProp,
     setTaskReminderConfig,
     setRemoteCollabConfig,
+    setRemoteCollabDebugSnapshot,
+    setRemoteCollabProviderOperationResult,
     setCommitGenerationEnabled,
     setStatusBarWidgetEnabled,
   });
@@ -504,10 +516,18 @@ const SettingsView = ({
           <div style={{ display: currentTab === 'remote' ? 'block' : 'none' }}>
             <RemoteCollabSection
               remoteCollabConfig={remoteCollabConfig}
+              remoteCollabDebugSnapshot={remoteCollabDebugSnapshot}
+              remoteCollabProviderOperationResult={remoteCollabProviderOperationResult}
               onEnabledChange={handleRemoteCollabEnabledChange}
+              onSaveRemoteCollabRoutingPolicy={handleSaveRemoteCollabRoutingPolicy}
+              onSaveRemoteCollabProviderConfig={handleSaveRemoteCollabProviderConfig}
               onSaveTelegramConfig={handleSaveTelegramConfig}
               onStartTelegramBinding={handleStartTelegramBinding}
               onSendRemoteTestMessage={handleSendRemoteTestMessage}
+              onTestRemoteCollabProvider={handleTestRemoteCollabProvider}
+              onRunRemoteCollabProviderAction={handleRunRemoteCollabProviderAction}
+              onDebugEnabledChange={handleRemoteCollabDebugEnabledChange}
+              onRefreshDebugSnapshot={requestRemoteCollabDebugSnapshot}
             />
           </div>
 

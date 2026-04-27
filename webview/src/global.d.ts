@@ -311,6 +311,16 @@ interface Window {
   updateRemoteCollabConfig?: (json: string) => void;
 
   /**
+   * Update remote collaboration debug snapshot
+   */
+  updateRemoteCollabDebugSnapshot?: (json: string) => void;
+
+  /**
+   * Update the latest remote collaboration provider operation result
+   */
+  updateRemoteCollabProviderOperationResult?: (json: string) => void;
+
+  /**
    * Update skills list
    */
   updateSkills?: (json: string) => void;

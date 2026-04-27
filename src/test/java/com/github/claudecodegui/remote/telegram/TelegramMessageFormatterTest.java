@@ -118,6 +118,7 @@ public class TelegramMessageFormatterTest {
         );
 
         assertTrue(message.text().contains("Request ID: req-ask"));
+        assertTrue(message.text().contains("Question: Choose how to proceed"));
         assertNotNull(message.replyMarkup());
         JsonArray firstRow = message.replyMarkup().getAsJsonArray("inline_keyboard").get(0).getAsJsonArray();
         assertEquals("Continue", firstRow.get(0).getAsJsonObject().get("text").getAsString());
@@ -148,6 +149,7 @@ public class TelegramMessageFormatterTest {
         );
 
         assertTrue(message.text().contains("Request ID: req-text"));
+        assertTrue(message.text().contains("Question: Please add more details"));
         assertNotNull(message.replyMarkup());
         assertTrue(message.replyMarkup().get("force_reply").getAsBoolean());
     }

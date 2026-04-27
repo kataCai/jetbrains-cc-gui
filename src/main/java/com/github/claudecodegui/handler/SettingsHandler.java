@@ -70,7 +70,13 @@ public class SettingsHandler extends BaseMessageHandler {
         "test_task_reminder_balloon",
         "browse_sound_file",
         "get_remote_collab_config",
+        "get_remote_collab_debug_snapshot",
         "set_remote_collab_enabled",
+        "set_remote_collab_debug_enabled",
+        "save_remote_collab_routing_policy",
+        "save_remote_collab_provider_config",
+        "test_remote_collab_provider",
+        "run_remote_collab_provider_action",
         "save_telegram_config",
         "start_telegram_binding",
         "send_remote_test_message"
@@ -245,8 +251,26 @@ public class SettingsHandler extends BaseMessageHandler {
             case "get_remote_collab_config":
                 remoteCollabSettingsHandler.handleGetRemoteCollabConfig();
                 return true;
+            case "get_remote_collab_debug_snapshot":
+                remoteCollabSettingsHandler.handleGetRemoteCollabDebugSnapshot();
+                return true;
             case "set_remote_collab_enabled":
                 remoteCollabSettingsHandler.handleSetRemoteCollabEnabled(content);
+                return true;
+            case "set_remote_collab_debug_enabled":
+                remoteCollabSettingsHandler.handleSetRemoteCollabDebugEnabled(content);
+                return true;
+            case "save_remote_collab_routing_policy":
+                remoteCollabSettingsHandler.handleSaveRemoteCollabRoutingPolicy(content);
+                return true;
+            case "save_remote_collab_provider_config":
+                remoteCollabSettingsHandler.handleSaveRemoteCollabProviderConfig(content);
+                return true;
+            case "test_remote_collab_provider":
+                remoteCollabSettingsHandler.handleTestRemoteCollabProvider(content);
+                return true;
+            case "run_remote_collab_provider_action":
+                remoteCollabSettingsHandler.handleRunRemoteCollabProviderAction(content);
                 return true;
             case "save_telegram_config":
                 remoteCollabSettingsHandler.handleSaveTelegramConfig(content);

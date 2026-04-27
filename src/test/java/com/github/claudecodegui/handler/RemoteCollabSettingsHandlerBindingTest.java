@@ -1,8 +1,10 @@
 package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.remote.RemoteCollabService;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.junit.Test;
 
@@ -13,6 +15,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+/**
+ * ?? Telegram ????????????????????????
+ */
 public class RemoteCollabSettingsHandlerBindingTest {
 
     private final Gson gson = new Gson();
@@ -24,6 +29,7 @@ public class RemoteCollabSettingsHandlerBindingTest {
         HandlerContext context = new HandlerContext(null, null, null, settingsService, jsCallback);
         RemoteCollabSettingsHandler handler = new RemoteCollabSettingsHandler(
             context,
+            RemoteCollabService.getInstance(),
             (service, request) -> {
                 JsonObject telegram = service.getTelegramConfig();
                 telegram.addProperty("bindingToken", "bind-token");
@@ -55,6 +61,7 @@ public class RemoteCollabSettingsHandlerBindingTest {
 
         private StubSettingsService() {
             JsonObject telegram = new JsonObject();
+            telegram.addProperty("enabled", true);
             telegram.addProperty("botToken", "bot-token");
             telegram.addProperty("botUsername", "");
             telegram.addProperty("chatId", "");
@@ -66,10 +73,34 @@ public class RemoteCollabSettingsHandlerBindingTest {
             telegram.addProperty("singleActive", true);
             telegram.addProperty("connectionStatus", "disabled");
             telegram.addProperty("lastError", "");
+            telegram.addProperty("currentInstanceReceivesUpdates", false);
+
+            JsonObject gotifyWeb = new JsonObject();
+            gotifyWeb.addProperty("enabled", false);
+            gotifyWeb.addProperty("serverUrl", "");
+            gotifyWeb.addProperty("apiToken", "");
+            gotifyWeb.addProperty("workspaceBaseUrl", "");
+            gotifyWeb.addProperty("resultPollIntervalSeconds", 3);
+            gotifyWeb.addProperty("connectionStatus", "disabled");
+            gotifyWeb.addProperty("lastError", "");
+
+            JsonObject providers = new JsonObject();
+            providers.add("telegram", telegram);
+            providers.add("gotify_web", gotifyWeb);
+
+            JsonObject debug = new JsonObject();
+            debug.addProperty("enabled", false);
+
+            JsonArray notifyProviderIds = new JsonArray();
+            notifyProviderIds.add("telegram");
 
             remoteCollab = new JsonObject();
             remoteCollab.addProperty("enabled", false);
-            remoteCollab.add("telegram", telegram);
+            remoteCollab.add("debug", debug);
+            remoteCollab.addProperty("interactiveProviderId", "telegram");
+            remoteCollab.add("notifyProviderIds", notifyProviderIds);
+            remoteCollab.add("providers", providers);
+            remoteCollab.add("telegram", telegram.deepCopy());
         }
 
         @Override
@@ -79,11 +110,12 @@ public class RemoteCollabSettingsHandlerBindingTest {
 
         @Override
         public JsonObject getTelegramConfig() {
-            return remoteCollab.getAsJsonObject("telegram").deepCopy();
+            return remoteCollab.getAsJsonObject("providers").getAsJsonObject("telegram").deepCopy();
         }
 
         @Override
         public void saveTelegramConfig(JsonObject telegramConfig) {
+            remoteCollab.getAsJsonObject("providers").add("telegram", telegramConfig.deepCopy());
             remoteCollab.add("telegram", telegramConfig.deepCopy());
         }
     }

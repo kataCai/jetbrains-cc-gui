@@ -38,6 +38,19 @@
   gap: 12px;
 }
 
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.summaryCard {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg-primary);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -70,6 +83,98 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
+}
+
+.providerGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.routingPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.routingColumns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.routingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.routingOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choiceItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.providerCard {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.providerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.providerName {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.providerStatus {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: lowercase;
+}
+
+.providerDesc {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.providerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.capabilityList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.capabilityTag {
+  border-radius: 999px;
+  background: rgba(29, 78, 216, 0.12);
+  color: #1d4ed8;
+  padding: 4px 8px;
+  font-size: 11px;
 }
 
 .statusCard {

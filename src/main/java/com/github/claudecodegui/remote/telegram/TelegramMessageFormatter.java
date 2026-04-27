@@ -1,10 +1,10 @@
 package com.github.claudecodegui.remote.telegram;
 
+import com.github.claudecodegui.remote.RemoteCollabRequestEnvelope;
 import com.github.claudecodegui.remote.RemotePendingRequest;
 import com.github.claudecodegui.remote.RemoteRequestType;
 import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.nio.file.Path;
@@ -51,26 +51,26 @@ public class TelegramMessageFormatter {
             return null;
         }
 
-        JsonObject payload = request.getPayload();
+        RemoteCollabRequestEnvelope envelope = RemoteCollabRequestEnvelope.fromPendingRequest(request);
         StringBuilder text = new StringBuilder("*CC GUI Action Required*");
-        appendLine(text, "Type", resolveRequestTypeLabel(request.getRequestType()));
-        appendLine(text, "Project", extractProjectName(request.getProjectPath()));
-        appendLine(text, "Session", request.getSessionId());
+        appendLine(text, "Type", resolveEnvelopeTypeLabel(envelope.getRequestType()));
+        appendLine(text, "Project", extractProjectName(envelope.getProjectPath()));
+        appendLine(text, "Session", envelope.getSessionId());
 
         JsonObject replyMarkup = null;
         if (request.getRequestType() == RemoteRequestType.PLAN_APPROVAL) {
-            appendLine(text, "Title", readString(payload, "title"));
+            appendLine(text, "Title", envelope.getSummary());
             replyMarkup = createInlineKeyboard(
                 button("Approve", "tg1:approve:" + request.getRequestId()),
                 button("Reject", "tg1:reject:" + request.getRequestId())
             );
         } else if (request.getRequestType() == RemoteRequestType.ASK_USER_QUESTION) {
-            JsonObject question = extractSingleQuestion(payload);
             appendLine(text, "Request ID", request.getRequestId());
-            appendLine(text, "Question", readQuestionText(question, payload));
-            replyMarkup = createAskReplyMarkup(request.getRequestId(), question);
+            appendLine(text, "Question", envelope.getSummary());
+            replyMarkup = createAskReplyMarkup(request.getRequestId(), envelope);
         } else {
             appendLine(text, "Request ID", request.getRequestId());
+            appendLine(text, "Summary", envelope.getSummary());
         }
         return new TelegramOutgoingMessage(text.toString(), PARSE_MODE_MARKDOWN, replyMarkup);
     }
@@ -82,6 +82,18 @@ public class TelegramMessageFormatter {
             case "waiting_confirm" -> "Waiting for confirmation";
             case "cancelled" -> "Cancelled";
             default -> "Updated";
+        };
+    }
+
+    /**
+     * 统一类型标签优先读取 envelope 中的 provider 无关类型，避免不同通道各自维护枚举映射。
+     */
+    private String resolveEnvelopeTypeLabel(String requestType) {
+        return switch (requestType == null ? "" : requestType) {
+            case "plan_approval" -> "Plan approval";
+            case "ask_user_question" -> "Question";
+            case "task_state_action" -> "Task state action";
+            default -> "Remote action";
         };
     }
 
@@ -135,20 +147,20 @@ public class TelegramMessageFormatter {
         return replyMarkup;
     }
 
-    private JsonObject createAskReplyMarkup(String requestId, JsonObject question) {
-        JsonArray options = readOptions(question);
-        boolean multiSelect = question != null
-            && question.has("multiSelect")
-            && !question.get("multiSelect").isJsonNull()
-            && question.get("multiSelect").getAsBoolean();
-        if (options.size() > 0 && !multiSelect) {
+    /**
+     * 提问类请求统一基于 envelope.actions 生成按钮，后续 provider 扩展时只需补 envelope 映射即可。
+     */
+    private JsonObject createAskReplyMarkup(String requestId, RemoteCollabRequestEnvelope envelope) {
+        if (envelope.getActions().size() > 0) {
             JsonArray row = new JsonArray();
-            for (int optionIndex = 0; optionIndex < options.size(); optionIndex++) {
-                String label = readOptionLabel(options.get(optionIndex));
-                if (!isNotBlank(label)) {
+            for (RemoteCollabRequestEnvelope.Action action : envelope.getActions()) {
+                JsonObject actionPayload = action.getPayload();
+                int questionIndex = readInt(actionPayload, "questionIndex", 0);
+                int optionIndex = readInt(actionPayload, "optionIndex", -1);
+                if (optionIndex < 0 || !isNotBlank(action.getLabel())) {
                     continue;
                 }
-                row.add(button(label, "tg1:choice:" + requestId + ":0:" + optionIndex));
+                row.add(button(action.getLabel(), "tg1:choice:" + requestId + ":" + questionIndex + ":" + optionIndex));
             }
             if (row.size() > 0) {
                 JsonArray rows = new JsonArray();
@@ -172,57 +184,15 @@ public class TelegramMessageFormatter {
         return button;
     }
 
-    private JsonObject extractSingleQuestion(JsonObject payload) {
-        if (payload != null && payload.has("questions") && payload.get("questions").isJsonArray()) {
-            JsonArray questions = payload.getAsJsonArray("questions");
-            if (questions.size() > 0 && questions.get(0).isJsonObject()) {
-                return questions.get(0).getAsJsonObject();
-            }
+    private int readInt(JsonObject payload, String key, int defaultValue) {
+        if (payload == null || !payload.has(key) || payload.get(key).isJsonNull()) {
+            return defaultValue;
         }
-        return payload;
-    }
-
-    private String readQuestionText(JsonObject question, JsonObject fallbackPayload) {
-        String value = readString(question, "question");
-        if (isNotBlank(value)) {
-            return value;
+        try {
+            return payload.get(key).getAsInt();
+        } catch (Exception ignored) {
+            return defaultValue;
         }
-        value = readString(question, "text");
-        if (isNotBlank(value)) {
-            return value;
-        }
-        return readString(fallbackPayload, "question");
-    }
-
-    private JsonArray readOptions(JsonObject question) {
-        if (question == null) {
-            return new JsonArray();
-        }
-        if (question.has("options") && question.get("options").isJsonArray()) {
-            return question.getAsJsonArray("options");
-        }
-        if (question.has("choices") && question.get("choices").isJsonArray()) {
-            return question.getAsJsonArray("choices");
-        }
-        return new JsonArray();
-    }
-
-    private String readOptionLabel(JsonElement option) {
-        if (option == null || option.isJsonNull()) {
-            return null;
-        }
-        if (option.isJsonPrimitive()) {
-            return option.getAsString();
-        }
-        if (!option.isJsonObject()) {
-            return null;
-        }
-        JsonObject jsonObject = option.getAsJsonObject();
-        String label = readString(jsonObject, "label");
-        if (isNotBlank(label)) {
-            return label;
-        }
-        return readString(jsonObject, "value");
     }
 
     private String escapeMarkdown(String value) {
