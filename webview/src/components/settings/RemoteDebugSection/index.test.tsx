@@ -155,10 +155,12 @@ describe('RemoteDebugSection', () => {
         onTestRemoteCollabProvider={vi.fn()}
         onRunRemoteCollabProviderAction={vi.fn()}
         onRefresh={vi.fn()}
+        activeProviderId="telegram"
       /> as any
     );
 
     expect(screen.getByRole('heading', { name: 'Telegram Debug Panel' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Gotify/Web Debug Panel' })).toBeNull();
     expect(screen.getByText('alice')).toBeTruthy();
     expect(screen.getByText('This IDE instance is receiving updates.')).toBeTruthy();
 
@@ -193,10 +195,12 @@ describe('RemoteDebugSection', () => {
         onTestRemoteCollabProvider={onTestRemoteCollabProvider}
         onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
         onRefresh={vi.fn()}
+        activeProviderId="gotify_web"
       /> as any
     );
 
     expect(screen.getByRole('heading', { name: 'Gotify/Web Debug Panel' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Telegram Debug Panel' })).toBeNull();
     expect(screen.getByText('https://workspace.example/request/backend-1')).toBeTruthy();
     expect(screen.getByText('backend-1')).toBeTruthy();
 

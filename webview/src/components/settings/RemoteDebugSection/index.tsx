@@ -16,6 +16,7 @@ interface RemoteDebugSectionProps {
   providerOperationResult: RemoteCollabProviderOperationResult | null;
   telegramConfig: TelegramRemoteCollabConfig;
   gotifyConfig: GotifyWebRemoteCollabConfig;
+  activeProviderId?: string;
   onStartTelegramBinding: () => void;
   onSendRemoteTestMessage: (message: string) => void;
   onTestRemoteCollabProvider: (providerId: string, actionKey?: string, request?: Record<string, unknown>) => void;
@@ -32,6 +33,7 @@ const RemoteDebugSection = ({
   providerOperationResult,
   telegramConfig,
   gotifyConfig,
+  activeProviderId,
   onStartTelegramBinding,
   onSendRemoteTestMessage,
   onTestRemoteCollabProvider,
@@ -39,6 +41,9 @@ const RemoteDebugSection = ({
   onRefresh,
 }: RemoteDebugSectionProps) => {
   const { t } = useTranslation();
+  // 详情态只暴露当前 provider 的调试入口，避免用户在单渠道页看到其他渠道的操作噪音。
+  const showTelegramPanel = !activeProviderId || activeProviderId === 'telegram';
+  const showGotifyPanel = !activeProviderId || activeProviderId === 'gotify_web';
 
   return (
     <div className={styles.section}>
@@ -59,18 +64,22 @@ const RemoteDebugSection = ({
         providerOperationResult={providerOperationResult}
       />
       <div className={styles.activityGrid}>
-        <ProviderDebugPanel
-          telegramConfig={telegramConfig}
-          providerOperationResult={providerOperationResult}
-          onStartTelegramBinding={onStartTelegramBinding}
-          onSendRemoteTestMessage={onSendRemoteTestMessage}
-        />
-        <GotifyDebugPanel
-          gotifyConfig={gotifyConfig}
-          providerOperationResult={providerOperationResult}
-          onTestRemoteCollabProvider={onTestRemoteCollabProvider}
-          onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
-        />
+        {showTelegramPanel && (
+          <ProviderDebugPanel
+            telegramConfig={telegramConfig}
+            providerOperationResult={providerOperationResult}
+            onStartTelegramBinding={onStartTelegramBinding}
+            onSendRemoteTestMessage={onSendRemoteTestMessage}
+          />
+        )}
+        {showGotifyPanel && (
+          <GotifyDebugPanel
+            gotifyConfig={gotifyConfig}
+            providerOperationResult={providerOperationResult}
+            onTestRemoteCollabProvider={onTestRemoteCollabProvider}
+            onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
+          />
+        )}
       </div>
       <DebugActivityPanel debugSnapshot={debugSnapshot} />
     </div>

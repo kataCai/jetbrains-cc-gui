@@ -4,6 +4,51 @@
   gap: 20px;
 }
 
+.detailLayout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detailHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.detailHeaderBack {
+  display: flex;
+  align-items: center;
+}
+
+.detailHeaderText {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detailEyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.detailTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.detailMetaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .sectionTitle {
   margin: 0;
   font-size: 20px;
@@ -49,6 +94,9 @@
   border-radius: 10px;
   padding: 12px;
   background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .field {
@@ -97,6 +145,14 @@
   gap: 14px;
 }
 
+.routingSummaryNote {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: 720px;
+}
+
 .routingColumns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -129,7 +185,7 @@
   background: var(--bg-primary);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .providerHeader {
@@ -137,6 +193,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.providerTitleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .providerName {
@@ -153,6 +215,7 @@
 .providerDesc {
   font-size: 12px;
   color: var(--text-secondary);
+  line-height: 1.5;
 }
 
 .providerMeta {
@@ -161,6 +224,12 @@
   gap: 8px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.roleTagGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .capabilityList {
@@ -175,6 +244,33 @@
   color: #1d4ed8;
   padding: 4px 8px;
   font-size: 11px;
+}
+
+.providerStatusPill {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.roleTag {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.roleTagPrimary {
+  background: rgba(20, 83, 45, 0.14);
+  color: #4ade80;
+}
+
+.roleTagSecondary {
+  background: rgba(29, 78, 216, 0.14);
+  color: #93c5fd;
 }
 
 .statusCard {
@@ -195,6 +291,7 @@
   font-size: 14px;
   font-weight: 600;
   word-break: break-word;
+  line-height: 1.5;
 }
 
 .statusHint {
@@ -275,6 +372,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.providerCardFooter {
+  margin-top: auto;
 }
 
 .button {

@@ -8,7 +8,12 @@ import type {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: Record<string, string>) => options?.defaultValue ?? key,
+    t: (key: string, options?: Record<string, string>) => {
+      const template = options?.defaultValue ?? key;
+      return typeof template === 'string'
+        ? template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => options?.[name] ?? '')
+        : template;
+    },
   }),
 }));
 
@@ -87,8 +92,14 @@ const createDebugSnapshot = (): RemoteCollabDebugSnapshot => ({
   recentActions: [{ actionKey: 'test_connection' }],
 });
 
+const createHubSummaryConfig = (): RemoteCollabConfig => {
+  const config = createConfig();
+  config.notifyProviderIds = ['telegram', 'gotify_web'];
+  return config;
+};
+
 describe('RemoteCollabSection', () => {
-  it('renders readable remote collaboration copy', () => {
+  it('renders hub view first and opens provider detail on demand', () => {
     render(
       <RemoteCollabSection
         remoteCollabConfig={createConfig()}
@@ -108,10 +119,43 @@ describe('RemoteCollabSection', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Remote Collaboration' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Telegram Settings' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Supported Providers' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Telegram Settings' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Connection Status' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Telegram settings' }));
+
+    expect(screen.getByRole('button', { name: 'Back to providers' })).toBeTruthy();
+    expect(screen.getByText('Provider detail')).toBeTruthy();
+    expect(screen.getAllByText('TASK_EVENT_PUSH').length).toBeGreaterThan(0);
+    expect(screen.getByText('INLINE_ACTION_CALLBACK')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Telegram Settings' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Connection Status' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Gotify/Web Settings' })).toBeNull();
     expect(screen.getByDisplayValue('CC GUI Telegram test message')).toBeTruthy();
+  });
+
+  it('shows provider display names in hub summary cards', () => {
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={createHubSummaryConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText('Telegram, Gotify + Web')).toHaveLength(2);
+    expect(screen.queryByText('telegram, gotify_web')).toBeNull();
   });
 
   it('passes edited telegram settings and actions back to the caller', () => {
@@ -136,6 +180,8 @@ describe('RemoteCollabSection', () => {
         onRefreshDebugSnapshot={vi.fn()}
       />
     );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Telegram settings' }));
 
     fireEvent.change(screen.getByPlaceholderText('123456:ABCDEF...'), {
       target: { value: 'new-token' },
@@ -191,6 +237,8 @@ describe('RemoteCollabSection', () => {
       />
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Open Telegram settings' }));
+
     fireEvent.click(screen.getByLabelText('Enable remote debug tools'));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh debug snapshot' }));
 
@@ -226,6 +274,11 @@ describe('RemoteCollabSection', () => {
     expect(screen.getAllByText('Telegram').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Gotify + Web').length).toBeGreaterThan(0);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Open Gotify + Web settings' }));
+
+    expect(screen.getByRole('heading', { name: 'Gotify/Web Settings' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Telegram Settings' })).toBeNull();
+
     fireEvent.change(screen.getByPlaceholderText('https://gotify.example.com'), {
       target: { value: 'https://gotify.example.com' },
     });
@@ -241,6 +294,38 @@ describe('RemoteCollabSection', () => {
         workspaceBaseUrl: 'https://workspace.example.com',
       })
     );
+  });
+
+  it('shows only current provider debug panel inside provider detail', () => {
+    const config = createConfig();
+    config.debug.enabled = true;
+
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={config}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Telegram settings' }));
+    expect(screen.getByRole('heading', { name: 'Telegram Debug Panel' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Gotify/Web Debug Panel' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to providers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Gotify + Web settings' }));
+    expect(screen.getByRole('heading', { name: 'Gotify/Web Debug Panel' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Telegram Debug Panel' })).toBeNull();
   });
 
   it('saves routing policy from the shared policy panel', () => {
@@ -264,6 +349,7 @@ describe('RemoteCollabSection', () => {
       />
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Edit routing' }));
     fireEvent.click(screen.getByLabelText('Interactive provider: Gotify + Web'));
     fireEvent.click(screen.getByLabelText('Notify provider: Gotify + Web'));
     fireEvent.click(screen.getByRole('button', { name: 'Save routing policy' }));
