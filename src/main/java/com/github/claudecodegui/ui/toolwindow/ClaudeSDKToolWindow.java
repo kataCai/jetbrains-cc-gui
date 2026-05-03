@@ -5,6 +5,10 @@ import com.github.claudecodegui.settings.TabStateService;
 import com.github.claudecodegui.startup.BridgePreloader;
 import com.github.claudecodegui.ui.detached.DetachedWindowManager;
 import com.github.claudecodegui.util.PlatformUtils;
+import com.intellij.openapi.actionSystem.ActionGroup;
+import com.intellij.openapi.actionSystem.ActionManager;
+import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.DumbAware;
@@ -12,6 +16,9 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowFactory;
 import com.intellij.openapi.wm.ToolWindowManager;
+import com.intellij.openapi.wm.impl.ToolWindowImpl;
+import com.intellij.openapi.wm.impl.content.BaseLabel;
+import com.intellij.openapi.wm.impl.content.ToolWindowContentUi;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
@@ -22,6 +29,8 @@ import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
@@ -35,8 +44,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Claude SDK chat tool window.
- * Implements DumbAware to allow usage during index building.
+ * Claude SDK 工具窗口。
+ * 负责 CCG 工具窗口的初始化、Tab 恢复、生命周期清理以及工具栏行为组装。
+ * 实现 DumbAware 以支持在 IDE 索引构建期间使用。
  */
 public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
 
@@ -247,23 +257,28 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         }
 
         if (PlatformUtils.isPluginDevMode()) {
-            com.intellij.openapi.actionSystem.AnAction devToolsAction =
-                    com.intellij.openapi.actionSystem.ActionManager.getInstance()
+            AnAction devToolsAction =
+                    ActionManager.getInstance()
                             .getAction("ClaudeCodeGUI.OpenDevToolsAction");
             if (devToolsAction != null) {
                 toolWindow.setTitleActions(java.util.List.of(devToolsAction));
             }
         }
 
-        com.intellij.openapi.actionSystem.AnAction renameTabAction =
-                com.intellij.openapi.actionSystem.ActionManager.getInstance()
+        AnAction renameTabAction =
+                ActionManager.getInstance()
                         .getAction("ClaudeCodeGUI.RenameTabAction");
-        com.intellij.openapi.actionSystem.AnAction detachTabAction =
-                com.intellij.openapi.actionSystem.ActionManager.getInstance()
+        AnAction detachTabAction =
+                ActionManager.getInstance()
                         .getAction("ClaudeCodeGUI.DetachTabAction");
+        AnAction forceRefreshTabAction =
+                ActionManager.getInstance()
+                        .getAction("ClaudeCodeGUI.ForceRefreshTabAction");
 
-        com.intellij.openapi.actionSystem.DefaultActionGroup gearActions =
-                new com.intellij.openapi.actionSystem.DefaultActionGroup();
+        DefaultActionGroup gearActions = new DefaultActionGroup();
+        if (forceRefreshTabAction != null) {
+            gearActions.add(forceRefreshTabAction);
+        }
         if (renameTabAction != null) {
             gearActions.add(renameTabAction);
         }
@@ -271,6 +286,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
             gearActions.add(detachTabAction);
         }
         toolWindow.setAdditionalGearActions(gearActions);
+        installTabPopupMenu(toolWindow, gearActions);
 
         registerProjectCloseListener(project);
 
@@ -331,6 +347,12 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         updateTabCloseableState(contentManager);
     }
 
+    /**
+     * 根据当前 Tab 数量更新可关闭状态。
+     * 仅有多 Tab 场景允许关闭，避免单 Tab 时用户误关闭唯一窗口。
+     *
+     * @param contentManager Tab 内容管理器
+     */
     private void updateTabCloseableState(ContentManager contentManager) {
         int tabCount = contentManager.getContentCount();
         boolean closeable = tabCount > 1;
@@ -340,6 +362,110 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         }
 
         LOG.debug("[TabManager] Updated tab closeable state: count=" + tabCount + ", closeable=" + closeable);
+    }
+
+    /**
+     * 为工具窗口 Tab 头部安装右键菜单。
+     * 当前问题发生时，用户往往只能与页签区域交互，因此这里直接把“强制刷新窗口”等页签动作挂到头部右键，
+     * 作为空白界面场景下的人工恢复入口。该实现依赖 IntelliJ 2024.3 的 ToolWindowContentUi 结构。
+     *
+     * @param toolWindow 当前工具窗口
+     * @param popupActions 页签右键菜单动作组
+     */
+    private void installTabPopupMenu(@NotNull ToolWindow toolWindow, @NotNull ActionGroup popupActions) {
+        if (!(toolWindow instanceof ToolWindowImpl toolWindowImpl)) {
+            return;
+        }
+
+        ToolWindowContentUi contentUi = resolveContentUi(toolWindowImpl);
+        if (contentUi == null) {
+            LOG.warn("[TabPopup] ToolWindowContentUi not found, skipping tab popup installation");
+            return;
+        }
+
+        JComponent tabComponent = contentUi.getTabComponent();
+        if (Boolean.TRUE.equals(tabComponent.getClientProperty("ccg.tab.popup.installed"))) {
+            return;
+        }
+
+        tabComponent.putClientProperty("ccg.tab.popup.installed", Boolean.TRUE);
+        tabComponent.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                showPopupIfNeeded(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                showPopupIfNeeded(e);
+            }
+
+            /**
+             * 在检测到平台弹出触发手势时显示页签右键菜单。
+             * 先尝试将鼠标位置对应的页签设为选中项，保证后续动作始终作用于用户实际右键的页签。
+             *
+             * @param event 鼠标事件
+             */
+            private void showPopupIfNeeded(MouseEvent event) {
+                if (!event.isPopupTrigger()) {
+                    return;
+                }
+
+                selectTabUnderCursor(toolWindow.getContentManager(), tabComponent, event);
+                Content selectedContent = toolWindow.getContentManager().getSelectedContent();
+                if (selectedContent == null) {
+                    return;
+                }
+
+                contentUi.showContextMenu(tabComponent, event.getX(), event.getY(), popupActions, selectedContent);
+                event.consume();
+            }
+        });
+    }
+
+    /**
+     * 解析工具窗口内容 UI。
+     * 该对象由 IntelliJ 平台维护，负责 Tab 头部组件与上下文菜单展示。
+     *
+     * @param toolWindowImpl 具体工具窗口实现
+     * @return 内容 UI；若当前平台实现不可用则返回 null
+     */
+    private ToolWindowContentUi resolveContentUi(@NotNull ToolWindowImpl toolWindowImpl) {
+        try {
+            java.lang.reflect.Field field = ToolWindowImpl.class.getDeclaredField("contentUi");
+            field.setAccessible(true);
+            return (ToolWindowContentUi) field.get(toolWindowImpl);
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
+    /**
+     * 根据鼠标位置尽量切换到被右键命中的页签。
+     * IntelliJ 页签标签组件本身持有 Content 引用，因此优先通过平台标签对象反查实际页签；
+     * 如果当前鼠标位置不在具体标签上，则保留现有选中项。
+     *
+     * @param contentManager 内容管理器
+     * @param tabComponent 页签容器
+     * @param event 鼠标事件
+     */
+    private void selectTabUnderCursor(@NotNull ContentManager contentManager, @NotNull JComponent tabComponent, @NotNull MouseEvent event) {
+        Component hitComponent = SwingUtilities.getDeepestComponentAt(tabComponent, event.getX(), event.getY());
+        if (hitComponent == null) {
+            return;
+        }
+
+        Component current = hitComponent;
+        while (current != null && current != tabComponent) {
+            if (current instanceof BaseLabel label) {
+                Content content = label.getContent();
+                if (content != null && contentManager.getIndexOfContent(content) >= 0) {
+                    contentManager.setSelectedContent(content, true, true);
+                }
+                return;
+            }
+            current = current.getParent();
+        }
     }
 
     private JPanel createLoadingPanel() {
@@ -407,7 +533,9 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         loadingContent.setComponent(firstChatWindow.getContent());
         loadingContent.setDisplayName(firstTabName);
         firstChatWindow.setParentContent(loadingContent);
+        firstChatWindow.setOriginalTabName(firstTabName);
         loadingContent.setDisposer(firstChatWindow::dispose);
+        restoreTabSessionState(tabStateService, 0, firstChatWindow);
 
         for (int i = 1; i < savedTabCount; i++) {
             ClaudeChatWindow chatWindow = new ClaudeChatWindow(project, true);
@@ -415,6 +543,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
 
             Content content = contentFactory.createContent(chatWindow.getContent(), tabName, false);
             chatWindow.setParentContent(content);
+            chatWindow.setOriginalTabName(tabName);
             content.setDisposer(chatWindow::dispose);
             contentManager.addContent(content);
             restoreTabSessionState(tabStateService, i, chatWindow);
@@ -442,6 +571,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
             chatWindow.setOriginalTabName(tabName);
             content.setDisposer(chatWindow::dispose);
             contentManager.addContent(content);
+            restoreTabSessionState(tabStateService, i, chatWindow);
         }
 
         updateTabCloseableState(contentManager);

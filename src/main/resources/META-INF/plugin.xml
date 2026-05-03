@@ -131,6 +131,11 @@
                 class="com.github.claudecodegui.action.tab.DetachTabAction"
                 icon="AllIcons.Actions.MoveToWindow"/>
 
+        <!-- Force Refresh Tab Action -->
+        <action id="ClaudeCodeGUI.ForceRefreshTabAction"
+                class="com.github.claudecodegui.action.tab.ForceRefreshTabAction"
+                icon="AllIcons.Actions.Refresh"/>
+
         <!-- Open DevTools Action for JCEF debugging -->
         <action id="ClaudeCodeGUI.OpenDevToolsAction"
                 class="com.github.claudecodegui.action.dev.OpenDevToolsAction"

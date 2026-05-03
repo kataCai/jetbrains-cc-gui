@@ -42,6 +42,7 @@ import com.github.claudecodegui.taskstate.TaskStateService;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.MessageJsonConverter;
 import com.github.claudecodegui.util.SoundNotificationService;
+import com.github.claudecodegui.ui.toolwindow.TabSessionRestoreState;
 import com.google.gson.JsonObject;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.application.ApplicationManager;
@@ -102,6 +103,7 @@ public class ChatWindowDelegate {
         void setSlashCommandsFetched(boolean fetched);
         void setFetchedSlashCommandsCount(int count);
         void persistTabSessionState();
+        TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest();
     }
 
     private final DelegateHost host;
@@ -478,6 +480,7 @@ public class ChatWindowDelegate {
 
         host.getSessionLifecycleManager().sendCurrentPermissionMode();
         replayCurrentSessionStateToFrontend();
+        triggerPendingSessionRestoreIfNeeded();
         host.persistTabSessionState();
 
         if (pendingQuickFixPrompt != null && pendingQuickFixCallback != null) {
@@ -492,6 +495,23 @@ public class ChatWindowDelegate {
         }
 
         host.getStreamCoalescer().flush(null);
+    }
+
+    /**
+     * 在前端 ready 后按需触发一次待恢复会话加载。
+     * 该逻辑统一承接启动自动恢复和手动强制刷新后的补恢复请求，并通过“消费即清空”避免重复恢复。
+     */
+    private void triggerPendingSessionRestoreIfNeeded() {
+        TabSessionRestoreState.RestoreRequest request = host.consumePendingRestoreRequest();
+        if (request == null) {
+            return;
+        }
+
+        LOG.info("[TabRestore] Triggering pending restore after frontend ready, sessionId="
+                + request.getSessionId()
+                + ", projectPath=" + request.getProjectPath()
+                + ", manualRefresh=" + request.isManualRefreshTriggered());
+        host.getSessionLifecycleManager().loadHistorySession(request.getSessionId(), request.getProjectPath());
     }
 
     private void replayCurrentSessionStateToFrontend() {

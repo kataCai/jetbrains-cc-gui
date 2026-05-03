@@ -71,6 +71,7 @@ public class ClaudeChatWindow {
     private PermissionHandler permissionHandler;
     private HistoryHandler historyHandler;
     private final SessionLifecycleManager sessionLifecycleManager;
+    private final TabSessionRestoreState tabSessionRestoreState;
 
     // Delegates
     private WebviewInitializer webviewInitializer;
@@ -223,6 +224,7 @@ public class ClaudeChatWindow {
                 fetchedSlashCommandsCount = count;
             }
         });
+        this.tabSessionRestoreState = new TabSessionRestoreState();
 
         this.editorContextTracker = new EditorContextTracker(project, new EditorContextTracker.ContextCallback() {
             @Override
@@ -355,6 +357,7 @@ public class ClaudeChatWindow {
         String restoredSessionId = isNonEmpty(savedState.sessionId) ? savedState.sessionId : null;
         String restoredCwd = isNonEmpty(savedState.cwd) ? savedState.cwd : session.getCwd();
         session.setSessionInfo(restoredSessionId, restoredCwd);
+        tabSessionRestoreState.schedulePersistedRestore(restoredSessionId, restoredCwd);
         persistTabSessionState();
 
         LOG.info("[TabRestore] Restored tab session state: provider=" + savedState.provider
@@ -376,6 +379,26 @@ public class ClaudeChatWindow {
 
     public void sendQuickFixMessage(String prompt, boolean isQuickFix, MessageCallback callback) {
         chatWindowDelegate.sendQuickFixMessage(prompt, isQuickFix, callback);
+    }
+
+    /**
+     * 强制刷新当前 Tab 窗口。
+     * 该入口用于用户右键页签时手动恢复空白窗口：先重建 WebView，再在前端 ready 后按需恢复当前会话历史。
+     * 当窗口内已经保留消息时，仅重建视图而不重复加载历史，避免覆盖运行态消息。
+     */
+    public void forceRefreshWindow() {
+        if (disposed || webviewInitializer == null || session == null) {
+            return;
+        }
+
+        String currentSessionId = session.getSessionId();
+        String currentProjectPath = session.getCwd();
+        boolean hasMessages = !session.getMessages().isEmpty();
+        tabSessionRestoreState.scheduleManualRestoreIfNeeded(currentSessionId, currentProjectPath, hasMessages);
+
+        LOG.info("[TabRefresh] Triggering manual force refresh, sessionId=" + currentSessionId
+                + ", hasMessages=" + hasMessages + ", cwd=" + currentProjectPath);
+        webviewInitializer.recreateWebview("manual_force_refresh");
     }
 
     public void executeJavaScriptCode(String jsCode) {
@@ -587,6 +610,10 @@ public class ClaudeChatWindow {
 
     private boolean isNonEmpty(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest() {
+        return tabSessionRestoreState.consumePendingRestoreRequest();
     }
 
     // ==================== Code Snippets ====================
@@ -887,6 +914,11 @@ public class ClaudeChatWindow {
             @Override
             public void persistTabSessionState() {
                 ClaudeChatWindow.this.persistTabSessionState();
+            }
+
+            @Override
+            public TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest() {
+                return ClaudeChatWindow.this.consumePendingRestoreRequest();
             }
         };
     }
