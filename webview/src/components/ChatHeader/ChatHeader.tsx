@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 
 import { BackIcon } from '../Icons';
+import { sendBridgeEvent } from '../../utils/bridge';
 
 export interface ChatHeaderProps {
   currentView: 'chat' | 'history' | 'settings';
@@ -56,6 +57,13 @@ export function ChatHeader({
   const commitEdit = useCallback(() => {
     setEditing(false);
     const trimmed = editValue.trim().slice(0, 50);
+    sendBridgeEvent('ccg_debug_title_commit', JSON.stringify({
+      sessionTitle,
+      editValue,
+      trimmed,
+      changed: trimmed !== sessionTitle,
+      hasOnTitleChange: Boolean(onTitleChange),
+    }));
     if (trimmed && trimmed !== sessionTitle && onTitleChange) {
       onTitleChange(trimmed);
     }

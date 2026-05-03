@@ -20,16 +20,17 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Action to rename the current tab in the CC GUI tool window.
- * Implements DumbAware interface to allow renaming during indexing.
+ * 当前 CCG ToolWindow 页签重命名动作。
+ * 该动作除了更新页签显示名外，还会把标题绑定模式切换为“手动自定义”，
+ * 防止后续历史会话标题变更时自动覆盖用户显式指定的 Tab 名称。
  */
 public class RenameTabAction extends AnAction implements DumbAware {
 
     private static final Logger LOG = Logger.getInstance(RenameTabAction.class);
 
     /**
-     * Maximum length for tab names.
-     * This limit ensures tab names display properly in the UI without truncation or layout issues.
+     * 页签名称最大长度。
+     * 该限制用于避免标题过长导致页签区域显示截断和布局抖动。
      */
     private static final int MAX_TAB_NAME_LENGTH = 50;
 
@@ -69,7 +70,7 @@ public class RenameTabAction extends AnAction implements DumbAware {
 
         String currentName = selectedContent.getDisplayName();
 
-        // Show input dialog with current name as default
+        // 使用当前页签名作为默认值，便于用户在原有基础上微调。
         String newName = Messages.showInputDialog(
             project,
             ClaudeCodeGuiBundle.message("action.renameTab.dialogLabel"),
@@ -79,28 +80,25 @@ public class RenameTabAction extends AnAction implements DumbAware {
             new TabNameInputValidator()
         );
 
-        // User cancelled or input is invalid
         if (newName == null) {
             return;
         }
 
-        // Trim the input
         newName = newName.trim();
 
-        // Update the tab name
         selectedContent.setDisplayName(newName);
 
-        // Update originalTabName so status indicators won't revert to the old name
         ClaudeChatWindow chatWindow = ClaudeSDKToolWindow.getChatWindowForContent(selectedContent);
         if (chatWindow != null) {
             chatWindow.setOriginalTabName(newName);
         }
 
-        // Get tab index and save to persistent storage
         int tabIndex = contentManager.getIndexOfContent(selectedContent);
         if (tabIndex >= 0) {
             TabStateService tabStateService = TabStateService.getInstance(project);
             tabStateService.saveTabName(tabIndex, newName);
+            // 用户手动改名后，将当前页签切换到手动标题模式，避免后续历史标题同步覆盖。
+            tabStateService.saveTabTitleBindingMode(tabIndex, TabStateService.TITLE_BINDING_MODE_MANUAL_CUSTOM);
         }
 
         LOG.info(String.format("[RenameTabAction] Renamed tab from '%s' to '%s'", currentName, newName));
@@ -125,9 +123,8 @@ public class RenameTabAction extends AnAction implements DumbAware {
     }
 
     /**
-     * Input validator for tab name.
-     * Validates that the name is not empty and does not exceed maximum length.
-     * Provides detailed error messages for invalid input.
+     * 页签名称输入校验器。
+     * 用于限制空标题和过长标题，避免持久化后出现不可识别或不可展示的页签名称。
      */
     private static class TabNameInputValidator implements InputValidatorEx {
         @Override

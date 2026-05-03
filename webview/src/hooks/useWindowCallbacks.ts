@@ -35,6 +35,7 @@ export interface UseWindowCallbacksOptions {
   setStreamingActive: React.Dispatch<React.SetStateAction<boolean>>;
   setHistoryData: React.Dispatch<React.SetStateAction<HistoryData | null>>;
   setCurrentSessionId: React.Dispatch<React.SetStateAction<string | null>>;
+  setCustomSessionTitle: React.Dispatch<React.SetStateAction<string | null>>;
   setUsagePercentage: React.Dispatch<React.SetStateAction<number>>;
   setUsageUsedTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
   setUsageMaxTokens: React.Dispatch<React.SetStateAction<number | undefined>>;

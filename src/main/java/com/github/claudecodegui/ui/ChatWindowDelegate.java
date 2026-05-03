@@ -104,6 +104,8 @@ public class ChatWindowDelegate {
         void setFetchedSlashCommandsCount(int count);
         void persistTabSessionState();
         TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest();
+        void markPendingRestoreStarted();
+        void updateSessionTitle(String title);
     }
 
     private final DelegateHost host;
@@ -511,6 +513,7 @@ public class ChatWindowDelegate {
                 + request.getSessionId()
                 + ", projectPath=" + request.getProjectPath()
                 + ", manualRefresh=" + request.isManualRefreshTriggered());
+        host.markPendingRestoreStarted();
         host.getSessionLifecycleManager().loadHistorySession(request.getSessionId(), request.getProjectPath());
     }
 

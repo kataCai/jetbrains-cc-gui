@@ -2,9 +2,11 @@ package com.github.claudecodegui.handler.history;
 
 import com.github.claudecodegui.handler.NodeJsServiceCaller;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.ui.toolwindow.ClaudeSDKToolWindow;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
@@ -29,10 +31,25 @@ class HistoryMetadataService {
 
     private final HandlerContext context;
     private final NodeJsServiceCaller nodeJsServiceCaller;
+    private final HistoryTitleSyncCoordinator titleSyncCoordinator;
 
     HistoryMetadataService(HandlerContext context, NodeJsServiceCaller nodeJsServiceCaller) {
+        this(context, nodeJsServiceCaller, new HistoryTitleSyncCoordinator((sessionId, newTitle, updater) -> {
+            if (context.getProject() == null) {
+                return;
+            }
+            ClaudeSDKToolWindow.syncTabTitlesBySessionId(context.getProject(), sessionId, newTitle);
+        }));
+    }
+
+    HistoryMetadataService(
+            HandlerContext context,
+            NodeJsServiceCaller nodeJsServiceCaller,
+            HistoryTitleSyncCoordinator titleSyncCoordinator
+    ) {
         this.context = context;
         this.nodeJsServiceCaller = nodeJsServiceCaller;
+        this.titleSyncCoordinator = titleSyncCoordinator;
     }
 
     /**
@@ -79,6 +96,15 @@ class HistoryMetadataService {
                 JsonObject resultObj = new Gson().fromJson(result, JsonObject.class);
                 boolean success = resultObj.get("success").getAsBoolean();
 
+                if (success) {
+                    LOG.info("[HistoryTitleSync] update_title success, sessionId=" + sessionId
+                            + ", customTitle=" + customTitle);
+                    dispatchTitleSync(sessionId, customTitle);
+                } else {
+                    LOG.warn("[HistoryTitleSync] update_title failed, sessionId=" + sessionId
+                            + ", customTitle=" + customTitle + ", result=" + result);
+                }
+
                 if (!success && resultObj.has("error")) {
                     String error = resultObj.get("error").getAsString();
                     ApplicationManager.getApplication().invokeLater(() -> {
@@ -119,5 +145,25 @@ class HistoryMetadataService {
                 titleFileLock.unlock();
             }
         });
+    }
+
+    /**
+     * 在合适线程上执行标题同步。
+     * 生产环境需要切回 EDT 以安全更新 IDEA UI 模型；单元测试环境可能没有 Application，此时直接同步执行。
+     *
+     * @param sessionId 会话 ID
+     * @param customTitle 新标题
+     */
+    private void dispatchTitleSync(String sessionId, String customTitle) {
+        Application application = ApplicationManager.getApplication();
+        if (application == null) {
+            titleSyncCoordinator.syncTitles(sessionId, customTitle);
+            return;
+        }
+        if (application.isDispatchThread()) {
+            titleSyncCoordinator.syncTitles(sessionId, customTitle);
+            return;
+        }
+        application.invokeAndWait(() -> titleSyncCoordinator.syncTitles(sessionId, customTitle));
     }
 }

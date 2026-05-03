@@ -237,6 +237,16 @@ public class ChatWindowDelegateRestoreTest {
         public TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest() {
             return restoreState.consumePendingRestoreRequest();
         }
+
+        @Override
+        public void markPendingRestoreStarted() {
+            restoreState.markRestoreStarted();
+        }
+
+        @Override
+        public void updateSessionTitle(String title) {
+        }
+
     }
 
     private static final class RecordingSessionLifecycleManager extends SessionLifecycleManager {

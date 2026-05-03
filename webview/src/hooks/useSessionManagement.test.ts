@@ -296,6 +296,29 @@ describe('useSessionManagement', () => {
     expect(mocks.setUsageMaxTokens).toHaveBeenCalledWith(undefined);
   });
 
+  it('updates current tab title directly when sessionId is missing', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [],
+        loading: false,
+        historyData: null,
+        currentSessionId: null,
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.syncCurrentTabTitle('临时标题');
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'sync_current_tab_title:{"title":"临时标题"}'
+    );
+  });
+
   it('beginSessionTransition clears all transient UI states synchronously', () => {
     const mocks = createMocks();
 

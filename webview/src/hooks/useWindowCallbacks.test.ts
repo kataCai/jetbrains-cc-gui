@@ -27,6 +27,7 @@ describe('useWindowCallbacks integration', () => {
     setStreamingActive: vi.fn(),
     setHistoryData: vi.fn(),
     setCurrentSessionId: vi.fn(),
+    setCustomSessionTitle: vi.fn(),
     setUsagePercentage: vi.fn(),
     setUsageUsedTokens: vi.fn(),
     setUsageMaxTokens: vi.fn(),
@@ -137,6 +138,17 @@ describe('useWindowCallbacks integration', () => {
     expect((window as any).__sessionTransitioning).toBe(false);
     expect((window as any).__sessionTransitionToken).toBeNull();
     expect(opts.setCurrentSessionId).toHaveBeenCalledWith('new-session-123');
+  });
+
+  it('updateSessionTitle writes restored custom title into frontend state', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      (window as any).updateSessionTitle?.('中东局势怎样了');
+    });
+
+    expect(opts.setCustomSessionTitle).toHaveBeenCalledWith('中东局势怎样了');
   });
 
   // ===== updateMessages is blocked during transition =====

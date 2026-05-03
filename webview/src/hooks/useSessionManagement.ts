@@ -47,6 +47,7 @@ interface UseSessionManagementReturn {
   exportHistorySession: (sessionId: string, title: string) => void;
   toggleFavoriteSession: (sessionId: string) => void;
   updateHistoryTitle: (sessionId: string, newTitle: string) => void;
+  syncCurrentTabTitle: (newTitle: string) => void;
 }
 
 /**
@@ -276,6 +277,7 @@ export function useSessionManagement({
   const updateHistoryTitle = useCallback((sessionId: string, newTitle: string) => {
     // Send update title request to backend
     const updateData = JSON.stringify({ sessionId, customTitle: newTitle });
+    console.warn('[HistoryTitleSync][Frontend] send update_title', updateData);
     sendBridgeEvent('update_title', updateData);
 
     // Immediately update frontend state
@@ -300,6 +302,15 @@ export function useSessionManagement({
     }
   }, [historyData, setHistoryData, addToast, t]);
 
+  /**
+   * 在当前会话尚未生成 sessionId 时，仅同步当前窗口的 Tab 标题。
+   * 该路径不触发历史会话标题持久化，只用于“新会话/临时会话”标题编辑后的当前窗口展示同步。
+   */
+  const syncCurrentTabTitle = useCallback((newTitle: string) => {
+    const payload = JSON.stringify({ title: newTitle });
+    sendBridgeEvent('sync_current_tab_title', payload);
+  }, []);
+
   return {
     showNewSessionConfirm,
     showInterruptConfirm,
@@ -315,5 +326,6 @@ export function useSessionManagement({
     exportHistorySession,
     toggleFavoriteSession,
     updateHistoryTitle,
+    syncCurrentTabTitle,
   };
 }

@@ -128,6 +128,7 @@ vi.mock('./hooks', () => {
       exportHistorySession: noop,
       toggleFavoriteSession: noop,
       updateHistoryTitle: noop,
+      syncCurrentTabTitle: noop,
     }),
     useStreamingMessages: () => ({
       streamingContentRef: makeRef(''),

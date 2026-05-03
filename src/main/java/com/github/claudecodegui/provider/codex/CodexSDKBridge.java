@@ -16,6 +16,7 @@ import com.github.claudecodegui.util.PlatformUtils;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -472,11 +473,203 @@ public class CodexSDKBridge extends BaseSDKBridge {
     }
 
     /**
-     * Get session history messages (Codex doesn't support this, returns empty list).
+     * 获取会话历史消息。
+     * Codex SDK 本身不提供历史消息查询能力，因此这里回退到本地 ~/.codex/sessions 历史文件，
+     * 并把原始记录标准化为现有会话恢复链路可识别的 user/assistant 消息结构。
      */
     public List<JsonObject> getSessionMessages(String sessionId, String cwd) {
-        LOG.info("getSessionMessages not supported by Codex SDK");
-        return new ArrayList<>();
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            LOG.info("[CodexHistoryRestore] Skip loading history because sessionId is empty");
+            return new ArrayList<>();
+        }
+
+        try {
+            String json = createHistoryReader().getSessionMessagesAsJson(sessionId);
+            Type listType = new com.google.gson.reflect.TypeToken<List<CodexHistoryReader.CodexMessage>>() {
+            }.getType();
+            List<CodexHistoryReader.CodexMessage> rawMessages = gson.fromJson(json, listType);
+            return normalizeHistoryMessages(rawMessages);
+        } catch (Exception e) {
+            LOG.warn("[CodexHistoryRestore] Failed to load session messages from local history: " + e.getMessage(), e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 创建 Codex 历史读取器。
+     * 抽成独立方法是为了让测试能够替换本地历史目录，而不改生产逻辑分支。
+     *
+     * @return 历史读取器实例
+     */
+    protected CodexHistoryReader createHistoryReader() {
+        return new CodexHistoryReader();
+    }
+
+    /**
+     * 把 Codex 原始历史记录转换为现有 MessageParser 可识别的统一消息格式。
+     * 这里只恢复用户和助手的可见文本消息，其他事件维持跳过，避免把元信息误渲染到聊天区。
+     *
+     * @param rawMessages 原始 Codex 历史记录
+     * @return 标准化后的消息列表
+     */
+    private List<JsonObject> normalizeHistoryMessages(List<CodexHistoryReader.CodexMessage> rawMessages) {
+        List<JsonObject> normalizedMessages = new ArrayList<>();
+        if (rawMessages == null || rawMessages.isEmpty()) {
+            return normalizedMessages;
+        }
+
+        for (CodexHistoryReader.CodexMessage rawMessage : rawMessages) {
+            JsonObject normalized = normalizeHistoryMessage(rawMessage);
+            if (normalized != null) {
+                normalizedMessages.add(normalized);
+            }
+        }
+        LOG.info("[CodexHistoryRestore] Normalized " + normalizedMessages.size() + " visible messages from local history");
+        return normalizedMessages;
+    }
+
+    /**
+     * 标准化单条历史记录。
+     *
+     * @param rawMessage 原始 Codex 记录
+     * @return 标准消息；无法映射时返回 null
+     */
+    private JsonObject normalizeHistoryMessage(CodexHistoryReader.CodexMessage rawMessage) {
+        if (rawMessage == null || rawMessage.payload == null || rawMessage.type == null) {
+            return null;
+        }
+
+        if ("event_msg".equals(rawMessage.type)) {
+            return normalizeEventMessage(rawMessage.payload);
+        }
+        if ("response_item".equals(rawMessage.type)) {
+            return normalizeResponseItem(rawMessage.payload);
+        }
+        return null;
+    }
+
+    /**
+     * 标准化 event_msg 记录。
+     *
+     * @param payload Codex event payload
+     * @return 标准消息；当前仅处理 user_message
+     */
+    private JsonObject normalizeEventMessage(JsonObject payload) {
+        if (!payload.has("type") || payload.get("type").isJsonNull()) {
+            return null;
+        }
+        String payloadType = payload.get("type").getAsString();
+        if (!"user_message".equals(payloadType)) {
+            return null;
+        }
+
+        String text = payload.has("message") && !payload.get("message").isJsonNull()
+                ? payload.get("message").getAsString()
+                : "";
+        return buildNormalizedMessage("user", text);
+    }
+
+    /**
+     * 标准化 response_item 记录。
+     *
+     * @param payload Codex response item payload
+     * @return 标准消息；当前仅处理 message 类型
+     */
+    private JsonObject normalizeResponseItem(JsonObject payload) {
+        if (!payload.has("type") || payload.get("type").isJsonNull()) {
+            return null;
+        }
+        String payloadType = payload.get("type").getAsString();
+        if (!"message".equals(payloadType)) {
+            return null;
+        }
+
+        String role = payload.has("role") && !payload.get("role").isJsonNull()
+                ? payload.get("role").getAsString()
+                : "assistant";
+        String normalizedType = "user".equals(role) ? "user" : "assistant";
+        String text = extractCodexMessageText(payload);
+        return buildNormalizedMessage(normalizedType, text);
+    }
+
+    /**
+     * 从 Codex message payload 中提取可见文本。
+     *
+     * @param payload Codex message payload
+     * @return 组合后的文本内容
+     */
+    private String extractCodexMessageText(JsonObject payload) {
+        if (!payload.has("content") || payload.get("content").isJsonNull()) {
+            return "";
+        }
+        JsonElement content = payload.get("content");
+        if (content.isJsonPrimitive()) {
+            return content.getAsString();
+        }
+        if (!content.isJsonArray()) {
+            return "";
+        }
+
+        StringBuilder textBuilder = new StringBuilder();
+        JsonArray contentArray = content.getAsJsonArray();
+        for (JsonElement element : contentArray) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject block = element.getAsJsonObject();
+            String blockText = extractCodexContentBlockText(block);
+            if (blockText == null || blockText.trim().isEmpty()) {
+                continue;
+            }
+            if (textBuilder.length() > 0) {
+                textBuilder.append("\n");
+            }
+            textBuilder.append(blockText);
+        }
+        return textBuilder.toString();
+    }
+
+    /**
+     * 提取单个 Codex 内容块中的可见文本。
+     *
+     * @param block 内容块
+     * @return 可见文本；不可展示时返回空串
+     */
+    private String extractCodexContentBlockText(JsonObject block) {
+        if (block == null || !block.has("type") || block.get("type").isJsonNull()) {
+            return "";
+        }
+
+        String blockType = block.get("type").getAsString();
+        if (("output_text".equals(blockType) || "text".equals(blockType))
+                && block.has("text")
+                && !block.get("text").isJsonNull()) {
+            return block.get("text").getAsString();
+        }
+        return "";
+    }
+
+    /**
+     * 构建统一消息结构。
+     *
+     * @param type 标准消息类型，仅允许 user/assistant
+     * @param text 文本内容
+     * @return 统一消息对象
+     */
+    private JsonObject buildNormalizedMessage(String type, String text) {
+        JsonObject messageWrapper = new JsonObject();
+        messageWrapper.addProperty("type", type);
+
+        JsonObject message = new JsonObject();
+        JsonArray contentArray = new JsonArray();
+        JsonObject textBlock = new JsonObject();
+        textBlock.addProperty("type", "text");
+        textBlock.addProperty("text", text != null ? text : "");
+        contentArray.add(textBlock);
+        message.add("content", contentArray);
+
+        messageWrapper.add("message", message);
+        return messageWrapper;
     }
 
     /**

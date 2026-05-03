@@ -19,6 +19,7 @@ export function registerSessionAndSdkCallbacks(
   const {
     addToast,
     setCurrentSessionId,
+    setCustomSessionTitle,
     setSdkStatus,
     setSdkStatusLoaded,
     setIsRewinding,
@@ -42,6 +43,10 @@ export function registerSessionAndSdkCallbacks(
     if (title && oldId !== sessionId) {
       updateHistoryTitle(sessionId, title);
     }
+  };
+
+  window.updateSessionTitle = (title: string) => {
+    setCustomSessionTitle(title);
   };
 
   window.addToast = (message, type) => {

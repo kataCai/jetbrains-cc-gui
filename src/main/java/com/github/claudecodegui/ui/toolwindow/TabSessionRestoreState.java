@@ -10,6 +10,22 @@ import org.jetbrains.annotations.Nullable;
 public final class TabSessionRestoreState {
 
     private RestoreRequest pendingRestoreRequest;
+    private String persistedRestoreSessionId;
+    private boolean restoreInProgress;
+
+    /**
+     * 在真正执行恢复前，先根据已持久化的 sessionId 激活保护。
+     * 用于拦截窗口初始化早期、restore 尚未开始前的空快照覆盖。
+     *
+     * @param sessionId 持久化层中已有的 sessionId
+     */
+    public void primePersistedRestoreProtection(@Nullable String sessionId) {
+        if (!isNonEmpty(sessionId)) {
+            return;
+        }
+        persistedRestoreSessionId = sessionId.trim();
+        restoreInProgress = false;
+    }
 
     /**
      * 根据持久化状态登记一次自动恢复请求。
@@ -22,7 +38,9 @@ public final class TabSessionRestoreState {
         if (!isNonEmpty(sessionId)) {
             return;
         }
-        pendingRestoreRequest = new RestoreRequest(sessionId.trim(), normalizePath(projectPath), false);
+        persistedRestoreSessionId = sessionId.trim();
+        restoreInProgress = false;
+        pendingRestoreRequest = new RestoreRequest(persistedRestoreSessionId, normalizePath(projectPath), false);
     }
 
     /**
@@ -65,6 +83,46 @@ public final class TabSessionRestoreState {
         RestoreRequest request = pendingRestoreRequest;
         pendingRestoreRequest = null;
         return request;
+    }
+
+    /**
+     * 标记一次持久化恢复任务已经正式开始执行。
+     * 该状态用于在恢复完成前阻止空 sessionId 快照覆盖之前保存的有效绑定。
+     */
+    public void markRestoreStarted() {
+        if (isNonEmpty(persistedRestoreSessionId)) {
+            restoreInProgress = true;
+        }
+    }
+
+    /**
+     * 标记恢复任务已经完成。
+     * 仅当完成结果与原恢复目标一致时才解除保护，避免无关回调误清状态。
+     *
+     * @param restoredSessionId 实际恢复完成后的 sessionId
+     */
+    public void markRestoreFinished(@Nullable String restoredSessionId) {
+        if (isNonEmpty(restoredSessionId) && restoredSessionId.trim().equals(persistedRestoreSessionId)) {
+            restoreInProgress = false;
+            persistedRestoreSessionId = null;
+        }
+    }
+
+    /**
+     * 判断当前是否应阻止空 sessionId 快照覆盖旧绑定。
+     * 仅在“存在持久化旧绑定 + 恢复进行中 + 新快照 sessionId 为空”时返回 true。
+     *
+     * @param persistedSessionId 当前持久化层已有的 sessionId
+     * @param currentSessionId 当前准备写回的新快照 sessionId
+     * @return 需要阻止覆盖时返回 true
+     */
+    public boolean shouldBlockEmptySessionSnapshotOverwrite(
+            @Nullable String persistedSessionId,
+            @Nullable String currentSessionId
+    ) {
+        return isNonEmpty(persistedRestoreSessionId)
+                && isNonEmpty(persistedSessionId)
+                && !isNonEmpty(currentSessionId);
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.github.claudecodegui.session;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
+import com.github.claudecodegui.handler.NodeJsServiceCaller;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.handler.core.HandlerContext;
@@ -211,6 +212,7 @@ public class SessionLifecycleManager {
             newSession.setSessionInfo(sessionId, workingDir);
 
             newSession.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
+                replayRestoredSessionTitle(sessionId);
                 host.callJavaScript("historyLoadComplete");
             })).exceptionally(ex -> {
                 ApplicationManager.getApplication().invokeLater(() -> {
@@ -379,5 +381,48 @@ public class SessionLifecycleManager {
 
     private String getCurrentEditorFilePath() {
         return com.github.claudecodegui.util.EditorFileUtils.getCurrentEditorFilePath(this.host.getProject());
+    }
+
+    /**
+     * 在历史会话恢复成功后，把持久化的自定义标题重新回放到前端。
+     * Tab 标题会在工具窗口初始化阶段按 TabState 恢复，但聊天页头部标题依赖前端 customSessionTitle；
+     * 因此这里必须按 sessionId 再补一次回放，避免前端退回到首条消息摘要。
+     *
+     * @param sessionId 已恢复的会话 ID
+     */
+    private void replayRestoredSessionTitle(String sessionId) {
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            return;
+        }
+
+        try {
+            HandlerContext handlerContext = host.getHandlerContext();
+            if (handlerContext == null) {
+                return;
+            }
+
+            NodeJsServiceCaller nodeJsServiceCaller = new NodeJsServiceCaller(handlerContext);
+            String titlesJson = nodeJsServiceCaller.callNodeJsTitlesService("loadTitles");
+            JsonObject titles = new Gson().fromJson(titlesJson, JsonObject.class);
+            if (titles == null || !titles.has(sessionId) || !titles.get(sessionId).isJsonObject()) {
+                return;
+            }
+
+            JsonObject titleInfo = titles.getAsJsonObject(sessionId);
+            if (!titleInfo.has("customTitle") || titleInfo.get("customTitle").isJsonNull()) {
+                return;
+            }
+
+            String customTitle = titleInfo.get("customTitle").getAsString();
+            if (customTitle == null || customTitle.trim().isEmpty()) {
+                return;
+            }
+
+            host.callJavaScript("updateSessionTitle", JsUtils.escapeJs(customTitle));
+            LOG.info("[HistoryTitleSync] Replayed restored session title to frontend. sessionId="
+                    + sessionId + ", title=" + customTitle);
+        } catch (Exception e) {
+            LOG.warn("[HistoryTitleSync] Failed to replay restored session title: " + e.getMessage(), e);
+        }
     }
 }

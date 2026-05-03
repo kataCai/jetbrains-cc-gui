@@ -197,6 +197,75 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         return content != null ? contentToWindowMap.get(content) : null;
     }
 
+    /**
+     * 按 sessionId 同步当前项目内所有匹配窗口的页签标题。
+     * 仅仍处于“跟随会话标题”模式的窗口会被自动覆盖，手动自定义标题的窗口保持不变。
+     *
+     * @param project 当前项目
+     * @param sessionId 会话 ID
+     * @param newTitle 新标题
+     */
+    public static void syncTabTitlesBySessionId(@NotNull Project project, @NotNull String sessionId, @NotNull String newTitle) {
+        String normalizedSessionId = normalize(sessionId);
+        String normalizedTitle = normalize(newTitle);
+        if (normalizedSessionId == null || normalizedTitle == null) {
+            LOG.warn("[HistoryTitleSync] Skip sync because sessionId or title is empty. sessionId="
+                    + sessionId + ", title=" + newTitle);
+            return;
+        }
+
+        ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID);
+        if (toolWindow == null) {
+            LOG.warn("[HistoryTitleSync] Skip sync because tool window is null. sessionId=" + normalizedSessionId);
+            return;
+        }
+
+        Content[] contents = toolWindow.getContentManager().getContents();
+        TabStateService tabStateService = TabStateService.getInstance(project);
+        LOG.info("[HistoryTitleSync] Start syncing tab titles. sessionId=" + normalizedSessionId
+                + ", title=" + normalizedTitle + ", tabCount=" + contents.length);
+        for (int index = 0; index < contents.length; index++) {
+            Content content = contents[index];
+            TabStateService.TabSessionState savedState = tabStateService.getTabSessionState(index);
+            String boundSessionId = savedState != null ? normalize(savedState.sessionId) : null;
+            String bindingMode = savedState != null ? savedState.getEffectiveTitleBindingMode() : null;
+            LOG.info("[HistoryTitleSync] Inspect tab. index=" + index
+                    + ", displayName=" + content.getDisplayName()
+                    + ", boundSessionId=" + boundSessionId
+                    + ", bindingMode=" + bindingMode);
+            if (savedState == null || !normalizedSessionId.equals(boundSessionId)) {
+                continue;
+            }
+            if (!TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE.equals(bindingMode)) {
+                LOG.info("[HistoryTitleSync] Skip tab because binding mode is not follow-session. index=" + index
+                        + ", bindingMode=" + bindingMode);
+                continue;
+            }
+
+            ClaudeChatWindow chatWindow = getChatWindowForContent(content);
+            if (chatWindow != null) {
+                LOG.info("[HistoryTitleSync] Sync tab via chat window. index=" + index
+                        + ", oldTitle=" + content.getDisplayName()
+                        + ", newTitle=" + normalizedTitle);
+                chatWindow.syncTabTitleFromSessionTitle(normalizedTitle);
+            } else {
+                LOG.info("[HistoryTitleSync] Sync tab via content fallback. index=" + index
+                        + ", oldTitle=" + content.getDisplayName()
+                        + ", newTitle=" + normalizedTitle);
+                content.setDisplayName(normalizedTitle);
+                tabStateService.saveTabName(index, normalizedTitle);
+                tabStateService.saveTabTitleBindingMode(index, TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE);
+            }
+        }
+    }
+
+    private static String normalize(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
+    }
+
     @Override
     public void init(@NotNull ToolWindow toolWindow) {
         toolWindow.setTitle(TOOL_WINDOW_DISPLAY_NAME);
@@ -527,6 +596,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         int savedTabCount = tabStateService.getTabCount();
         LOG.info("[TabManager] Restoring " + savedTabCount + " tabs from storage");
 
+        TabStateService.TabSessionState firstSavedState = tabStateService.getTabSessionState(0);
         ClaudeChatWindow firstChatWindow = new ClaudeChatWindow(project, false);
         String firstTabName = resolveRestoredTabName(tabStateService, 0);
 
@@ -535,9 +605,10 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         firstChatWindow.setParentContent(loadingContent);
         firstChatWindow.setOriginalTabName(firstTabName);
         loadingContent.setDisposer(firstChatWindow::dispose);
-        restoreTabSessionState(tabStateService, 0, firstChatWindow);
+        restoreTabSessionState(0, firstSavedState, firstChatWindow);
 
         for (int i = 1; i < savedTabCount; i++) {
+            TabStateService.TabSessionState savedState = tabStateService.getTabSessionState(i);
             ClaudeChatWindow chatWindow = new ClaudeChatWindow(project, true);
             String tabName = resolveRestoredTabName(tabStateService, i);
 
@@ -546,7 +617,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
             chatWindow.setOriginalTabName(tabName);
             content.setDisposer(chatWindow::dispose);
             contentManager.addContent(content);
-            restoreTabSessionState(tabStateService, i, chatWindow);
+            restoreTabSessionState(i, savedState, chatWindow);
         }
 
         updateTabCloseableState(contentManager);
@@ -563,6 +634,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
 
         for (int i = 0; i < savedTabCount; i++) {
             boolean isFirstTab = (i == 0);
+            TabStateService.TabSessionState savedState = tabStateService.getTabSessionState(i);
             ClaudeChatWindow chatWindow = new ClaudeChatWindow(project, !isFirstTab);
             String tabName = resolveRestoredTabName(tabStateService, i);
 
@@ -571,14 +643,17 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
             chatWindow.setOriginalTabName(tabName);
             content.setDisposer(chatWindow::dispose);
             contentManager.addContent(content);
-            restoreTabSessionState(tabStateService, i, chatWindow);
+            restoreTabSessionState(i, savedState, chatWindow);
         }
 
         updateTabCloseableState(contentManager);
     }
 
-    private void restoreTabSessionState(TabStateService tabStateService, int tabIndex, ClaudeChatWindow chatWindow) {
-        TabStateService.TabSessionState savedState = tabStateService.getTabSessionState(tabIndex);
+    private void restoreTabSessionState(
+            int tabIndex,
+            TabStateService.TabSessionState savedState,
+            ClaudeChatWindow chatWindow
+    ) {
         if (savedState == null) {
             return;
         }

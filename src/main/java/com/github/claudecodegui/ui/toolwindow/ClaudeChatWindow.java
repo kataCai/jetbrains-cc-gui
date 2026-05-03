@@ -25,6 +25,7 @@ import com.github.claudecodegui.util.JsUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
@@ -336,10 +337,48 @@ public class ClaudeChatWindow {
         return session;
     }
 
+    /**
+     * 让当前窗口的页签标题跟随会话标题同步更新。
+     * 该方法会同时更新显示标题、originalTabName 以及持久化快照，
+     * 避免后续状态切换再次把标题回滚到旧值。
+     *
+     * @param newTitle 最新会话标题
+     */
+    public void syncTabTitleFromSessionTitle(String newTitle) {
+        if (!isNonEmpty(newTitle)) {
+            LOG.warn("[HistoryTitleSync] Skip tab title sync because title is empty.");
+            return;
+        }
+
+        String normalizedTitle = newTitle.trim();
+        LOG.info("[HistoryTitleSync] Apply session title to tab. sessionId=" + sessionId
+                + ", oldTitle=" + (parentContent != null ? parentContent.getDisplayName() : null)
+                + ", newTitle=" + normalizedTitle);
+        if (parentContent != null) {
+            parentContent.setDisplayName(normalizedTitle);
+        }
+        setOriginalTabName(normalizedTitle);
+
+        int tabIndex = getTabIndex();
+        if (tabIndex >= 0) {
+            TabStateService tabStateService = TabStateService.getInstance(project);
+            tabStateService.saveTabName(tabIndex, normalizedTitle);
+            tabStateService.saveTabTitleBindingMode(tabIndex, TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE);
+            flushProjectStateToDisk("tab_title_synced", tabIndex, sessionId);
+            LOG.info("[HistoryTitleSync] Persisted synced tab title. tabIndex=" + tabIndex
+                    + ", sessionId=" + sessionId + ", title=" + normalizedTitle);
+        } else {
+            LOG.warn("[HistoryTitleSync] Failed to persist synced tab title because tab index is invalid. sessionId="
+                    + sessionId + ", title=" + normalizedTitle);
+        }
+    }
+
     public void restorePersistedTabSessionState(TabStateService.TabSessionState savedState) {
         if (savedState == null || session == null) {
             return;
         }
+
+        tabSessionRestoreState.primePersistedRestoreProtection(savedState.sessionId);
 
         if (savedState.permissionMode != null && !savedState.permissionMode.trim().isEmpty()) {
             session.setPermissionMode(savedState.permissionMode);
@@ -500,6 +539,19 @@ public class ClaudeChatWindow {
         String type = parts[0];
         String content = parts.length > 1 ? parts[1] : "";
 
+        if ("update_title".equals(type)) {
+            LOG.info("[HistoryTitleSync] Bridge received update_title. content=" + content);
+        }
+        if ("sync_current_tab_title".equals(type)) {
+            LOG.info("[HistoryTitleSync] Bridge received sync_current_tab_title. content=" + content);
+            handleSyncCurrentTabTitle(content);
+            return;
+        }
+        if ("ccg_debug_title_commit".equals(type)) {
+            LOG.info("[HistoryTitleSync] Bridge received ccg_debug_title_commit. content=" + content);
+            return;
+        }
+
         if (messageDispatcher.dispatch(type, content)) {
             return;
         }
@@ -529,6 +581,7 @@ public class ClaudeChatWindow {
             public void onSessionIdReceived(String newSessionId) {
                 super.onSessionIdReceived(newSessionId);
                 sessionId = newSessionId;
+                tabSessionRestoreState.markRestoreFinished(newSessionId);
                 persistTabSessionState();
             }
         };
@@ -604,8 +657,113 @@ public class ClaudeChatWindow {
         snapshot.model = session.getModel();
         snapshot.permissionMode = session.getPermissionMode();
         snapshot.reasoningEffort = session.getReasoningEffort();
+        TabStateService tabStateService = TabStateService.getInstance(project);
+        TabStateService.TabSessionState persistedState = tabStateService.getTabSessionState(tabIndex);
+        snapshot.titleBindingMode = persistedState != null
+                ? persistedState.getEffectiveTitleBindingMode()
+                : TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE;
 
-        TabStateService.getInstance(project).saveTabSessionState(tabIndex, snapshot);
+        if (persistedState != null && tabSessionRestoreState.shouldBlockEmptySessionSnapshotOverwrite(
+                persistedState.sessionId,
+                snapshot.sessionId
+        )) {
+            LOG.info("[TabRestore] Skip persisting empty session snapshot during restore, tabIndex=" + tabIndex
+                    + ", persistedSessionId=" + persistedState.sessionId);
+            return;
+        }
+
+        tabStateService.saveTabSessionState(tabIndex, snapshot);
+        if (shouldFlushProjectStateAfterSnapshotSave(persistedState, snapshot)) {
+            flushProjectStateToDisk("session_snapshot_updated", tabIndex, snapshot.sessionId);
+        }
+    }
+
+    /**
+     * 判断本次会话快照更新后，是否需要主动触发项目级落盘。
+     * 重点覆盖“运行中后置拿到真实 sessionId，但 IDE 关闭前尚未来得及自动保存”的场景，
+     * 避免下次启动只能恢复到空会话。
+     *
+     * @param persistedState 保存前的旧快照
+     * @param snapshot 准备写回的新快照
+     * @return 需要立即落盘时返回 true
+     */
+    private boolean shouldFlushProjectStateAfterSnapshotSave(
+            TabStateService.TabSessionState persistedState,
+            TabStateService.TabSessionState snapshot
+    ) {
+        String persistedSessionId = persistedState != null ? normalizeValue(persistedState.sessionId) : null;
+        String currentSessionId = normalizeValue(snapshot.sessionId);
+        return currentSessionId != null && !currentSessionId.equals(persistedSessionId);
+    }
+
+    /**
+     * 主动触发项目级持久化落盘。
+     * 仅用于少量关键状态变更，确保 tab 绑定会话和标题在 IDE 快速关闭前也能写入 .idea 状态文件。
+     *
+     * @param reason 落盘原因，便于日志排查
+     * @param tabIndex 当前 Tab 索引
+     * @param currentSessionId 当前会话 ID
+     */
+    private void flushProjectStateToDisk(String reason, int tabIndex, String currentSessionId) {
+        if (project == null || project.isDisposed()) {
+            return;
+        }
+
+        Runnable saveTask = () -> {
+            if (project.isDisposed()) {
+                return;
+            }
+            project.save();
+            LOG.info("[TabStateService] Forced project state flush: reason=" + reason
+                    + ", tabIndex=" + tabIndex + ", sessionId=" + currentSessionId);
+        };
+
+        Application application = ApplicationManager.getApplication();
+        if (application == null) {
+            saveTask.run();
+            return;
+        }
+        if (application.isDispatchThread()) {
+            saveTask.run();
+            return;
+        }
+        application.invokeAndWait(saveTask);
+    }
+
+    /**
+     * 规范化可空字符串，统一空白值判断。
+     *
+     * @param value 原始字符串
+     * @return 去空白后的值；若为空则返回 null
+     */
+    private String normalizeValue(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    /**
+     * 处理无 sessionId 场景下的当前窗口 Tab 标题同步请求。
+     * 该入口只更新当前窗口，不参与基于 sessionId 的历史标题广播。
+     *
+     * @param content 前端传入的 JSON 字符串，格式为 { "title": "..." }
+     */
+    private void handleSyncCurrentTabTitle(String content) {
+        try {
+            JsonObject request = new Gson().fromJson(content, JsonObject.class);
+            if (request == null || !request.has("title") || request.get("title").isJsonNull()) {
+                return;
+            }
+            String title = request.get("title").getAsString();
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (!disposed) {
+                    syncTabTitleFromSessionTitle(title);
+                }
+            });
+        } catch (Exception e) {
+            LOG.warn("[HistoryTitleSync] Failed to parse sync_current_tab_title payload: " + e.getMessage(), e);
+        }
     }
 
     private boolean isNonEmpty(String value) {
@@ -614,6 +772,10 @@ public class ClaudeChatWindow {
 
     TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest() {
         return tabSessionRestoreState.consumePendingRestoreRequest();
+    }
+
+    void markPendingRestoreStarted() {
+        tabSessionRestoreState.markRestoreStarted();
     }
 
     // ==================== Code Snippets ====================
@@ -919,6 +1081,16 @@ public class ClaudeChatWindow {
             @Override
             public TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest() {
                 return ClaudeChatWindow.this.consumePendingRestoreRequest();
+            }
+
+            @Override
+            public void markPendingRestoreStarted() {
+                ClaudeChatWindow.this.markPendingRestoreStarted();
+            }
+
+            @Override
+            public void updateSessionTitle(String title) {
+                ClaudeChatWindow.this.callJavaScript("updateSessionTitle", JsUtils.escapeJs(title));
             }
         };
     }

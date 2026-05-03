@@ -21,6 +21,8 @@ import java.util.Map;
 public final class TabStateService implements PersistentStateComponent<TabStateService.State> {
 
     private static final Logger LOG = Logger.getInstance(TabStateService.class);
+    public static final String TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE = "FOLLOW_SESSION_TITLE";
+    public static final String TITLE_BINDING_MODE_MANUAL_CUSTOM = "MANUAL_CUSTOM";
 
     private State myState = new State();
 
@@ -91,6 +93,24 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
     public TabSessionState getTabSessionState(int tabIndex) {
         TabSessionState state = myState.tabSessions.get(tabIndex);
         return state != null ? state.copy() : null;
+    }
+
+    /**
+     * 更新指定 Tab 的标题绑定模式。
+     * 该状态用于区分页签标题是跟随会话标题，还是已经被用户手动固定。
+     *
+     * @param tabIndex 页签索引
+     * @param titleBindingMode 标题绑定模式
+     */
+    public void saveTabTitleBindingMode(int tabIndex, @Nullable String titleBindingMode) {
+        TabSessionState state = myState.tabSessions.get(tabIndex);
+        if (state == null) {
+            state = new TabSessionState();
+            myState.tabSessions.put(tabIndex, state);
+        }
+        state.titleBindingMode = normalizeTitleBindingMode(titleBindingMode);
+        LOG.info("[TabStateService] Saved tab title binding mode: index=" + tabIndex
+                + ", mode=" + state.getEffectiveTitleBindingMode());
     }
 
     /**
@@ -185,6 +205,7 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
         public String model;
         public String permissionMode;
         public String reasoningEffort;
+        public String titleBindingMode;
 
         public TabSessionState copy() {
             TabSessionState copy = new TabSessionState();
@@ -194,7 +215,18 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
             copy.model = this.model;
             copy.permissionMode = this.permissionMode;
             copy.reasoningEffort = this.reasoningEffort;
+            copy.titleBindingMode = normalizeTitleBindingMode(this.titleBindingMode);
             return copy;
+        }
+
+        /**
+         * 获取生效中的标题绑定模式。
+         * 旧版本持久化数据未写入该字段时，默认按“跟随会话标题”处理。
+         *
+         * @return 生效的标题绑定模式
+         */
+        public String getEffectiveTitleBindingMode() {
+            return normalizeTitleBindingMode(titleBindingMode);
         }
     }
 
@@ -216,5 +248,12 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
          * Number of tabs.
          */
         public int tabCount = 1;
+    }
+
+    private static String normalizeTitleBindingMode(@Nullable String titleBindingMode) {
+        if (TITLE_BINDING_MODE_MANUAL_CUSTOM.equals(titleBindingMode)) {
+            return TITLE_BINDING_MODE_MANUAL_CUSTOM;
+        }
+        return TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE;
     }
 }

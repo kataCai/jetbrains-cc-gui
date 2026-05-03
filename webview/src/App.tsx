@@ -295,7 +295,7 @@ const App = () => {
     handleConfirmNewSession, handleCancelNewSession,
     handleConfirmInterrupt, handleCancelInterrupt,
     loadHistorySession, deleteHistorySession, exportHistorySession,
-    toggleFavoriteSession, updateHistoryTitle,
+    toggleFavoriteSession, updateHistoryTitle, syncCurrentTabTitle,
   } = useSessionManagement({
     messages, loading, historyData, currentSessionId,
     setHistoryData, setMessages, setCurrentView, setCurrentSessionId,
@@ -311,7 +311,7 @@ const App = () => {
     t, addToast, clearToasts,
     setMessages, setStatus, setLoading, setLoadingStartTime,
     setIsThinking, setStreamingActive, setHistoryData,
-    setCurrentSessionId, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
+    setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
     setPermissionMode, setClaudePermissionMode, setCodexPermissionMode,
     setSelectedClaudeModel, setSelectedCodexModel,
     setProviderConfigVersion, setActiveProviderConfig,
@@ -562,6 +562,8 @@ const App = () => {
           setCustomSessionTitle(newTitle);
           if (currentSessionId) {
             updateHistoryTitle(currentSessionId, newTitle);
+          } else {
+            syncCurrentTabTitle(newTitle);
           }
         }}
       />
