@@ -353,6 +353,59 @@ public class CodexSettingsManager {
         return result;
     }
 
+    /**
+     * 读取当前 Codex 模型状态。
+     * 仅提取聊天输入区需要展示的最小字段，避免把整份本地配置透传到前端。
+     *
+     * @return 包含 model / reasoningEffort 的 JSON；缺失时返回空对象
+     * @throws IOException 读取 ~/.codex/config.toml 失败时抛出
+     */
+    public JsonObject getCurrentCodexModelState() throws IOException {
+        JsonObject result = new JsonObject();
+        Map<String, Object> configToml = readConfigToml();
+        if (configToml == null) {
+            return result;
+        }
+
+        Object model = configToml.get("model");
+        if (model instanceof String && !((String) model).trim().isEmpty()) {
+            result.addProperty("model", ((String) model).trim());
+        }
+
+        Object reasoningEffort = configToml.get("model_reasoning_effort");
+        if (reasoningEffort instanceof String && !((String) reasoningEffort).trim().isEmpty()) {
+            result.addProperty("reasoningEffort", ((String) reasoningEffort).trim());
+        }
+
+        Object openAiProvider = configToml.get("model_providers");
+        if (openAiProvider instanceof Map<?, ?> providerMapObject) {
+            Object openAiConfigObject = providerMapObject.get("OpenAI");
+            if (openAiConfigObject instanceof Map<?, ?> openAiConfigMap) {
+                Object baseUrl = openAiConfigMap.get("base_url");
+                if (baseUrl instanceof String && !((String) baseUrl).trim().isEmpty()) {
+                    String normalizedBaseUrl = ((String) baseUrl).trim();
+                    result.addProperty("baseUrl", normalizedBaseUrl);
+                    result.addProperty("usesCustomBaseUrl", !isOfficialOpenAiBaseUrl(normalizedBaseUrl));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 判断当前 OpenAI base_url 是否仍然是官方默认地址。
+     * 这里只做最小白名单判断，命中官方地址时不提示风险，其余地址统一视为自定义上游。
+     *
+     * @param baseUrl 当前配置中的 OpenAI base_url
+     * @return 是否为官方默认地址
+     */
+    private boolean isOfficialOpenAiBaseUrl(String baseUrl) {
+        String normalized = baseUrl == null ? "" : baseUrl.trim();
+        return "https://api.openai.com/v1".equalsIgnoreCase(normalized)
+                || "https://api.openai.com".equalsIgnoreCase(normalized);
+    }
+
     // ==================== TOML Parsing Utilities ====================
 
     /**
@@ -455,13 +508,63 @@ public class CodexSettingsManager {
             int eqIndex = line.indexOf('=');
             if (eqIndex > 0) {
                 String key = line.substring(0, eqIndex).trim();
-                String valueStr = line.substring(eqIndex + 1).trim();
+                String valueStr = stripTomlInlineComment(line.substring(eqIndex + 1)).trim();
                 Object value = parseTomlValue(valueStr);
                 currentSection.put(key, value);
             }
         }
 
         return result;
+    }
+
+    /**
+     * 剥离 TOML 单行 value 中的行内注释。
+     * 仅在非引号上下文中把 `#` 视为注释起点，避免把字符串值里的合法字符误删。
+     *
+     * @param valueSegment `key = value` 中等号右侧的原始片段
+     * @return 去除行内注释后的值文本
+     */
+    private String stripTomlInlineComment(String valueSegment) {
+        boolean inDoubleQuote = false;
+        boolean inSingleQuote = false;
+        boolean escaped = false;
+        StringBuilder result = new StringBuilder();
+
+        for (int i = 0; i < valueSegment.length(); i++) {
+            char c = valueSegment.charAt(i);
+
+            if (escaped) {
+                result.append(c);
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\' && inDoubleQuote) {
+                result.append(c);
+                escaped = true;
+                continue;
+            }
+
+            if (c == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                result.append(c);
+                continue;
+            }
+
+            if (c == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                result.append(c);
+                continue;
+            }
+
+            if (c == '#' && !inDoubleQuote && !inSingleQuote) {
+                break;
+            }
+
+            result.append(c);
+        }
+
+        return result.toString();
     }
 
     /**

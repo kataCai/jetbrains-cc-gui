@@ -11,6 +11,9 @@ interface ModelSelectProps {
   models?: ModelInfo[];  // Optional dynamic model list
   currentProvider?: string;  // Current provider type
   onAddModel?: () => void;  // Navigate to model management
+  defaultCodexModelFromConfig?: string | null;  // CLI default model, display only
+  codexBaseUrl?: string | null;  // CLI base_url, display only
+  codexUsesCustomBaseUrl?: boolean;  // Whether current CLI base_url is non-official
 }
 
 const DEFAULT_MODEL_MAP: Record<string, ModelInfo> = AVAILABLE_MODELS.reduce(
@@ -26,11 +29,11 @@ const MODEL_LABEL_KEYS: Record<string, string> = {
   'claude-opus-4-6': 'models.claude.opus46.label',
   'claude-opus-4-6[1m]': 'models.claude.opus46_1m.label',
   'claude-haiku-4-5': 'models.claude.haiku45.label',
-  'gpt-5.3-codex': 'models.codex.gpt53codex.label',
+  'gpt-5.5': 'models.codex.gpt55.label',
   'gpt-5.4': 'models.codex.gpt54.label',
-  'gpt-5.2-codex': 'models.codex.gpt52codex.label',
-  'gpt-5.1-codex-max': 'models.codex.gpt51codexMax.label',
-  'gpt-5.1-codex-mini': 'models.codex.gpt51codexMini.label',
+  'gpt-5.4-mini': 'models.codex.gpt54mini.label',
+  'gpt-5.3-codex': 'models.codex.gpt53codex.label',
+  'gpt-5.2': 'models.codex.gpt52.label',
 };
 
 const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
@@ -38,11 +41,11 @@ const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   'claude-opus-4-6': 'models.claude.opus46.description',
   'claude-opus-4-6[1m]': 'models.claude.opus46_1m.description',
   'claude-haiku-4-5': 'models.claude.haiku45.description',
-  'gpt-5.3-codex': 'models.codex.gpt53codex.description',
+  'gpt-5.5': 'models.codex.gpt55.description',
   'gpt-5.4': 'models.codex.gpt54.description',
-  'gpt-5.2-codex': 'models.codex.gpt52codex.description',
-  'gpt-5.1-codex-max': 'models.codex.gpt51codexMax.description',
-  'gpt-5.1-codex-mini': 'models.codex.gpt51codexMini.description',
+  'gpt-5.4-mini': 'models.codex.gpt54mini.description',
+  'gpt-5.3-codex': 'models.codex.gpt53codex.description',
+  'gpt-5.2': 'models.codex.gpt52.description',
 };
 
 /**
@@ -96,7 +99,16 @@ const resolveModelIdForIcon = (
  * ModelSelect - Model selector component
  * Supports switching between Sonnet 4.5, Opus 4.5, and other models, including Codex models
  */
-export const ModelSelect = ({ value, onChange, models = AVAILABLE_MODELS, currentProvider = 'claude', onAddModel }: ModelSelectProps) => {
+export const ModelSelect = ({
+  value,
+  onChange,
+  models = AVAILABLE_MODELS,
+  currentProvider = 'claude',
+  onAddModel,
+  defaultCodexModelFromConfig = null,
+  codexBaseUrl = null,
+  codexUsesCustomBaseUrl = false,
+}: ModelSelectProps) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -104,6 +116,17 @@ export const ModelSelect = ({ value, onChange, models = AVAILABLE_MODELS, curren
 
   const currentModel = models.find(m => m.id === value) || models[0];
   const modelMapping = readClaudeModelMapping();
+  const normalizedDefaultCodexModel = typeof defaultCodexModelFromConfig === 'string'
+    ? defaultCodexModelFromConfig.trim()
+    : '';
+  const normalizedCodexBaseUrl = typeof codexBaseUrl === 'string'
+    ? codexBaseUrl.trim()
+    : '';
+  const shouldShowCodexDefaultHint = currentProvider === 'codex'
+    && normalizedDefaultCodexModel.length > 0;
+  const shouldShowCodexBaseUrlWarning = currentProvider === 'codex'
+    && codexUsesCustomBaseUrl
+    && normalizedCodexBaseUrl.length > 0;
 
   const getModelLabel = (model: ModelInfo): string => {
     // Only apply Claude model mapping to Claude models (not Codex)
@@ -189,7 +212,13 @@ export const ModelSelect = ({ value, onChange, models = AVAILABLE_MODELS, curren
         ref={buttonRef}
         className="selector-button"
         onClick={handleToggle}
-        title={t('chat.currentModel', { model: getModelLabel(currentModel) })}
+        title={shouldShowCodexDefaultHint
+          ? t('chat.currentModelWithCliDefault', {
+            model: getModelLabel(currentModel),
+            defaultModel: normalizedDefaultCodexModel,
+            defaultValue: `Current model: ${getModelLabel(currentModel)} | CLI default: ${normalizedDefaultCodexModel}`,
+          })
+          : t('chat.currentModel', { model: getModelLabel(currentModel) })}
       >
         <ProviderModelIcon
           providerId={currentProvider}
@@ -198,6 +227,21 @@ export const ModelSelect = ({ value, onChange, models = AVAILABLE_MODELS, curren
           colored
         />
         <span className="selector-button-text">{getModelLabel(currentModel)}</span>
+        {shouldShowCodexDefaultHint && normalizedDefaultCodexModel !== currentModel.id && (
+          <span
+            className="selector-button-meta"
+            style={{ marginLeft: '6px', opacity: 0.7, fontSize: '11px' }}
+            title={t('chat.codexCliDefaultModelHint', {
+              defaultModel: normalizedDefaultCodexModel,
+              defaultValue: `CLI default: ${normalizedDefaultCodexModel}`,
+            })}
+          >
+            {t('chat.codexCliDefaultModelBadge', {
+              defaultModel: normalizedDefaultCodexModel,
+              defaultValue: `CLI ${normalizedDefaultCodexModel}`,
+            })}
+          </span>
+        )}
         <span className={`codicon codicon-chevron-${isOpen ? 'up' : 'down'}`} style={{ fontSize: '10px', marginLeft: '2px' }} />
       </button>
 
@@ -213,6 +257,32 @@ export const ModelSelect = ({ value, onChange, models = AVAILABLE_MODELS, curren
             zIndex: 10000,
           }}
         >
+          {shouldShowCodexBaseUrlWarning && (
+            <div
+              className="selector-option"
+              style={{
+                cursor: 'default',
+                borderBottom: '1px solid var(--vscode-widget-border, rgba(255,255,255,0.08))',
+                background: 'var(--vscode-inputValidation-warningBackground, rgba(191, 140, 0, 0.12))',
+                color: 'var(--vscode-inputValidation-warningForeground, inherit)',
+              }}
+              title={t('chat.codexCustomBaseUrlWarning', {
+                baseUrl: normalizedCodexBaseUrl,
+                defaultValue: `Custom OpenAI base URL: ${normalizedCodexBaseUrl}. Model selection may not be fully supported by the upstream service.`,
+              })}
+            >
+              <span className="codicon codicon-warning" style={{ color: 'var(--vscode-editorWarning-foreground, #d7ba7d)' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                <span>{t('chat.codexCustomBaseUrlWarningTitle', { defaultValue: 'Custom OpenAI base URL' })}</span>
+                <span className="model-description">
+                  {t('chat.codexCustomBaseUrlWarningDescription', {
+                    baseUrl: normalizedCodexBaseUrl,
+                    defaultValue: `${normalizedCodexBaseUrl} may not support all model selections.`,
+                  })}
+                </span>
+              </div>
+            </div>
+          )}
           {models.map((model) => (
             <div
               key={model.id}
@@ -229,6 +299,13 @@ export const ModelSelect = ({ value, onChange, models = AVAILABLE_MODELS, curren
                 <span>{getModelLabel(model)}</span>
                 {getModelDescription(model) && (
                   <span className="model-description">{getModelDescription(model)}</span>
+                )}
+                {shouldShowCodexDefaultHint && model.id === normalizedDefaultCodexModel && (
+                  <span className="model-description">
+                    {t('chat.codexCliDefaultModelOption', {
+                      defaultValue: 'CLI default model',
+                    })}
+                  </span>
                 )}
               </div>
               {model.id === value && (

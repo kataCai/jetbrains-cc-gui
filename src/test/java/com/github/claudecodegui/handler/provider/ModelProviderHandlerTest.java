@@ -51,4 +51,19 @@ public class ModelProviderHandlerTest {
         assertEquals("glm-4.7[1M]", resolved);
         assertEquals(1_000_000, ModelProviderHandler.getModelContextLimit(resolved));
     }
+
+    @Test
+    public void shouldExposeGpt55ContextLimit() {
+        assertEquals(400_000, ModelProviderHandler.getModelContextLimit("gpt-5.5"));
+    }
+
+    @Test
+    public void shouldExposeGpt54MiniContextLimit() {
+        assertEquals(400_000, ModelProviderHandler.getModelContextLimit("gpt-5.4-mini"));
+    }
+
+    @Test
+    public void shouldExposeGpt52ContextLimit() {
+        assertEquals(258_000, ModelProviderHandler.getModelContextLimit("gpt-5.2"));
+    }
 }

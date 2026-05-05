@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ButtonAreaProps, ModelInfo, PermissionMode, ReasoningEffort } from './types';
 import { ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
-import { CLAUDE_MODELS, CODEX_MODELS } from './types';
+import { CLAUDE_MODELS, CODEX_MODELS, createRuntimeModelInfo } from './types';
 import { STORAGE_KEYS, validateCodexCustomModels } from '../../types/provider';
 import type { CodexCustomModel } from '../../types/provider';
 import { readClaudeModelMapping } from '../../utils/claudeModelMapping';
@@ -70,6 +70,26 @@ function getCustomClaudeModels(): ModelInfo[] {
 }
 
 /**
+ * 将当前已选模型注入到模型列表顶部。
+ * 这样即便当前模型来自本地 Codex 配置且尚未进入内置/自定义列表，
+ * 下拉框和按钮也仍能稳定展示当前值，而不是被旧默认值顶掉。
+ *
+ * @param models 原始模型列表
+ * @param selectedModel 当前已选模型 ID
+ * @return 包含当前模型的展示列表
+ */
+function ensureSelectedModelVisible(models: ModelInfo[], selectedModel: string): ModelInfo[] {
+  if (models.some(model => model.id === selectedModel)) {
+    return models;
+  }
+  const runtimeModel = createRuntimeModelInfo(selectedModel);
+  if (!runtimeModel) {
+    return models;
+  }
+  return [runtimeModel, ...models];
+}
+
+/**
  * ButtonArea - Bottom toolbar component
  * Contains mode selector, model selector, attachment button, prompt enhancer button, send/stop button
  */
@@ -79,6 +99,9 @@ export const ButtonArea = ({
   isLoading = false,
   isEnhancing = false,
   selectedModel = 'claude-sonnet-4-6',
+  defaultCodexModelFromConfig = null,
+  codexBaseUrl = null,
+  codexUsesCustomBaseUrl = false,
   permissionMode = 'bypassPermissions',
   currentProvider = 'claude',
   reasoningEffort = 'medium',
@@ -171,13 +194,13 @@ export const ButtonArea = ({
       // Merge built-in models and custom models
       const customModels = getCustomCodexModels();
       if (customModels.length === 0) {
-        return CODEX_MODELS;
+        return ensureSelectedModelVisible(CODEX_MODELS, selectedModel);
       }
       // Custom models first, built-in models after
       // Filter out built-in models that duplicate custom models
       const customIds = new Set(customModels.map(m => m.id));
       const filteredBuiltIn = CODEX_MODELS.filter(m => !customIds.has(m.id));
-      return [...customModels, ...filteredBuiltIn];
+      return ensureSelectedModelVisible([...customModels, ...filteredBuiltIn], selectedModel);
     }
     if (typeof window === 'undefined' || !window.localStorage) {
       return CLAUDE_MODELS;
@@ -311,7 +334,16 @@ export const ButtonArea = ({
           </div>
         )}
         <ModeSelect value={chatExecutionMode} onChange={handleModeSelect} provider={currentProvider} />
-        <ModelSelect value={selectedModel} onChange={handleModelSelect} models={availableModels} currentProvider={currentProvider} onAddModel={onAddModel} />
+        <ModelSelect
+          value={selectedModel}
+          onChange={handleModelSelect}
+          models={availableModels}
+          currentProvider={currentProvider}
+          onAddModel={onAddModel}
+          defaultCodexModelFromConfig={currentProvider === 'codex' ? defaultCodexModelFromConfig : null}
+          codexBaseUrl={currentProvider === 'codex' ? codexBaseUrl : null}
+          codexUsesCustomBaseUrl={currentProvider === 'codex' ? codexUsesCustomBaseUrl : false}
+        />
         {currentProvider === 'codex' && (
           <ReasoningSelect value={reasoningEffort} onChange={handleReasoningChange} />
         )}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { sendBridgeEvent } from '../utils/bridge';
-import { CLAUDE_MODELS, CODEX_MODELS, isValidPermissionMode } from '../components/ChatInputBox/types';
+import { CLAUDE_MODELS, CODEX_MODELS, createRuntimeModelInfo, isValidPermissionMode } from '../components/ChatInputBox/types';
 import type { PermissionMode, ReasoningEffort, SelectedAgent } from '../components/ChatInputBox/types';
 import type { ProviderConfig } from '../types/provider';
 import { isSpecialProviderId } from '../types/provider';
@@ -15,6 +15,54 @@ const getCustomModels = (key: string): { id: string }[] => {
     return raw ? JSON.parse(raw) : [];
   } catch { return []; }
 };
+
+/**
+ * 判断给定模型是否存在于内置或自定义列表中。
+ * Codex 当前模型可能来自本地 CLI 配置，不一定已经写入前端静态列表，
+ * 因此前端恢复状态时需要允许保留未知但非空的模型 ID。
+ *
+ * @param modelId 待校验模型 ID
+ * @param builtInModels 内置模型列表
+ * @param customModels 本地自定义模型列表
+ * @return 是否可直接视为已注册模型
+ */
+function isKnownModel(
+  modelId: string | null | undefined,
+  builtInModels: { id: string }[],
+  customModels: { id: string }[],
+): boolean {
+  const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!normalizedModelId) {
+    return false;
+  }
+  return builtInModels.some(model => model.id === normalizedModelId)
+    || customModels.some(model => model.id === normalizedModelId);
+}
+
+/**
+ * 解析可用于前端状态恢复的模型 ID。
+ * 若模型出现在已知列表中则原样返回；否则只要是非空字符串也允许保留，
+ * 用于兼容后端同步过来的新模型或用户 CLI 本地配置中的未知模型。
+ *
+ * @param modelId 原始模型 ID
+ * @param builtInModels 内置模型列表
+ * @param customModels 自定义模型列表
+ * @return 可恢复模型 ID；无效时返回 null
+ */
+function resolveRestorableModelId(
+  modelId: string | null | undefined,
+  builtInModels: { id: string }[],
+  customModels: { id: string }[],
+): string | null {
+  const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!normalizedModelId) {
+    return null;
+  }
+  if (isKnownModel(normalizedModelId, builtInModels, customModels)) {
+    return normalizedModelId;
+  }
+  return createRuntimeModelInfo(normalizedModelId)?.id ?? null;
+}
 
 export interface UseModelProviderStateOptions {
   addToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -30,6 +78,9 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   const [currentProvider, setCurrentProvider] = useState('claude');
   const [selectedClaudeModel, setSelectedClaudeModel] = useState(CLAUDE_MODELS[0].id);
   const [selectedCodexModel, setSelectedCodexModel] = useState(CODEX_MODELS[0].id);
+  const [defaultCodexModelFromConfig, setDefaultCodexModelFromConfig] = useState<string | null>(null);
+  const [codexBaseUrl, setCodexBaseUrl] = useState<string | null>(null);
+  const [codexUsesCustomBaseUrl, setCodexUsesCustomBaseUrl] = useState(false);
   const [claudePermissionMode, setClaudePermissionMode] = useState<PermissionMode>('bypassPermissions');
   const [codexPermissionMode, setCodexPermissionMode] = useState<PermissionMode>('default');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('bypassPermissions');
@@ -56,6 +107,7 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   // Refs for stale closure prevention
   const currentProviderRef = useRef(currentProvider);
   const activeProviderConfigRef = useRef(activeProviderConfig);
+  const shouldAdoptCodexDefaultModelRef = useRef(true);
   useEffect(() => { currentProviderRef.current = currentProvider; }, [currentProvider]);
   useEffect(() => { activeProviderConfigRef.current = activeProviderConfig; }, [activeProviderConfig]);
 
@@ -139,12 +191,15 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
         }
 
         const savedCodexCustomModels = getCustomModels('codex-custom-models');
-        if (
-          CODEX_MODELS.find(m => m.id === state.codexModel) ||
-          savedCodexCustomModels.find((m: { id: string }) => m.id === state.codexModel)
-        ) {
-          restoredCodexModel = state.codexModel;
-          setSelectedCodexModel(state.codexModel);
+        const restoredCodexModelId = resolveRestorableModelId(
+          state.codexModel,
+          CODEX_MODELS,
+          savedCodexCustomModels,
+        );
+        if (restoredCodexModelId) {
+          shouldAdoptCodexDefaultModelRef.current = false;
+          restoredCodexModel = restoredCodexModelId;
+          setSelectedCodexModel(restoredCodexModelId);
         }
       }
 
@@ -175,6 +230,31 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     } catch {
       // Failed to load model selection state
     }
+  }, []);
+
+  useEffect(() => {
+    let retryCount = 0;
+    const MAX_RETRIES = 10;
+    let timeoutId: number | undefined;
+
+      const requestCodexModelState = () => {
+        if (window.sendToJava) {
+          sendBridgeEvent('get_codex_model_state');
+      } else {
+        retryCount++;
+        if (retryCount < MAX_RETRIES) {
+          timeoutId = window.setTimeout(requestCodexModelState, 100);
+        }
+      }
+    };
+
+    timeoutId = window.setTimeout(requestCodexModelState, 200);
+
+    return () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, []);
 
   // Save model selection state to LocalStorage
@@ -236,6 +316,7 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     if (currentProviderRef.current === 'claude') {
       setSelectedClaudeModel(modelId);
     } else if (currentProviderRef.current === 'codex') {
+      shouldAdoptCodexDefaultModelRef.current = false;
       setSelectedCodexModel(modelId);
     }
     sendBridgeEvent('set_model', modelId);
@@ -341,10 +422,13 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     currentProvider, setCurrentProvider,
     selectedClaudeModel, setSelectedClaudeModel,
     selectedCodexModel, setSelectedCodexModel,
+    defaultCodexModelFromConfig, setDefaultCodexModelFromConfig,
+    codexBaseUrl, setCodexBaseUrl,
+    codexUsesCustomBaseUrl, setCodexUsesCustomBaseUrl,
     claudePermissionMode, setClaudePermissionMode,
     codexPermissionMode, setCodexPermissionMode,
     permissionMode, setPermissionMode,
-    reasoningEffort,
+    reasoningEffort, setReasoningEffort,
     usagePercentage, setUsagePercentage,
     usageUsedTokens, setUsageUsedTokens,
     usageMaxTokens, setUsageMaxTokens,
@@ -363,6 +447,7 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     // Refs
     currentProviderRef,
     activeProviderConfigRef,
+    shouldAdoptCodexDefaultModelRef,
     // Functions
     syncActiveProviderModelMapping,
     // Handlers

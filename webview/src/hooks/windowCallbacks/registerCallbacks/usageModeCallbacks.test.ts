@@ -16,6 +16,10 @@ function createOptions(provider: 'claude' | 'codex' = 'claude') {
     setCodexPermissionMode: vi.fn(),
     setSelectedClaudeModel: vi.fn(),
     setSelectedCodexModel: vi.fn(),
+    setDefaultCodexModelFromConfig: vi.fn(),
+    setCodexBaseUrl: vi.fn(),
+    setCodexUsesCustomBaseUrl: vi.fn(),
+    setReasoningEffort: vi.fn(),
     setProviderConfigVersion: vi.fn(),
     setActiveProviderConfig: vi.fn(),
     setClaudeSettingsAlwaysThinkingEnabled: vi.fn(),
@@ -23,6 +27,7 @@ function createOptions(provider: 'claude' | 'codex' = 'claude') {
     setSendShortcut: vi.fn(),
     setAutoOpenFileEnabled: vi.fn(),
     currentProviderRef: { current: provider },
+    shouldAdoptCodexDefaultModelRef: { current: true },
     syncActiveProviderModelMapping: vi.fn(),
   } as any;
 }
@@ -73,5 +78,59 @@ describe('registerUsageModeCallbacks', () => {
     const codexUpdater = options.setCodexPermissionMode.mock.calls[0][0];
     expect(permissionUpdater('default')).toBe('acceptEdits');
     expect(codexUpdater('default')).toBe('acceptEdits');
+  });
+  it('updates codex selected model from backend codex model state callback', () => {
+    const options = createOptions('codex');
+    registerUsageModeCallbacks(options);
+
+    window.updateCodexModelState?.(JSON.stringify({
+      model: 'gpt-5.5',
+      reasoningEffort: 'high',
+    }));
+
+    expect(options.setDefaultCodexModelFromConfig).toHaveBeenCalledWith('gpt-5.5');
+    expect(options.setCodexBaseUrl).toHaveBeenCalledWith(null);
+    expect(options.setCodexUsesCustomBaseUrl).toHaveBeenCalledWith(false);
+    expect(options.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.5');
+    expect(options.setReasoningEffort).toHaveBeenCalledWith('high');
+  });
+
+  it('does not trigger another codex model state refresh after backend sync', () => {
+    const options = createOptions('codex');
+    registerUsageModeCallbacks(options);
+
+    window.updateCodexModelState?.(JSON.stringify({
+      model: 'gpt-5.5',
+      reasoningEffort: 'high',
+    }));
+
+    expect((options as any).setCodexModelStateVersion).toBeUndefined();
+  });
+
+  it('stores cli default model without overriding a user-selected codex session model', () => {
+    const options = createOptions('codex');
+    options.shouldAdoptCodexDefaultModelRef.current = false;
+    registerUsageModeCallbacks(options);
+
+    window.updateCodexModelState?.(JSON.stringify({
+      model: 'gpt-5.5',
+    }));
+
+    expect(options.setDefaultCodexModelFromConfig).toHaveBeenCalledWith('gpt-5.5');
+    expect(options.setSelectedCodexModel).not.toHaveBeenCalled();
+  });
+
+  it('stores custom codex base_url warning metadata from backend sync', () => {
+    const options = createOptions('codex');
+    registerUsageModeCallbacks(options);
+
+    window.updateCodexModelState?.(JSON.stringify({
+      model: 'gpt-5.5',
+      baseUrl: 'https://rayplus.site',
+      usesCustomBaseUrl: true,
+    }));
+
+    expect(options.setCodexBaseUrl).toHaveBeenCalledWith('https://rayplus.site');
+    expect(options.setCodexUsesCustomBaseUrl).toHaveBeenCalledWith(true);
   });
 });

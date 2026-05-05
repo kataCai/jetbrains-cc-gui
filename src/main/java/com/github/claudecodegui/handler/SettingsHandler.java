@@ -32,6 +32,7 @@ public class SettingsHandler extends BaseMessageHandler {
         "set_model",
         "set_provider",
         "set_reasoning_effort",
+        "get_codex_model_state",
         "get_node_path",
         "set_node_path",
         "get_usage_statistics",
@@ -135,6 +136,9 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "set_reasoning_effort":
                 modelProviderHandler.handleSetReasoningEffort(content);
+                return true;
+            case "get_codex_model_state":
+                modelProviderHandler.handleGetCodexModelState();
                 return true;
             // Node path
             case "get_node_path":

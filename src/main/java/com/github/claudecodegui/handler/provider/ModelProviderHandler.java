@@ -27,7 +27,9 @@ public class ModelProviderHandler {
         MODEL_CONTEXT_LIMITS.put("claude-sonnet-4-6", 200_000);
         MODEL_CONTEXT_LIMITS.put("claude-opus-4-6", 200_000);
         MODEL_CONTEXT_LIMITS.put("claude-haiku-4-5", 200_000);
+        MODEL_CONTEXT_LIMITS.put("gpt-5.5", 400_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.4", 1_000_000);
+        MODEL_CONTEXT_LIMITS.put("gpt-5.4-mini", 400_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.3-codex", 258_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.2-codex", 258_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.1-codex-max", 258_000);
@@ -145,6 +147,25 @@ public class ModelProviderHandler {
             }
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to set reasoning effort: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 将当前 Codex 模型状态推送到前端。
+     * 读取受 Codemoss 授权控制的 ~/.codex/config.toml，并仅同步聊天输入区需要的字段，
+     * 避免前端依赖过期的静态默认值。
+     */
+    public void handleGetCodexModelState() {
+        try {
+            JsonObject modelState = context.getSettingsService().getCurrentCodexModelState();
+            ApplicationManager.getApplication().invokeLater(() ->
+                context.callJavaScript("window.updateCodexModelState", context.escapeJs(modelState.toString()))
+            );
+        } catch (Exception e) {
+            LOG.error("[ModelProviderHandler] Failed to load Codex model state: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() ->
+                context.callJavaScript("window.updateCodexModelState", context.escapeJs(new JsonObject().toString()))
+            );
         }
     }
 

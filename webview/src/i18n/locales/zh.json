@@ -42,6 +42,13 @@
     "sendMessageEnter": "发送消息 (Enter)",
     "currentMode": "当前模式: {{mode}}",
     "currentModel": "当前模型: {{model}}",
+    "currentModelWithCliDefault": "当前模型: {{model}} | CLI 默认: {{defaultModel}}",
+    "codexCliDefaultModelHint": "CLI 默认模型: {{defaultModel}}",
+    "codexCliDefaultModelBadge": "CLI {{defaultModel}}",
+    "codexCliDefaultModelOption": "CLI 默认模型",
+    "codexCustomBaseUrlWarning": "当前使用自定义 OpenAI base URL：{{baseUrl}}。上游服务可能不完全支持模型切换。",
+    "codexCustomBaseUrlWarningTitle": "自定义 OpenAI base URL",
+    "codexCustomBaseUrlWarningDescription": "{{baseUrl}} 可能不支持全部模型选择。",
     "removeAttachment": "移除附件",
     "closePreview": "关闭预览",
     "loadingDropdown": "加载中...",
@@ -1434,25 +1441,25 @@
       }
     },
     "codex": {
+      "gpt55": {
+        "label": "gpt-5.5",
+        "description": "适用于复杂编码、研究和真实工作场景的前沿模型。"
+      },
       "gpt53codex": {
         "label": "gpt-5.3-codex",
         "description": "最新前沿智能编程模型，能力全面增强"
       },
       "gpt54": {
         "label": "gpt-5.4",
-        "description": "最新前沿模型，能力进一步增强"
+        "description": "适合日常编码的强大模型"
       },
-      "gpt52codex": {
-        "label": "gpt-5.2-codex",
-        "description": "最新前沿智能编程模型"
+      "gpt54mini": {
+        "label": "gpt-5.4-mini",
+        "description": "适合简单编码任务的小型、快速、成本更低的模型"
       },
-      "gpt51codexMax": {
-        "label": "gpt-5.1-codex-max",
-        "description": "针对Codex优化的旗舰模型，深度与快速推理兼备"
-      },
-      "gpt51codexMini": {
-        "label": "gpt-5.1-codex-mini",
-        "description": "针对Codex优化。更便宜、更快，但性能较差"
+      "gpt52": {
+        "label": "gpt-5.2",
+        "description": "适合专业工作和长时间运行任务的优化模型"
       }
     }
   },

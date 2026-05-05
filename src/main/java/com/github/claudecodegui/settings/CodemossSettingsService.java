@@ -1430,6 +1430,21 @@ public class CodemossSettingsService {
         return codexProviderManager.getCurrentCodexConfig();
     }
 
+    /**
+     * 获取当前 Codex 模型状态。
+     * 该接口与读取本地 ~/.codex/ 配置共享同一授权边界，未授权时必须返回空对象，
+     * 避免前端在未经确认的情况下读取用户本地 CLI 配置。
+     *
+     * @return 当前模型状态；未授权或读取失败时返回空对象
+     * @throws IOException 配置读取失败时抛出
+     */
+    public JsonObject getCurrentCodexModelState() throws IOException {
+        if (!isCodexLocalConfigAuthorized()) {
+            return new JsonObject();
+        }
+        return codexSettingsManager.getCurrentCodexModelState();
+    }
+
     public boolean isCodexCliLoginAvailable() {
         try {
             if (!isCodexLocalConfigAuthorized()) {

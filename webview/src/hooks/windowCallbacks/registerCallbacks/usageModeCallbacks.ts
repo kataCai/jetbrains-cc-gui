@@ -8,7 +8,7 @@
  */
 
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
-import type { PermissionMode } from '../../../components/ChatInputBox/types';
+import type { PermissionMode, ReasoningEffort } from '../../../components/ChatInputBox/types';
 import { isValidPermissionMode } from '../../../components/ChatInputBox/types';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
@@ -22,6 +22,10 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setDefaultCodexModelFromConfig,
+    setCodexBaseUrl,
+    setCodexUsesCustomBaseUrl,
+    setReasoningEffort,
     setProviderConfigVersion,
     setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled,
@@ -29,6 +33,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setSendShortcut,
     setAutoOpenFileEnabled,
     currentProviderRef,
+    shouldAdoptCodexDefaultModelRef,
     syncActiveProviderModelMapping,
   } = options;
 
@@ -96,6 +101,43 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setSelectedClaudeModel(modelId);
     } else if (provider === 'codex') {
       setSelectedCodexModel(modelId);
+    }
+  };
+
+  /**
+   * 接收后端同步的 Codex 当前模型状态。
+   * 后端仅在本地配置授权后才会返回有效值；前端收到后需要覆盖旧缓存，
+   * 以保证 GUI 展示和 CLI 实际运行模型一致。
+   */
+  window.updateCodexModelState = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr) as {
+        model?: string;
+        reasoningEffort?: ReasoningEffort;
+        baseUrl?: string;
+        usesCustomBaseUrl?: boolean;
+      };
+      if (typeof data.model === 'string' && data.model.trim().length > 0) {
+        const normalizedModel = data.model.trim();
+        setDefaultCodexModelFromConfig(normalizedModel);
+        if (shouldAdoptCodexDefaultModelRef.current) {
+          setSelectedCodexModel(normalizedModel);
+        }
+      }
+      if (
+        data.reasoningEffort === 'low'
+        || data.reasoningEffort === 'medium'
+        || data.reasoningEffort === 'high'
+        || data.reasoningEffort === 'xhigh'
+      ) {
+        setReasoningEffort(data.reasoningEffort);
+      }
+      setCodexBaseUrl(typeof data.baseUrl === 'string' && data.baseUrl.trim().length > 0
+        ? data.baseUrl.trim()
+        : null);
+      setCodexUsesCustomBaseUrl(data.usesCustomBaseUrl === true);
+    } catch (error) {
+      console.error('[Frontend] Failed to parse Codex model state:', error);
     }
   };
 
