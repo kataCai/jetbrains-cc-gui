@@ -11,12 +11,13 @@ import com.intellij.openapi.project.Project;
 import java.util.List;
 
 /**
- * 统一组装任务提醒摘要与展示文案。
- * 任务提醒优先展示当前轮次的可读任务文本，并过滤仅用于内部链路的 tool_result 占位消息。
+ * 统一组装任务提醒标题与正文。
+ * 任务摘要保持“当前轮次优先”，系统通知主标题则保持会话标题语义，避免两者相互覆盖。
  */
 public class TaskReminderPayloadFactory {
 
     private static final int MAX_SUMMARY_LENGTH = 80;
+    private static final String DEFAULT_NOTIFICATION_TITLE = "CC GUI";
     private static final String TOOL_RESULT_PLACEHOLDER = "[tool_result]";
 
     @FunctionalInterface
@@ -44,6 +45,16 @@ public class TaskReminderPayloadFactory {
         return create(context, snapshot, fallbackMessage, null);
     }
 
+    /**
+     * 创建提醒负载。
+     * 标题与正文分别解析，正文继续优先采用当前轮次任务摘要，标题则优先采用稳定会话标题。
+     *
+     * @param context 处理上下文
+     * @param snapshot 当前任务快照
+     * @param fallbackMessage 默认提醒正文
+     * @param preferredTaskSummary 调用方显式传入的任务摘要
+     * @return 已拆分标题与正文的提醒负载
+     */
     public TaskReminderNotificationPayload create(
         HandlerContext context,
         TaskStateSnapshot snapshot,
@@ -55,19 +66,25 @@ public class TaskReminderPayloadFactory {
             context != null && context.getSession() != null ? context.getSession().getSessionId() : null
         );
         String requestId = snapshot != null ? snapshot.getRequestId() : null;
-        String summary = resolveSummary(
+        String taskSummary = resolveTaskSummary(
             context != null ? context.getSession() : null,
             context != null ? context.getProject() : null,
             sessionId,
             fallbackMessage,
             preferredTaskSummary
         );
-        String message = hasText(summary) ? summary : sanitizeHeadlineAndTruncate(fallbackMessage);
+        String message = hasText(taskSummary) ? taskSummary : sanitizeHeadlineAndTruncate(fallbackMessage);
+        String notificationTitle = resolveNotificationTitle(
+            context != null ? context.getSession() : null,
+            context != null ? context.getProject() : null,
+            sessionId
+        );
 
         return new TaskReminderNotificationPayload(
             snapshot != null ? snapshot.getState() : null,
             sessionId,
             requestId,
+            notificationTitle,
             message,
             message
         );
@@ -91,7 +108,7 @@ public class TaskReminderPayloadFactory {
             snapshot != null ? snapshot.getSessionId() : null,
             context != null && context.getSession() != null ? context.getSession().getSessionId() : null
         );
-        return resolveSummary(
+        return resolveTaskSummary(
             context != null ? context.getSession() : null,
             context != null ? context.getProject() : null,
             sessionId,
@@ -100,7 +117,18 @@ public class TaskReminderPayloadFactory {
         );
     }
 
-    private String resolveSummary(
+    /**
+     * 解析提醒正文摘要。
+     * 当前轮次任务优先，只有缺失可读任务摘要时才退回会话级信息。
+     *
+     * @param session 当前会话
+     * @param project 当前项目
+     * @param sessionId 会话 ID
+     * @param fallbackMessage 默认提醒正文
+     * @param preferredTaskSummary 调用方显式传入的任务摘要
+     * @return 最适合作为提醒正文的摘要
+     */
+    private String resolveTaskSummary(
         ClaudeSession session,
         Project project,
         String sessionId,
@@ -117,9 +145,6 @@ public class TaskReminderPayloadFactory {
             return latestUserMessage;
         }
 
-        // 任务提醒优先体现当前轮次处理内容；会话 summary 只作为兜底标题使用。
-        // ?????????????????????????????????
-        // ???????????????????????????
         String sessionSummary = sanitizeHeadlineAndTruncate(session != null ? session.getSummary() : null);
         if (hasText(sessionSummary)) {
             return sessionSummary;
@@ -131,6 +156,29 @@ public class TaskReminderPayloadFactory {
         }
 
         return sanitizeHeadlineAndTruncate(fallbackMessage);
+    }
+
+    /**
+     * 解析系统通知主标题。
+     * 主标题优先反映会话标题，不直接复用任务摘要。
+     *
+     * @param session 当前会话
+     * @param project 当前项目
+     * @param sessionId 会话 ID
+     * @return 系统通知主标题；无可用标题时回退到固定产品名
+     */
+    private String resolveNotificationTitle(ClaudeSession session, Project project, String sessionId) {
+        String tabDisplayName = sanitizeHeadlineAndTruncate(tabDisplayNameResolver.resolve(project, sessionId));
+        if (hasText(tabDisplayName)) {
+            return tabDisplayName;
+        }
+
+        String sessionSummary = sanitizeHeadlineAndTruncate(session != null ? session.getSummary() : null);
+        if (hasText(sessionSummary)) {
+            return sessionSummary;
+        }
+
+        return DEFAULT_NOTIFICATION_TITLE;
     }
 
     private String findLatestUserMessage(ClaudeSession session) {
@@ -148,7 +196,7 @@ public class TaskReminderPayloadFactory {
     }
 
     /**
-     * 任务提醒只展示用户可理解的摘要；tool_result 占位消息只用于内部 block 对齐，不能直接暴露给通知正文。
+     * 任务提醒只展示用户可理解的摘要；tool_result 占位消息只用于内部 block 对齐，不应直接暴露给通知正文。
      */
     private static boolean isVisibleUserMessage(ClaudeSession.Message message) {
         if (message == null || message.type != ClaudeSession.Message.Type.USER) {
@@ -214,17 +262,6 @@ public class TaskReminderPayloadFactory {
         return hasToolResult && !hasVisibleContent;
     }
 
-    private static String sanitizeAndTruncate(String value) {
-        String normalized = normalizeSummary(value);
-        if (!hasText(normalized)) {
-            return null;
-        }
-        if (normalized.length() <= MAX_SUMMARY_LENGTH) {
-            return normalized;
-        }
-        return normalized.substring(0, MAX_SUMMARY_LENGTH - 3) + "...";
-    }
-
     private static String sanitizeHeadlineAndTruncate(String value) {
         String normalized = extractHeadline(value);
         if (!hasText(normalized)) {
@@ -237,8 +274,10 @@ public class TaskReminderPayloadFactory {
     }
 
     /**
-     * ???????????????
-     * ??????????????????????????????????
+     * 统一提取首条可读标题行，避免多行问题把整段提示词带入通知。
+     *
+     * @param value 原始文本
+     * @return 首条可读标题行
      */
     private static String extractHeadline(String value) {
         if (!hasText(value)) {

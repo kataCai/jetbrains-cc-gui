@@ -17,7 +17,7 @@ public class SystemReminderNotifier {
 
     private static final Logger LOG = Logger.getInstance(SystemReminderNotifier.class);
     private static final String TRAY_TOOLTIP = "CC GUI";
-    private static final String NOTIFICATION_TITLE = "CC GUI";
+    private static final String DEFAULT_NOTIFICATION_TITLE = "CC GUI";
 
     @FunctionalInterface
     public interface TrayImageLoader {
@@ -44,6 +44,11 @@ public class SystemReminderNotifier {
 
     /**
      * 测试专用构造器，允许注入托盘抽象和图标加载逻辑。
+     *
+     * @param systemTrayFacade 托盘抽象
+     * @param toolWindowActivator 工具窗口激活器
+     * @param taskNavigator 任务导航器
+     * @param trayImageLoader 托盘图标加载器
      */
     public SystemReminderNotifier(
         SystemTrayFacade systemTrayFacade,
@@ -59,6 +64,10 @@ public class SystemReminderNotifier {
 
     /**
      * 发送系统通知；环境不支持时静默跳过，不影响主流程。
+     *
+     * @param project 当前项目
+     * @param state 当前任务状态
+     * @param message 系统通知正文
      */
     public void showTaskReminder(Project project, TaskState state, String message) {
         showTaskReminder(
@@ -72,10 +81,24 @@ public class SystemReminderNotifier {
             return;
         }
         latestNavigationTargetRef.set(new TaskReminderNavigationTarget(project, payload.getSessionId(), payload.getRequestId()));
-        showTaskReminderInternal(project, payload.getState(), payload.getMessage());
+        showTaskReminderInternal(
+            project,
+            payload.getState(),
+            resolveNotificationTitle(payload),
+            payload.getMessage()
+        );
     }
 
-    private void showTaskReminderInternal(Project project, TaskState state, String message) {
+    /**
+     * 发送系统通知。
+     * 托盘 tooltip 始终保持固定产品名；只有系统通知主标题会按会话标题变化。
+     *
+     * @param project 当前项目
+     * @param state 当前任务状态
+     * @param notificationTitle 系统通知主标题
+     * @param message 系统通知正文
+     */
+    private void showTaskReminderInternal(Project project, TaskState state, String notificationTitle, String message) {
         if (project == null || project.isDisposed() || state == null || message == null || message.trim().isEmpty()) {
             return;
         }
@@ -97,10 +120,28 @@ public class SystemReminderNotifier {
         }
 
         try {
-            handle.displayMessage(NOTIFICATION_TITLE, message, toMessageType(state));
+            handle.displayMessage(notificationTitle, message, toMessageType(state));
         } catch (Exception e) {
             LOG.warn("[SystemReminderNotifier] Failed to display system reminder: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 解析系统通知主标题。
+     * 当 payload 中没有可用标题时，统一回退到固定产品名 `CC GUI`。
+     *
+     * @param payload 当前提醒负载
+     * @return 最终用于系统通知的主标题
+     */
+    private String resolveNotificationTitle(TaskReminderNotificationPayload payload) {
+        if (payload == null) {
+            return DEFAULT_NOTIFICATION_TITLE;
+        }
+        String notificationTitle = payload.getNotificationTitle();
+        if (notificationTitle == null || notificationTitle.trim().isEmpty()) {
+            return DEFAULT_NOTIFICATION_TITLE;
+        }
+        return notificationTitle.trim();
     }
 
     private SystemTrayFacade.TrayIconHandle ensureTrayIconHandle() {

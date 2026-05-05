@@ -89,6 +89,48 @@ public class TaskReminderDispatcherTest {
     }
 
     @Test
+    public void shouldSeparateNotificationTitleFromTaskSummaryForSystemReminder() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        context.setSession(sessionWithSummaryAndUserMessage(
+            "Session Summary Title",
+            "Summarize the latest user task"
+        ));
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            () -> policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false,
+            snapshot -> "completed",
+            new com.github.claudecodegui.notifications.TaskReminderPayloadFactory(
+                (project, sessionId) -> "Stable Tab Title..."
+            )
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-system", "req-title-body", "send_completed"), false);
+
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("Stable Tab Title...", systemNotifier.notificationTitles.get(0));
+        assertEquals("Summarize the latest user task", systemNotifier.messages.get(0));
+    }
+
+    @Test
     public void shouldDedupePopupForSameSnapshot() {
         CapturingHandlerContext context = new CapturingHandlerContext();
         RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
@@ -721,6 +763,7 @@ public class TaskReminderDispatcherTest {
      */
     private static class RecordingSystemReminderNotifier extends SystemReminderNotifier {
         private final AtomicInteger callCount = new AtomicInteger();
+        private final List<String> notificationTitles = new ArrayList<>();
         private final List<String> messages = new ArrayList<>();
 
         RecordingSystemReminderNotifier() {
@@ -734,11 +777,25 @@ public class TaskReminderDispatcherTest {
 
         @Override
         public void showTaskReminder(Project project, TaskReminderNotificationPayload payload) {
-            record(payload != null ? payload.getMessage() : null);
+            record(
+                payload != null ? payload.getNotificationTitle() : null,
+                payload != null ? payload.getMessage() : null
+            );
         }
 
         private void record(String message) {
+            record(null, message);
+        }
+
+        /**
+         * 记录系统通知最终使用的标题与正文，便于验证两者已经解耦。
+         *
+         * @param notificationTitle 系统通知主标题
+         * @param message 系统通知正文
+         */
+        private void record(String notificationTitle, String message) {
             callCount.incrementAndGet();
+            notificationTitles.add(notificationTitle);
             messages.add(message);
         }
     }

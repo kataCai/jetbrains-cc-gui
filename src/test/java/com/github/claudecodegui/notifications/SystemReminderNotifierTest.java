@@ -63,6 +63,64 @@ public class SystemReminderNotifierTest {
     }
 
     @Test
+    public void shouldUsePayloadNotificationTitleWhenDisplayingSystemNotification() {
+        RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
+        RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
+        SystemReminderNotifier notifier = new SystemReminderNotifier(
+            trayFacade,
+            activator,
+            navigator,
+            SystemReminderNotifierTest::createTestImage
+        );
+
+        notifier.showTaskReminder(
+            createProject(false),
+            new TaskReminderNotificationPayload(
+                TaskState.COMPLETED,
+                "session-title",
+                "req-title",
+                "Stable Session Title",
+                "Current task summary",
+                "Current task summary"
+            )
+        );
+
+        assertEquals(1, trayFacade.displayedMessages.size());
+        assertEquals("Stable Session Title", trayFacade.displayedMessages.get(0).title);
+        assertEquals("Current task summary", trayFacade.displayedMessages.get(0).message);
+    }
+
+    @Test
+    public void shouldFallbackToCcGuiWhenPayloadNotificationTitleIsBlank() {
+        RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
+        RecordingToolWindowActivator activator = new RecordingToolWindowActivator();
+        RecordingTaskNavigator navigator = new RecordingTaskNavigator();
+        SystemReminderNotifier notifier = new SystemReminderNotifier(
+            trayFacade,
+            activator,
+            navigator,
+            SystemReminderNotifierTest::createTestImage
+        );
+
+        notifier.showTaskReminder(
+            createProject(false),
+            new TaskReminderNotificationPayload(
+                TaskState.COMPLETED,
+                "session-title",
+                "req-title",
+                "   ",
+                "Current task summary",
+                "Current task summary"
+            )
+        );
+
+        assertEquals(1, trayFacade.displayedMessages.size());
+        assertEquals("CC GUI", trayFacade.displayedMessages.get(0).title);
+        assertEquals("Current task summary", trayFacade.displayedMessages.get(0).message);
+    }
+
+    @Test
     public void shouldHandleTrayInitializationFailureGracefully() {
         RecordingSystemTrayFacade trayFacade = new RecordingSystemTrayFacade();
         trayFacade.failOnCreate = true;
