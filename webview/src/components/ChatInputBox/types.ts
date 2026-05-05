@@ -251,6 +251,25 @@ export interface ModelInfo {
 }
 
 /**
+ * 构造运行时兜底模型项。
+ * 当后端或本地配置返回的模型未包含在内置列表时，前端仍需保留并展示当前值，
+ * 避免启动后被旧列表静默覆盖。
+ *
+ * @param modelId 运行时返回的模型 ID
+ * @return 可直接用于选择器展示的模型项；空字符串返回 null
+ */
+export function createRuntimeModelInfo(modelId: string | null | undefined): ModelInfo | null {
+  const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!normalizedModelId) {
+    return null;
+  }
+  return {
+    id: normalizedModelId,
+    label: normalizedModelId,
+  };
+}
+
+/**
  * Claude model list
  */
 export const CLAUDE_MODELS: ModelInfo[] = [
@@ -281,29 +300,29 @@ export const CLAUDE_MODELS: ModelInfo[] = [
  */
 export const CODEX_MODELS: ModelInfo[] = [
   {
-    id: 'gpt-5.3-codex',
-    label: 'gpt-5.3-codex',
-    description: 'Latest frontier agentic coding model with enhanced capabilities.',
+    id: 'gpt-5.5',
+    label: 'gpt-5.5',
+    description: 'Frontier model for complex coding, research, and real-world work.',
   },
   {
     id: 'gpt-5.4',
     label: 'gpt-5.4',
-    description: 'Latest frontier model with enhanced capabilities.',
+    description: 'Strong model for everyday coding.',
   },
   {
-    id: 'gpt-5.2-codex',
-    label: 'gpt-5.2-codex',
-    description: 'Latest frontier agentic coding model.',
+    id: 'gpt-5.4-mini',
+    label: 'gpt-5.4-mini',
+    description: 'Small, fast, and cost-efficient model for simpler coding tasks.',
   },
   {
-    id: 'gpt-5.1-codex-max',
-    label: 'gpt-5.1-codex-max',
-    description: 'Codex-optimized flagship for deep and fast reasoning.',
+    id: 'gpt-5.3-codex',
+    label: 'gpt-5.3-codex',
+    description: 'Coding-optimized model.',
   },
   {
-    id: 'gpt-5.1-codex-mini',
-    label: 'gpt-5.1-codex-mini',
-    description: 'Optimized for codex. Cheaper, faster, but less capable.',
+    id: 'gpt-5.2',
+    label: 'gpt-5.2',
+    description: 'Optimized for professional work and long-running agents.',
   },
 ];
 
@@ -430,6 +449,12 @@ export interface ChatInputBoxProps {
   isLoading?: boolean;
   /** Current model */
   selectedModel?: string;
+  /** Codex default model from local CLI config (display only) */
+  defaultCodexModelFromConfig?: string | null;
+  /** Codex base_url from local CLI config (display only) */
+  codexBaseUrl?: string | null;
+  /** Whether Codex is currently using a non-official OpenAI base_url */
+  codexUsesCustomBaseUrl?: boolean;
   /** Current permission mode */
   permissionMode?: PermissionMode;
   /** Current provider */
@@ -551,6 +576,12 @@ export interface ButtonAreaProps {
   isEnhancing?: boolean;
   /** Current model */
   selectedModel?: string;
+  /** Codex default model from local CLI config (display only) */
+  defaultCodexModelFromConfig?: string | null;
+  /** Codex base_url from local CLI config (display only) */
+  codexBaseUrl?: string | null;
+  /** Whether Codex is currently using a non-official OpenAI base_url */
+  codexUsesCustomBaseUrl?: boolean;
   /** Current mode */
   permissionMode?: PermissionMode;
   /** Current provider */

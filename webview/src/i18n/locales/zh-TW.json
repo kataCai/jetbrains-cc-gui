@@ -42,6 +42,13 @@
     "sendMessageEnter": "發送訊息 (Enter)",
     "currentMode": "目前模式: {{mode}}",
     "currentModel": "目前模型: {{model}}",
+    "currentModelWithCliDefault": "目前模型: {{model}} | CLI 預設: {{defaultModel}}",
+    "codexCliDefaultModelHint": "CLI 預設模型: {{defaultModel}}",
+    "codexCliDefaultModelBadge": "CLI {{defaultModel}}",
+    "codexCliDefaultModelOption": "CLI 預設模型",
+    "codexCustomBaseUrlWarning": "目前使用自訂 OpenAI base URL：{{baseUrl}}。上游服務可能不完全支援模型切換。",
+    "codexCustomBaseUrlWarningTitle": "自訂 OpenAI base URL",
+    "codexCustomBaseUrlWarningDescription": "{{baseUrl}} 可能不支援全部模型選擇。",
     "removeAttachment": "移除附件",
     "closePreview": "關閉預覽",
     "loadingDropdown": "載入中...",
@@ -1175,25 +1182,25 @@
       }
     },
     "codex": {
+      "gpt55": {
+        "label": "gpt-5.5",
+        "description": "適用於複雜編碼、研究與真實工作場景的前沿模型。"
+      },
       "gpt53codex": {
         "label": "gpt-5.3-codex",
         "description": "最新前沿智慧編程模型，能力全面增強"
       },
       "gpt54": {
         "label": "gpt-5.4",
-        "description": "最新前沿模型，能力進一步增強"
+        "description": "適合日常編碼的強大模型"
       },
-      "gpt52codex": {
-        "label": "gpt-5.2-codex",
-        "description": "最新前沿智慧編程模型"
+      "gpt54mini": {
+        "label": "gpt-5.4-mini",
+        "description": "適合簡單編碼任務的小型、快速、成本更低的模型"
       },
-      "gpt51codexMax": {
-        "label": "gpt-5.1-codex-max",
-        "description": "針對Codex優化的旗艦模型，深度與快速推理兼備"
-      },
-      "gpt51codexMini": {
-        "label": "gpt-5.1-codex-mini",
-        "description": "針對Codex優化。更便宜、更快，但性能較差"
+      "gpt52": {
+        "label": "gpt-5.2",
+        "description": "適合專業工作和長時間運行任務的優化模型"
       }
     }
   },

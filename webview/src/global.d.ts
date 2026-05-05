@@ -518,6 +518,13 @@ interface Window {
    */
   updateCurrentCodexConfig?: (json: string) => void;
 
+  /**
+   * 更新当前 Codex 模型状态。
+   * 用于把本地 ~/.codex/config.toml 中的当前模型和 reasoning effort
+   * 同步回聊天输入区，避免前端静态列表覆盖真实运行时状态。
+   */
+  updateCodexModelState?: (json: string) => void;
+
 // ============================================================================
   // Streaming Callbacks
   // ============================================================================

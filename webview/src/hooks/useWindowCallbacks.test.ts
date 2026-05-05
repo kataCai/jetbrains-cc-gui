@@ -3,6 +3,15 @@ import { useWindowCallbacks } from './useWindowCallbacks.js';
 import type { UseWindowCallbacksOptions } from './useWindowCallbacks.js';
 import type { ClaudeMessage } from '../types/index.js';
 
+vi.mock('./windowCallbacks/settingsBootstrap', () => ({
+  drainPendingSettings: vi.fn(),
+  startInitialSettingsRequest: vi.fn(),
+  startActiveProviderRequest: vi.fn(),
+  startModeRequest: vi.fn(),
+  startThinkingEnabledRequest: vi.fn(),
+  drainAndRequestDependencyStatus: vi.fn(),
+}));
+
 /**
  * Integration tests for useWindowCallbacks — verifies the real window callback
  * chain (historyLoadComplete, addErrorMessage, updateMessages guard, clearMessages,
@@ -36,6 +45,10 @@ describe('useWindowCallbacks integration', () => {
     setCodexPermissionMode: vi.fn(),
     setSelectedClaudeModel: vi.fn(),
     setSelectedCodexModel: vi.fn(),
+    setDefaultCodexModelFromConfig: vi.fn(),
+    setCodexBaseUrl: vi.fn(),
+    setCodexUsesCustomBaseUrl: vi.fn(),
+    setReasoningEffort: vi.fn(),
     setProviderConfigVersion: vi.fn(),
     setActiveProviderConfig: vi.fn(),
     setClaudeSettingsAlwaysThinkingEnabled: vi.fn(),
@@ -52,6 +65,7 @@ describe('useWindowCallbacks integration', () => {
 
     // Refs
     currentProviderRef: { current: 'claude' },
+    shouldAdoptCodexDefaultModelRef: { current: true },
     messagesContainerRef: { current: null },
     isUserAtBottomRef: { current: true },
     userPausedRef: { current: false },

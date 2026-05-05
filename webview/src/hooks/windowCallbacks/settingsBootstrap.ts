@@ -21,6 +21,7 @@ export const startInitialSettingsRequest = (): void => {
       window.sendToJava('get_streaming_enabled:');
       window.sendToJava('get_send_shortcut:');
       window.sendToJava('get_auto_open_file_enabled:');
+      window.sendToJava('get_codex_model_state:');
     } else {
       settingsRetryCount++;
       if (settingsRetryCount < MAX_RETRIES) {

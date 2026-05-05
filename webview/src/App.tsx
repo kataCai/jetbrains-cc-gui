@@ -241,14 +241,20 @@ const App = () => {
   // ── Model/Provider state ──
   const {
     currentProvider, selectedModel, permissionMode,
+    defaultCodexModelFromConfig,
+    codexBaseUrl, codexUsesCustomBaseUrl,
     selectedAgent, sdkStatusLoaded, currentSdkInstalled,
     currentProviderRef,
+    shouldAdoptCodexDefaultModelRef,
     activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
     reasoningEffort, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
     usagePercentage, usageUsedTokens, usageMaxTokens,
     setPermissionMode,
     setClaudePermissionMode, setCodexPermissionMode,
     setSelectedClaudeModel, setSelectedCodexModel,
+    setDefaultCodexModelFromConfig,
+    setCodexBaseUrl, setCodexUsesCustomBaseUrl,
+    setReasoningEffort,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
     setSendShortcut, setAutoOpenFileEnabled,
@@ -314,13 +320,16 @@ const App = () => {
     setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
     setPermissionMode, setClaudePermissionMode, setCodexPermissionMode,
     setSelectedClaudeModel, setSelectedCodexModel,
+    setDefaultCodexModelFromConfig,
+    setCodexBaseUrl, setCodexUsesCustomBaseUrl,
+    setReasoningEffort,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
     setSendShortcut, setAutoOpenFileEnabled,
     setSdkStatus, setSdkStatusLoaded,
     setIsRewinding, setRewindDialogOpen, setCurrentRewindRequest,
     setContextInfo, setSelectedAgent,
-    currentProviderRef, messagesContainerRef, isUserAtBottomRef, userPausedRef,
+    currentProviderRef, shouldAdoptCodexDefaultModelRef, messagesContainerRef, isUserAtBottomRef, userPausedRef,
     suppressNextStatusToastRef,
     streamingContentRef, isStreamingRef, useBackendStreamingRenderRef,
     autoExpandedThinkingKeysRef,
@@ -658,6 +667,9 @@ const App = () => {
               ref={chatInputRef}
               isLoading={loading}
               selectedModel={selectedModel}
+              defaultCodexModelFromConfig={defaultCodexModelFromConfig}
+              codexBaseUrl={codexBaseUrl}
+              codexUsesCustomBaseUrl={codexUsesCustomBaseUrl}
               permissionMode={permissionMode}
               currentProvider={currentProvider}
               usagePercentage={usagePercentage}

@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import type { MutableRefObject, RefObject } from 'react';
 import type { ClaudeMessage, ClaudeRawMessage, HistoryData } from '../types';
 import type { PermissionMode, SelectedAgent } from '../components/ChatInputBox/types';
+import type { ReasoningEffort } from '../components/ChatInputBox/types';
 import type { ProviderConfig } from '../types/provider';
 import type { PermissionRequest } from '../components/PermissionDialog';
 import type { AskUserQuestionRequest } from '../components/AskUserQuestionDialog';
@@ -44,6 +45,10 @@ export interface UseWindowCallbacksOptions {
   setCodexPermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
   setSelectedClaudeModel: React.Dispatch<React.SetStateAction<string>>;
   setSelectedCodexModel: React.Dispatch<React.SetStateAction<string>>;
+  setDefaultCodexModelFromConfig: React.Dispatch<React.SetStateAction<string | null>>;
+  setCodexBaseUrl: React.Dispatch<React.SetStateAction<string | null>>;
+  setCodexUsesCustomBaseUrl: React.Dispatch<React.SetStateAction<boolean>>;
+  setReasoningEffort: React.Dispatch<React.SetStateAction<ReasoningEffort>>;
   setProviderConfigVersion: React.Dispatch<React.SetStateAction<number>>;
   setActiveProviderConfig: React.Dispatch<React.SetStateAction<ProviderConfig | null>>;
   setClaudeSettingsAlwaysThinkingEnabled: React.Dispatch<React.SetStateAction<boolean>>;
@@ -60,6 +65,7 @@ export interface UseWindowCallbacksOptions {
 
   // Refs
   currentProviderRef: MutableRefObject<string>;
+  shouldAdoptCodexDefaultModelRef: MutableRefObject<boolean>;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   isUserAtBottomRef: MutableRefObject<boolean>;
   userPausedRef: MutableRefObject<boolean>;

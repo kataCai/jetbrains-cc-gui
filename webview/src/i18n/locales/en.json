@@ -42,6 +42,13 @@
     "sendMessageEnter": "Send message (Enter)",
     "currentMode": "Current mode: {{mode}}",
     "currentModel": "Current model: {{model}}",
+    "currentModelWithCliDefault": "Current model: {{model}} | CLI default: {{defaultModel}}",
+    "codexCliDefaultModelHint": "CLI default model: {{defaultModel}}",
+    "codexCliDefaultModelBadge": "CLI {{defaultModel}}",
+    "codexCliDefaultModelOption": "CLI default model",
+    "codexCustomBaseUrlWarning": "Custom OpenAI base URL: {{baseUrl}}. Model selection may not be fully supported by the upstream service.",
+    "codexCustomBaseUrlWarningTitle": "Custom OpenAI base URL",
+    "codexCustomBaseUrlWarningDescription": "{{baseUrl}} may not support all model selections.",
     "removeAttachment": "Remove attachment",
     "closePreview": "Close preview",
     "loadingDropdown": "Loading...",
@@ -1429,25 +1436,25 @@
       }
     },
     "codex": {
+      "gpt55": {
+        "label": "gpt-5.5",
+        "description": "Frontier model for complex coding, research, and real-world work."
+      },
       "gpt53codex": {
         "label": "gpt-5.3-codex",
         "description": "Latest frontier agentic coding model with enhanced capabilities."
       },
       "gpt54": {
         "label": "gpt-5.4",
-        "description": "Latest frontier model with enhanced capabilities."
+        "description": "Strong model for everyday coding."
       },
-      "gpt52codex": {
-        "label": "gpt-5.2-codex",
-        "description": "Latest frontier agentic coding model."
+      "gpt54mini": {
+        "label": "gpt-5.4-mini",
+        "description": "Small, fast, and cost-efficient model for simpler coding tasks."
       },
-      "gpt51codexMax": {
-        "label": "gpt-5.1-codex-max",
-        "description": "Codex-optimized flagship for deep and fast reasoning."
-      },
-      "gpt51codexMini": {
-        "label": "gpt-5.1-codex-mini",
-        "description": "Optimized for codex. Cheaper, faster, but less capable."
+      "gpt52": {
+        "label": "gpt-5.2",
+        "description": "Optimized for professional work and long-running agents."
       }
     }
   },

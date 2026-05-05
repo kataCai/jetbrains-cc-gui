@@ -105,4 +105,45 @@ describe('useModelProviderState', () => {
       'warning',
     );
   });
+
+  it('restores unknown persisted codex model ids from local storage', () => {
+    localStorage.setItem('model-selection-state', JSON.stringify({
+      provider: 'codex',
+      codexModel: 'gpt-5.5',
+      claudeModel: 'claude-sonnet-4-6',
+      codexPermissionMode: 'default',
+      claudePermissionMode: 'bypassPermissions',
+    }));
+
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    expect(result.current.currentProvider).toBe('codex');
+    expect(result.current.selectedCodexModel).toBe('gpt-5.5');
+    expect(sendBridgeEvent).toHaveBeenCalledWith('set_model', 'gpt-5.5');
+  });
+
+  it('keeps user-selected codex session model while storing cli default metadata separately', () => {
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.handleModelSelect('gpt-5.4');
+    });
+
+    expect(result.current.selectedCodexModel).toBe('gpt-5.4');
+    expect(result.current.defaultCodexModelFromConfig).toBeNull();
+  });
 });

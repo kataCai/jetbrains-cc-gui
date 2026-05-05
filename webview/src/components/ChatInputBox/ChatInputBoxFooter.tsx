@@ -22,6 +22,9 @@ export function ChatInputBoxFooter({
   isLoading,
   isEnhancing,
   selectedModel,
+  defaultCodexModelFromConfig,
+  codexBaseUrl,
+  codexUsesCustomBaseUrl,
   permissionMode,
   currentProvider,
   reasoningEffort,
@@ -55,6 +58,9 @@ export function ChatInputBoxFooter({
   isLoading: boolean;
   isEnhancing: boolean;
   selectedModel: string;
+  defaultCodexModelFromConfig?: string | null;
+  codexBaseUrl?: string | null;
+  codexUsesCustomBaseUrl?: boolean;
   permissionMode: PermissionMode;
   currentProvider: string;
   reasoningEffort: ReasoningEffort;
@@ -100,6 +106,9 @@ export function ChatInputBoxFooter({
         isLoading={isLoading}
         isEnhancing={isEnhancing}
         selectedModel={selectedModel}
+        defaultCodexModelFromConfig={defaultCodexModelFromConfig}
+        codexBaseUrl={codexBaseUrl}
+        codexUsesCustomBaseUrl={codexUsesCustomBaseUrl}
         permissionMode={permissionMode}
         currentProvider={currentProvider}
         reasoningEffort={reasoningEffort}

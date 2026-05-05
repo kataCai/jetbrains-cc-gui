@@ -133,6 +133,69 @@ public class CodemossSettingsServiceCodexCliLoginTest {
     }
 
     @Test
+    public void shouldExposeCodexCurrentModelStateOnlyAfterAuthorization() throws Exception {
+        Path tempHome = Files.createTempDirectory("codex-current-model-state-home");
+        useTemporaryHomeDirectory(tempHome);
+        Files.createDirectories(tempHome.resolve(".codex"));
+        Files.writeString(
+                tempHome.resolve(".codex").resolve("config.toml"),
+                "model = \"gpt-5.5\"\nmodel_reasoning_effort = \"high\"",
+                StandardCharsets.UTF_8
+        );
+
+        CodemossSettingsService service = new CodemossSettingsService();
+
+        assertEquals(0, service.getCurrentCodexModelState().size());
+
+        service.setCodexLocalConfigAuthorized(true);
+
+        JsonObject state = service.getCurrentCodexModelState();
+        assertEquals("gpt-5.5", state.get("model").getAsString());
+        assertEquals("high", state.get("reasoningEffort").getAsString());
+    }
+
+    @Test
+    public void shouldStripInlineCommentsWhenReadingCodexCurrentModelState() throws Exception {
+        Path tempHome = Files.createTempDirectory("codex-current-model-state-inline-comment-home");
+        useTemporaryHomeDirectory(tempHome);
+        Files.createDirectories(tempHome.resolve(".codex"));
+        Files.writeString(
+                tempHome.resolve(".codex").resolve("config.toml"),
+                "model = \"gpt-5.5\" # current gui default\n"
+                        + "model_reasoning_effort = \"high\" # ui override\n",
+                StandardCharsets.UTF_8
+        );
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        service.setCodexLocalConfigAuthorized(true);
+
+        JsonObject state = service.getCurrentCodexModelState();
+        assertEquals("gpt-5.5", state.get("model").getAsString());
+        assertEquals("high", state.get("reasoningEffort").getAsString());
+    }
+
+    @Test
+    public void shouldExposeCustomBaseUrlMetadataInCodexCurrentModelState() throws Exception {
+        Path tempHome = Files.createTempDirectory("codex-current-model-state-base-url-home");
+        useTemporaryHomeDirectory(tempHome);
+        Files.createDirectories(tempHome.resolve(".codex"));
+        Files.writeString(
+                tempHome.resolve(".codex").resolve("config.toml"),
+                "model = \"gpt-5.5\"\n"
+                        + "[model_providers.OpenAI]\n"
+                        + "base_url = \"https://rayplus.site\"\n",
+                StandardCharsets.UTF_8
+        );
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        service.setCodexLocalConfigAuthorized(true);
+
+        JsonObject state = service.getCurrentCodexModelState();
+        assertEquals("https://rayplus.site", state.get("baseUrl").getAsString());
+        assertTrue(state.get("usesCustomBaseUrl").getAsBoolean());
+    }
+
+    @Test
     public void shouldResolveCodexRuntimeAccessModeFromAuthorizationAndActiveProvider() throws Exception {
         Path tempHome = Files.createTempDirectory("codex-runtime-access-home");
         useTemporaryHomeDirectory(tempHome);
