@@ -266,6 +266,8 @@ def aiBridgeDir = file("ai-bridge")
 def aiBridgePackDir = layout.buildDirectory.dir('ai-bridge-pack').get().asFile
 def aiBridgeArchive = new File(aiBridgePackDir, 'ai-bridge.zip')
 def aiBridgeHashFile = new File(aiBridgePackDir, 'ai-bridge.hash')
+def aiBridgeNodeModulesDir = new File(aiBridgeDir, 'node_modules')
+def aiBridgePackageLockFile = new File(aiBridgeDir, 'package-lock.json')
 
 // Build webview automatically
 def webviewDir = file('webview')
@@ -335,6 +337,42 @@ tasks.register('buildWebview', Exec) {
     doLast { println "Webview build completed." }
 }
 
+/**
+ * 安装 ai-bridge 运行时依赖。
+ * 仅在 node_modules 缺失时执行，避免发布包缺少桥接层依赖导致插件启动失败。
+ */
+tasks.register('installAiBridgeDependencies', Exec) {
+    onlyIf { aiBridgeDir.exists() && !aiBridgeNodeModulesDir.exists() }
+    workingDir aiBridgeDir
+
+    // 复用与 webview 构建一致的 npm 解析逻辑，避免环境差异导致依赖未安装。
+    def npmCommand = 'npm'
+    if (localNodePath) {
+        def nodeFile = file(localNodePath)
+        if (nodeFile.exists()) {
+            def nodeDir = nodeFile.parentFile
+            def npmCmdPath = new File(nodeDir, System.getProperty('os.name').toLowerCase().contains('windows') ? 'npm.cmd' : 'npm')
+            if (npmCmdPath.exists()) {
+                npmCommand = npmCmdPath.absolutePath
+            }
+        }
+    }
+
+    if (System.getProperty('os.name').toLowerCase().contains('windows')) {
+        commandLine 'cmd', '/c', npmCommand, 'ci'
+    } else {
+        commandLine npmCommand, 'ci'
+    }
+
+    inputs.file(aiBridgePackageLockFile)
+    inputs.file(new File(aiBridgeDir, 'package.json'))
+    outputs.dir(aiBridgeNodeModulesDir)
+
+    doFirst {
+        println "Installing ai-bridge dependencies..."
+    }
+}
+
 // Ensure processResources runs after buildWebview
 // Use mustRunAfter for execution order, trigger buildWebview before compileJava
 tasks.named('compileJava') {
@@ -348,18 +386,22 @@ tasks.named('processResources') {
 // Use system zip command to package ai-bridge, preserving file permissions
 tasks.register('packageAiBridge', Exec) {
     onlyIf { aiBridgeDir.exists() }
+    dependsOn('installAiBridgeDependencies')
 
     // Switch to ai-bridge directory for packaging, avoiding inclusion of top-level directory
     workingDir aiBridgeDir
 
     // Ensure output directory exists
-    doFirst {
-        aiBridgePackDir.mkdirs()
-        // Delete old zip file
-        if (aiBridgeArchive.exists()) {
-            aiBridgeArchive.delete()
-        }
-    }
+      doFirst {
+          aiBridgePackDir.mkdirs()
+          // Delete old zip file
+          if (aiBridgeArchive.exists()) {
+              aiBridgeArchive.delete()
+          }
+          if (!aiBridgeNodeModulesDir.exists()) {
+              throw new GradleException("ai-bridge/node_modules does not exist. Please ensure installAiBridgeDependencies completed successfully.")
+          }
+      }
 
     // Use system zip command, -r for recursive, -y to preserve symlinks
     // Exclude SDK packages (they will be installed on-demand by users to ~/.codemoss/dependencies/)
@@ -441,6 +483,35 @@ tasks.register('packageAiBridge', Exec) {
             println "✓ ai-bridge.hash created: ${hashHex}"
         } else {
             throw new GradleException("Packaging failed: ai-bridge.zip was not generated")
+      }
+  }
+}
+
+/**
+ * 校验 ai-bridge 发布包是否包含运行所需依赖。
+ * 这里显式检查 sql.js，避免再次产出缺少 node_modules 的无效插件包。
+ */
+tasks.register('verifyAiBridgeArchive') {
+    dependsOn('packageAiBridge')
+
+    inputs.file(aiBridgeArchive)
+
+    doLast {
+        if (!aiBridgeArchive.exists()) {
+            throw new GradleException("ai-bridge.zip was not generated: ${aiBridgeArchive.absolutePath}")
+        }
+
+        def zipFile = new java.util.zip.ZipFile(aiBridgeArchive)
+        try {
+            def requiredEntry = zipFile.entries().find { entry ->
+                entry.name.replace('\\', '/') == 'node_modules/sql.js/package.json'
+            }
+            if (requiredEntry == null) {
+                throw new GradleException('ai-bridge.zip is missing node_modules/sql.js/package.json. Runtime dependencies were not packaged correctly.')
+            }
+            println "Verified ai-bridge runtime dependency: ${requiredEntry.name}"
+        } finally {
+            zipFile.close()
         }
     }
 }
@@ -516,7 +587,7 @@ tasks.matching { it.name == 'preparePluginForDistribution' || it.name == 'compos
 }
 
 tasks.named('buildPlugin') {
-    dependsOn('packageAiBridge', 'checkstyleMain')
+    dependsOn('packageAiBridge', 'verifyAiBridgeArchive', 'checkstyleMain')
 
     doLast {
         // Unzip the plugin zip, add ai-bridge.zip and ai-bridge.hash, then repackage

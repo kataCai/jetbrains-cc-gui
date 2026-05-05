@@ -210,6 +210,39 @@ public class TaskReminderDispatcher {
     }
 
     /**
+     * 支持在固定提醒策略下显式注入 payload 工厂。
+     * 这样上层可以把真实会话标题解析逻辑注入进来，避免 dispatcher 自己猜测标题来源。
+     *
+     * @param context 处理上下文
+     * @param policy 提醒策略
+     * @param balloonNotifier IDE 气泡通知器
+     * @param systemReminderNotifier 系统通知器
+     * @param reminderSoundPlayer 提醒音播放器
+     * @param ideFocusChecker IDE 焦点检查器
+     * @param payloadFactory 提醒负载工厂
+     */
+    public TaskReminderDispatcher(
+        HandlerContext context,
+        TaskReminderPolicy policy,
+        ClaudeBalloonNotifier balloonNotifier,
+        SystemReminderNotifier systemReminderNotifier,
+        ReminderSoundPlayer reminderSoundPlayer,
+        IdeFocusChecker ideFocusChecker,
+        TaskReminderPayloadFactory payloadFactory
+    ) {
+        this(
+            context,
+            () -> policy,
+            balloonNotifier,
+            systemReminderNotifier,
+            reminderSoundPlayer,
+            ideFocusChecker,
+            TaskReminderDispatcher::buildDefaultReminderMessage,
+            payloadFactory
+        );
+    }
+
+    /**
      * 支持自定义文案解析器与 system notifier 的完整构造器。
      */
     public TaskReminderDispatcher(

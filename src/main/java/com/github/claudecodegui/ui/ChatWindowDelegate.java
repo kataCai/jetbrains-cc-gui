@@ -3,8 +3,10 @@ package com.github.claudecodegui.ui;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.notifications.SystemReminderNotifier;
+import com.github.claudecodegui.notifications.TaskReminderPayloadFactory;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.settings.TabStateService;
 import com.github.claudecodegui.handler.AgentHandler;
 import com.github.claudecodegui.handler.ClipboardHandler;
 import com.github.claudecodegui.handler.CodexMcpServerHandler;
@@ -38,6 +40,7 @@ import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.taskstate.TaskReminderPolicyFactory;
+import com.github.claudecodegui.taskstate.TaskStateSnapshot;
 import com.github.claudecodegui.taskstate.TaskStateService;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.MessageJsonConverter;
@@ -260,13 +263,18 @@ public class ChatWindowDelegate {
         TaskReminderPolicyFactory taskReminderPolicyFactory = new TaskReminderPolicyFactory();
         // 提醒策略需要跟随设置页实时变化，因此这里注入“按次解析最新配置”的 provider，
         // 避免窗口初始化时把默认策略缓存死，导致用户修改设置后仍然不生效。
+        TaskReminderPayloadFactory payloadFactory = new TaskReminderPayloadFactory(
+            ChatWindowDelegate::resolveStableTabTitle
+        );
         TaskReminderDispatcher taskReminderDispatcher = new TaskReminderDispatcher(
             handlerContext,
             () -> taskReminderPolicyFactory.fromSettingsService(settingsService),
             new ClaudeBalloonNotifier(),
             new SystemReminderNotifier(),
             SoundNotificationService.getInstance()::playTaskReminderSound,
-            () -> ApplicationManager.getApplication().isActive()
+            () -> ApplicationManager.getApplication().isActive(),
+            snapshot -> resolveDefaultReminderMessage(snapshot),
+            payloadFactory
         );
 
         messageDispatcher.registerHandler(new ProviderHandler(handlerContext));
@@ -570,5 +578,72 @@ public class ChatWindowDelegate {
             statusResetTask = null;
             LOG.debug("[TabStatus] Cancelled pending status reset task");
         }
+    }
+
+    /**
+     * 为系统通知解析稳定的会话标题。
+     * 这里故意只依赖持久化 tab 状态，而不直接访问 ToolWindow / ContentManager 等运行态 UI 对象，
+     * 避免在非 EDT 的任务提醒分发链路中引入线程断言、disposed race 或 UI 访问异常。
+     *
+     * @param project 当前项目
+     * @param sessionId 会话 ID
+     * @return 稳定会话标题；无法解析时返回 null
+     */
+    private static String resolveStableTabTitle(Project project, String sessionId) {
+        if (project == null || project.isDisposed() || !hasText(sessionId)) {
+            return null;
+        }
+
+        TabStateService tabStateService = TabStateService.getInstance(project);
+        int tabCount = tabStateService.getTabCount();
+        for (int index = 0; index < tabCount; index++) {
+            TabStateService.TabSessionState tabSessionState = tabStateService.getTabSessionState(index);
+            if (tabSessionState == null || !sessionId.equals(tabSessionState.sessionId)) {
+                continue;
+            }
+
+            String persistedTitle = hasText(tabStateService.getTabName(index))
+                ? tabStateService.getTabName(index).trim()
+                : null;
+            if (hasText(persistedTitle)) {
+                return persistedTitle;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 统一生成默认提醒文案。
+     * 这里保持与 TaskReminderDispatcher 的默认策略一致，用于在自定义 payloadFactory 注入场景下继续复用同一套状态文案。
+     *
+     * @param snapshot 当前任务快照
+     * @return 默认提醒文案
+     */
+    private static String resolveDefaultReminderMessage(TaskStateSnapshot snapshot) {
+        String reason = snapshot != null && snapshot.getLatestEvent() != null
+            ? snapshot.getLatestEvent().getReason()
+            : null;
+
+        return switch (snapshot.getState()) {
+            case WAITING_CONFIRM -> ClaudeCodeGuiBundle.message("task.reminder.waitingConfirm");
+            case FINAL_ERROR -> hasText(reason)
+                ? reason
+                : ClaudeCodeGuiBundle.message("task.reminder.finalError");
+            case COMPLETED -> ClaudeCodeGuiBundle.message("task.reminder.completed");
+            case RECOVERED -> ClaudeCodeGuiBundle.message("task.reminder.recovered");
+            case RETRYING -> hasText(reason)
+                ? reason
+                : ClaudeCodeGuiBundle.message("task.reminder.retrying");
+            case CANCELLED -> hasText(reason)
+                ? reason
+                : ClaudeCodeGuiBundle.message("task.reminder.cancelled");
+            case RUNNING -> ClaudeCodeGuiBundle.message("task.reminder.running");
+            case PENDING -> ClaudeCodeGuiBundle.message("task.reminder.pending");
+        };
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 }
