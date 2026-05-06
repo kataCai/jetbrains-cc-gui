@@ -4,6 +4,9 @@
     border-bottom: 1px solid var(--color-history-border);
     cursor: pointer;
     transition: background-color 0.2s;
+    overflow: hidden;
+    box-sizing: border-box;
+    position: relative;
 }
 
 .history-item:hover {
@@ -205,6 +208,35 @@
     }
 }
 
+/* 操作按钮容器：绝对定位浮层，避免 hover 显示按钮时挤压历史项布局 */
+.history-action-buttons {
+    position: absolute;
+    bottom: 10px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.history-action-buttons.has-favorite {
+    visibility: visible;
+    opacity: 1;
+}
+
+.history-item:not(:hover) .history-action-buttons.has-favorite .history-edit-btn,
+.history-item:not(:hover) .history-action-buttons.has-favorite .history-export-btn,
+.history-item:not(:hover) .history-action-buttons.has-favorite .history-delete-btn {
+    visibility: hidden;
+    opacity: 0;
+}
+
+.history-item:hover .history-action-buttons {
+    visibility: visible;
+    opacity: 1;
+}
 .history-item:hover .history-delete-btn,
 .history-item:hover .history-export-btn,
 .history-item:hover .history-favorite-btn {

@@ -395,49 +395,47 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
               highlightText(extractCommandMessageContent(session.title), searchQuery)
             )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div className="history-item-time">{formatTimeAgo(session.lastTimestamp, t)}</div>
-            {!isEditing && (
-              <>
-                {/* Edit button */}
-                <button
-                  className="history-edit-btn"
-                  onClick={(e) => handleEditClick(e, session.sessionId, session.title)}
-                  title={t('history.editTitle')}
-                  aria-label={t('history.editTitle')}
-                >
-                  <span className="codicon codicon-edit"></span>
-                </button>
-                {/* Favorite button */}
-                <button
-                  className={`history-favorite-btn ${session.isFavorited ? 'favorited' : ''}`}
-                  onClick={(e) => handleFavoriteClick(e, session.sessionId)}
-                  title={session.isFavorited ? t('history.unfavoriteSession') : t('history.favoriteSession')}
-                  aria-label={session.isFavorited ? t('history.unfavoriteSession') : t('history.favoriteSession')}
-                >
-                  <span className={session.isFavorited ? 'codicon codicon-star-full' : 'codicon codicon-star-empty'}></span>
-                </button>
-                {/* Export button */}
-                <button
-                  className="history-export-btn"
-                  onClick={(e) => handleExportClick(e, session.sessionId, session.title)}
-                  title={t('history.exportSession')}
-                  aria-label={t('history.exportSession')}
-                >
-                  <span className="codicon codicon-arrow-down"></span>
-                </button>
-                {/* Delete button */}
-                <button
-                  className="history-delete-btn"
-                  onClick={(e) => handleDeleteClick(e, session.sessionId)}
-                  title={t('history.deleteSession')}
-                  aria-label={t('history.deleteSession')}
-                >
-                  <span className="codicon codicon-trash"></span>
-                </button>
-              </>
-            )}
-          </div>
+          <div className="history-item-time">{formatTimeAgo(session.lastTimestamp, t)}</div>
+          {!isEditing && (
+            <div className={`history-action-buttons ${session.isFavorited ? 'has-favorite' : ''}`}>
+              {/* Edit button */}
+              <button
+                className="history-edit-btn"
+                onClick={(e) => handleEditClick(e, session.sessionId, session.title)}
+                title={t('history.editTitle')}
+                aria-label={t('history.editTitle')}
+              >
+                <span className="codicon codicon-edit"></span>
+              </button>
+              {/* Export button */}
+              <button
+                className="history-export-btn"
+                onClick={(e) => handleExportClick(e, session.sessionId, session.title)}
+                title={t('history.exportSession')}
+                aria-label={t('history.exportSession')}
+              >
+                <span className="codicon codicon-arrow-down"></span>
+              </button>
+              {/* Delete button */}
+              <button
+                className="history-delete-btn"
+                onClick={(e) => handleDeleteClick(e, session.sessionId)}
+                title={t('history.deleteSession')}
+                aria-label={t('history.deleteSession')}
+              >
+                <span className="codicon codicon-trash"></span>
+              </button>
+              {/* 保持收藏按钮放在最后，避免已收藏状态时影响右侧对齐 */}
+              <button
+                className={`history-favorite-btn ${session.isFavorited ? 'favorited' : ''}`}
+                onClick={(e) => handleFavoriteClick(e, session.sessionId)}
+                title={session.isFavorited ? t('history.unfavoriteSession') : t('history.favoriteSession')}
+                aria-label={session.isFavorited ? t('history.unfavoriteSession') : t('history.favoriteSession')}
+              >
+                <span className={session.isFavorited ? 'codicon codicon-star-full' : 'codicon codicon-star-empty'}></span>
+              </button>
+            </div>
+          )}
         </div>
         <div className="history-item-meta">
           <span>{t('history.messageCount', { count: session.messageCount })}</span>
