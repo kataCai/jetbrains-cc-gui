@@ -15,6 +15,7 @@ import {
   ensureStreamingAssistantInList,
   getRawUuid,
   preserveLastAssistantIdentity,
+  preserveRecentlyEndedStreamingTurn,
   preserveLatestMessagesOnShrink,
   preserveStreamingAssistantContent,
   stripDuplicateTrailingToolMessages,
@@ -104,8 +105,13 @@ export function registerMessageCallbacks(
   };
 
   const finalizeMessageList = (prevList: ClaudeMessage[], resultList: ClaudeMessage[]): ClaudeMessage[] => {
-    const withoutDuplicateToolTail = stripDuplicateTrailingToolMessages(
+    const recentlyEndedPreserved = preserveRecentlyEndedStreamingTurn(
+      prevList,
       resultList,
+      findLastAssistantIndex,
+    );
+    const withoutDuplicateToolTail = stripDuplicateTrailingToolMessages(
+      recentlyEndedPreserved,
       options.currentProviderRef.current,
     );
     return ensureStreamingAssistantPreserved(prevList, withoutDuplicateToolTail);

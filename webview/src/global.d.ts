@@ -597,6 +597,31 @@ interface Window {
   __lastStreamActivityAt?: number;
 
   /**
+   * The __turnId of the most recently ended streaming turn.
+   * Used by downstream message reconciliation to distinguish a just-finished
+   * streaming assistant from normal history messages.
+   */
+  __lastStreamEndedTurnId?: number;
+
+  /**
+   * Timestamp when the most recent streaming turn ended.
+   * Used together with __lastStreamEndedTurnId for short-lived guard windows.
+   */
+  __lastStreamEndedAt?: number;
+
+  /**
+   * Turn ID for which onStreamEnd has already been processed.
+   * Used as an idempotency guard when the same stream end signal arrives twice.
+   */
+  __streamEndProcessedTurnId?: number;
+
+  /**
+   * Timestamp when the current streaming turn started.
+   * Used for duration and turn lifecycle bookkeeping.
+   */
+  __turnStartedAt?: number;
+
+  /**
    * Interval handle for the stream stall watchdog.
    * Stored on window so re-registration of streaming callbacks clears the previous interval.
    */

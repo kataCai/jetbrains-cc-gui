@@ -11,6 +11,7 @@ import type { ClaudeContentOrResultBlock, ClaudeMessage, ClaudeRawMessage } from
 
 /** Time window (ms) for matching optimistic messages with backend messages. */
 export const OPTIMISTIC_MESSAGE_TIME_WINDOW = 5000;
+const RECENTLY_ENDED_STREAM_GUARD_MS = 1500;
 
 // ---------------------------------------------------------------------------
 // Raw-field helpers
@@ -187,8 +188,11 @@ export const preserveStreamingAssistantContent = (
 
   const previousContent = prevAssistant.content || '';
   const bufferedContent = streamingContentRef.current || '';
+  const hasToolStructure = getMessageToolEventKeys(nextAssistant).length > 0;
   const preferredContent =
-    bufferedContent.length > previousContent.length ? bufferedContent : previousContent;
+    hasToolStructure || bufferedContent.length > previousContent.length
+      ? bufferedContent
+      : previousContent;
   const nextContent = nextAssistant.content || '';
 
   if (!preferredContent || preferredContent.length <= nextContent.length) {
@@ -319,6 +323,13 @@ export const preserveLatestMessagesOnShrink = (
   return [...nextList, ...preservedTail];
 };
 
+const isWithinRecentStreamEndWindow = (turnId: number | undefined): boolean => {
+  if (!turnId || turnId <= 0) return false;
+  if (window.__lastStreamEndedTurnId !== turnId) return false;
+  if (typeof window.__lastStreamEndedAt !== 'number') return false;
+  return Date.now() - window.__lastStreamEndedAt <= RECENTLY_ENDED_STREAM_GUARD_MS;
+};
+
 // ---------------------------------------------------------------------------
 // Streaming assistant preservation
 // ---------------------------------------------------------------------------
@@ -388,6 +399,47 @@ export const ensureStreamingAssistantInList = (
   }
 
   return { list: resultList, streamingIndex: -1 };
+};
+
+/**
+ * 对刚刚结束 streaming 的 turn 做短时间收口保护：
+ * 当 backend snapshot 在 stream end 之后短暂回退到更短文本时，优先保留前一个 assistant。
+ */
+export const preserveRecentlyEndedStreamingTurn = (
+  prevList: ClaudeMessage[],
+  nextList: ClaudeMessage[],
+  findLastAssistantIndex: (messages: ClaudeMessage[]) => number,
+): ClaudeMessage[] => {
+  const prevAssistantIdx = findLastAssistantIndex(prevList);
+  const nextAssistantIdx = findLastAssistantIndex(nextList);
+  if (prevAssistantIdx < 0 || nextAssistantIdx < 0) return nextList;
+
+  const prevAssistant = prevList[prevAssistantIdx];
+  const nextAssistant = nextList[nextAssistantIdx];
+  if (prevAssistant.type !== 'assistant' || nextAssistant.type !== 'assistant') {
+    return nextList;
+  }
+
+  if (!isWithinRecentStreamEndWindow(prevAssistant.__turnId)) {
+    return nextList;
+  }
+  if (nextAssistant.__turnId !== undefined && nextAssistant.__turnId !== prevAssistant.__turnId) {
+    return nextList;
+  }
+  if ((nextAssistant.content || '').length >= (prevAssistant.content || '').length) {
+    return nextList;
+  }
+
+  const patched = [...nextList];
+  patched[nextAssistantIdx] = {
+    ...prevAssistant,
+    ...nextAssistant,
+    content: prevAssistant.content,
+    raw: prevAssistant.raw ?? nextAssistant.raw,
+    __turnId: prevAssistant.__turnId,
+    isStreaming: false,
+  };
+  return patched;
 };
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,8 @@ import {
 } from './message-utils.js';
 import { createPreToolUseHook } from './message-permission.js';
 import { setActiveQueryResult } from './message-session-registry.js';
+import { normalizeStreamDelta, rememberStreamSnapshot } from './stream-delta-normalizer.js';
+import { shouldOutputAssistantMessage } from './streaming-output-policy.js';
 
 // ========== Internal helpers for deduplication ==========
 
@@ -165,12 +167,8 @@ function processStreamMessage(msg, state, logPrefix) {
     return;
   }
 
-  // Determine whether to output the full [MESSAGE] tag
-  let shouldOutput = true;
-  if (state.streamingEnabled && msg.type === 'assistant') {
-    const c = msg.message?.content;
-    if (!Array.isArray(c) || !c.some(b => b.type === 'tool_use')) shouldOutput = false;
-  }
+  // 使用统一策略决定是否输出完整 [MESSAGE]，避免与 stream-event-processor 出现契约分叉。
+  const shouldOutput = shouldOutputAssistantMessage(msg, state.streamingEnabled);
   if (shouldOutput) console.log('[MESSAGE]', JSON.stringify(msg));
 
   // Process assistant content blocks
@@ -226,6 +224,7 @@ function processStreamMessage(msg, state, logPrefix) {
 
 /** Emit text content delta with streaming fallback support. */
 function emitTextDelta(currentText, state) {
+  rememberStreamSnapshot(state, 'text', 0, currentText);
   if (state.streamingEnabled && !state.hasStreamEvents && currentText.length > state.lastAssistantContent.length) {
     const delta = currentText.substring(state.lastAssistantContent.length);
     if (delta) process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
@@ -239,6 +238,7 @@ function emitTextDelta(currentText, state) {
 
 /** Emit thinking content delta with streaming fallback support. */
 function emitThinkingDelta(thinkingText, state) {
+  rememberStreamSnapshot(state, 'thinking', 0, thinkingText);
   if (state.streamingEnabled && !state.hasStreamEvents && thinkingText.length > state.lastThinkingContent.length) {
     const delta = thinkingText.substring(state.lastThinkingContent.length);
     if (delta) process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);

@@ -8,7 +8,9 @@ import {
   getRawUuid,
   preserveLastAssistantIdentity,
   preserveMessageIdentity,
+  preserveRecentlyEndedStreamingTurn,
   preserveStreamingAssistantContent,
+  preserveLatestMessagesOnShrink,
   stripDuplicateTrailingToolMessages,
   stripUuidFromRaw,
 } from '../messageSync';
@@ -588,5 +590,97 @@ describe('ensureStreamingAssistantInList', () => {
     const { list, streamingIndex } = ensureStreamingAssistantInList(prev, result, false, 0);
     expect(list).toBe(result);
     expect(streamingIndex).toBe(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// preserveLatestMessagesOnShrink
+// ---------------------------------------------------------------------------
+
+describe('preserveLatestMessagesOnShrink', () => {
+  it('keeps the latest streaming assistant when backend snapshot temporarily shrinks', () => {
+    const prev = [
+      makeUserMsg('q1'),
+      makeAssistantMsg('a1'),
+      makeUserMsg('q2'),
+      makeAssistantMsg('streaming answer', { isStreaming: true, __turnId: 9 }),
+    ];
+    const next = [
+      makeUserMsg('q1'),
+      makeAssistantMsg('a1'),
+    ];
+
+    const result = preserveLatestMessagesOnShrink(prev, next, 'codex');
+    expect(result).toHaveLength(4);
+    expect(result[2].content).toBe('q2');
+    expect(result[3].content).toBe('streaming answer');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// preserveRecentlyEndedStreamingTurn
+// ---------------------------------------------------------------------------
+
+describe('preserveRecentlyEndedStreamingTurn', () => {
+  it('keeps the just-ended assistant when backend snapshot briefly shrinks after stream end', () => {
+    const previousEndedAt = (window as any).__lastStreamEndedAt;
+    const previousEndedTurnId = (window as any).__lastStreamEndedTurnId;
+    (window as any).__lastStreamEndedTurnId = 12;
+    (window as any).__lastStreamEndedAt = Date.now();
+
+    try {
+      const prev = [
+        makeUserMsg('q'),
+        makeAssistantMsg('final answer with complete tail', {
+          __turnId: 12,
+          isStreaming: false,
+          raw: {
+            message: {
+              content: [{ type: 'text', text: 'final answer with complete tail' }],
+            },
+          } as any,
+        }),
+      ];
+      const next = [
+        makeUserMsg('q'),
+        makeAssistantMsg('final answer', {
+          raw: {
+            message: {
+              content: [{ type: 'text', text: 'final answer' }],
+            },
+          } as any,
+        }),
+      ];
+
+      const result = preserveRecentlyEndedStreamingTurn(prev, next, findLastAssistantIndex);
+      expect(result[1].content).toBe('final answer with complete tail');
+      expect(result[1].__turnId).toBe(12);
+    } finally {
+      (window as any).__lastStreamEndedTurnId = previousEndedTurnId;
+      (window as any).__lastStreamEndedAt = previousEndedAt;
+    }
+  });
+
+  it('does not preserve old assistant after the recent-end guard window expires', () => {
+    const previousEndedAt = (window as any).__lastStreamEndedAt;
+    const previousEndedTurnId = (window as any).__lastStreamEndedTurnId;
+    (window as any).__lastStreamEndedTurnId = 12;
+    (window as any).__lastStreamEndedAt = Date.now() - 3000;
+
+    try {
+      const prev = [
+        makeAssistantMsg('final answer with complete tail', {
+          __turnId: 12,
+          isStreaming: false,
+        }),
+      ];
+      const next = [makeAssistantMsg('final answer')];
+
+      const result = preserveRecentlyEndedStreamingTurn(prev, next, findLastAssistantIndex);
+      expect(result).toBe(next);
+    } finally {
+      (window as any).__lastStreamEndedTurnId = previousEndedTurnId;
+      (window as any).__lastStreamEndedAt = previousEndedAt;
+    }
   });
 });

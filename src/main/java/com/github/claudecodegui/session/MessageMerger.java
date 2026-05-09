@@ -94,6 +94,9 @@ public class MessageMerger {
                     baseContent.add(elementCopy);
                     indexByKey.put(key, baseContent.size() - 1);
                     continue;
+                } else if (shouldReplacePlainContentBlock(baseContent, i, block)) {
+                    baseContent.set(i, elementCopy);
+                    continue;
                 }
             }
 
@@ -135,5 +138,49 @@ public class MessageMerger {
         }
 
         return null;
+    }
+
+    /**
+     * 判断当前无唯一 key 的 block 是否应按位置替换旧 block。
+     * 仅对 text/thinking 这类流式 phase block 生效，用于避免完整 snapshot
+     * 回放时在 tool_use 边界前后重复追加同一语义位置的文本。
+     *
+     * @param baseContent 旧 content 数组
+     * @param incomingIndex 新 block 在 incoming content 中的位置
+     * @param incomingBlock 新 block
+     * @return true 表示按位置替换，false 表示走原有追加逻辑
+     */
+    private boolean shouldReplacePlainContentBlock(JsonArray baseContent, int incomingIndex, JsonObject incomingBlock) {
+        if (incomingIndex < 0 || incomingIndex >= baseContent.size()) {
+            return false;
+        }
+        if (!baseContent.get(incomingIndex).isJsonObject()) {
+            return false;
+        }
+
+        String incomingType = getBlockType(incomingBlock);
+        if (!"text".equals(incomingType) && !"thinking".equals(incomingType)) {
+            return false;
+        }
+
+        JsonObject existingBlock = baseContent.get(incomingIndex).getAsJsonObject();
+        if (getContentBlockKey(existingBlock) != null) {
+            return false;
+        }
+
+        return incomingType.equals(getBlockType(existingBlock));
+    }
+
+    /**
+     * 读取 block.type，缺失时返回 null。
+     *
+     * @param block content block
+     * @return type 字段值
+     */
+    private String getBlockType(JsonObject block) {
+        if (block == null || !block.has("type") || block.get("type").isJsonNull()) {
+            return null;
+        }
+        return block.get("type").getAsString();
     }
 }

@@ -6,6 +6,7 @@
  */
 
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
+import type { ClaudeRawMessage } from '../../../types';
 import { sendBridgeEvent } from '../../../utils/bridge';
 import { THROTTLE_INTERVAL } from '../../useStreamingMessages';
 import { parseSequence } from '../parseSequence';
@@ -99,6 +100,16 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
   window.onStreamStart = () => {
     if (window.__sessionTransitioning) return;
+    // 新 turn 开始前，先清理上一轮残留的延迟 updateMessages 状态，
+    // 避免旧 snapshot 在新一轮 streaming 中误回放。
+    if (typeof window.__cancelPendingUpdateMessages === 'function') {
+      window.__cancelPendingUpdateMessages();
+    }
+    window.__pendingUpdateJson = null;
+    window.__lastStreamEndedTurnId = undefined;
+    window.__lastStreamEndedAt = undefined;
+    window.__streamEndProcessedTurnId = undefined;
+    window.__turnStartedAt = Date.now();
     streamingContentRef.current = '';
     isStreamingRef.current = true;
     startStallWatchdog();
@@ -247,13 +258,49 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
   window.onStreamEnd = (sequence?: string | number) => {
     if (window.__sessionTransitioning) return;
+    const currentTurnId = streamingTurnIdRef.current;
+    if (currentTurnId > 0 && window.__streamEndProcessedTurnId === currentTurnId) {
+      return;
+    }
+    if (!isStreamingRef.current && currentTurnId <= 0) {
+      return;
+    }
+
     clearStallWatchdog();
     const parsedSequence = parseSequence(sequence);
-    if (parsedSequence != null) {
+    if (parsedSequence != null && parsedSequence >= 0) {
       window.__minAcceptedUpdateSequence = Math.max(window.__minAcceptedUpdateSequence ?? 0, parsedSequence);
     }
     // Notify backend about stream completion for tab status indicator
     sendBridgeEvent('tab_status_changed', JSON.stringify({ status: 'completed' }));
+
+    let backendSnapshotContent: string | undefined;
+    let backendSnapshotRaw: ClaudeRawMessage | string | undefined;
+    if (typeof window.__pendingUpdateJson === 'string' && window.__pendingUpdateJson.length > 0) {
+      try {
+        const parsed = JSON.parse(window.__pendingUpdateJson) as Array<Record<string, unknown>>;
+        for (let i = parsed.length - 1; i >= 0; i -= 1) {
+          const entry = parsed[i];
+          if (entry?.type !== 'assistant') {
+            continue;
+          }
+          const entryContent: unknown = entry.content;
+          const content = typeof entryContent === 'string' ? entryContent : '';
+          if (content) {
+            backendSnapshotContent = content;
+          }
+          const raw: unknown = entry.raw;
+          if (typeof raw === 'string') {
+            backendSnapshotRaw = raw;
+          } else if (raw && typeof raw === 'object') {
+            backendSnapshotRaw = raw as ClaudeRawMessage;
+          }
+          break;
+        }
+      } catch (error) {
+        console.warn('[Frontend] Failed to parse __pendingUpdateJson on stream end:', error);
+      }
+    }
 
     // FIX: Cancel any pending coalesced updateMessages rAF.  If onStreamEnd
     // fires between the rAF scheduling and execution, the stale snapshot
@@ -275,6 +322,9 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
     // Snapshot keys that need collapsing BEFORE they are cleared inside the updater.
     const keysToCollapse = new Set(autoExpandedThinkingKeysRef.current);
+    const turnStartedAt = window.__turnStartedAt;
+    window.__turnStartedAt = undefined;
+    const endedStreamingTurnId = streamingTurnIdRef.current;
 
     // Flush final content AND clear streaming refs inside the same updater.
     // This ensures any previously queued setMessages updater (e.g. from
@@ -284,17 +334,23 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       let newMessages = prev;
       const idx = streamingMessageIndexRef.current;
       if (prev.length > 0 && idx >= 0 && idx < prev.length && prev[idx]?.type === 'assistant') {
-        const finalContent = streamingContentRef.current;
+        const finalContent =
+          backendSnapshotContent && backendSnapshotContent.length > streamingContentRef.current.length
+            ? backendSnapshotContent
+            : streamingContentRef.current;
         newMessages = [...prev];
-        // FIX: Clear __turnId from the streaming message. After streaming ends,
-        // the backend's updateMessages snapshots contain the correct message
-        // structure.  Stale __turnId can interfere with mergeConsecutiveAssistantMessages
-        // when subsequent backend snapshots carry different message splits.
-        const { __turnId: _removedTurnId, ...restWithoutTurnId } = newMessages[idx];
+        const durationMs =
+          typeof turnStartedAt === 'number' && turnStartedAt > 0
+            ? Date.now() - turnStartedAt
+            : undefined;
+        const finalizedRaw = backendSnapshotRaw;
         newMessages[idx] = {
-          ...restWithoutTurnId,
+          ...newMessages[idx],
           content: finalContent || newMessages[idx].content,
+          ...(finalizedRaw !== undefined ? { raw: finalizedRaw } : {}),
           isStreaming: false,
+          __turnId: endedStreamingTurnId,
+          ...(durationMs != null ? { durationMs } : {}),
         };
       }
 
@@ -313,6 +369,9 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
       return newMessages;
     });
+
+    window.__lastStreamEndedTurnId = endedStreamingTurnId > 0 ? endedStreamingTurnId : undefined;
+    window.__lastStreamEndedAt = Date.now();
 
     // Collapse auto-expanded thinking blocks using the pre-clear snapshot
     if (setExpandedThinking && keysToCollapse.size > 0) {
@@ -336,6 +395,8 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     setLoading(false);
     setLoadingStartTime(null);
     setIsThinking(false);
+
+    window.__streamEndProcessedTurnId = endedStreamingTurnId > 0 ? endedStreamingTurnId : undefined;
   };
 
   // Streaming heartbeat — lightweight signal from backend during tool execution

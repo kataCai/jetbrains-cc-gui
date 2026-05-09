@@ -240,6 +240,10 @@ public class ClaudeMessageHandler implements MessageCallback {
             JsonObject messageJson = gson.fromJson(content, JsonObject.class);
             JsonObject previousRaw = currentAssistantMessage != null ? currentAssistantMessage.raw : null;
             JsonObject mergedRaw = messageMerger.mergeAssistantMessage(previousRaw, messageJson);
+            boolean hasToolUse = containsToolUseBlock(mergedRaw);
+            if (isStreaming && hasToolUse) {
+                mergedRaw = trimTrailingPlainBlocksAfterLastToolBoundary(mergedRaw);
+            }
 
             if (currentAssistantMessage == null) {
                 currentAssistantMessage = new Message(Message.Type.ASSISTANT, "", mergedRaw);
@@ -258,8 +262,11 @@ public class ClaudeMessageHandler implements MessageCallback {
                     assistantContent.append(aggregatedText);
                 }
                 currentAssistantMessage.content = assistantContent.toString();
-            } else if (aggregatedText != null && aggregatedText.length() > assistantContent.length()) {
-                // Conservative sync: if full text is longer, update accumulator (prevents delta loss edge cases)
+            } else if (!hasToolUse && aggregatedText != null && aggregatedText.length() > assistantContent.length()) {
+                // streaming 纯文本场景下，允许更长的完整快照回填 accumulator，
+                // 以吸收 delta 丢失或 corrective snapshot。
+                // 但若完整消息已经引入 tool_use，则其中尾段 text 可能属于后续 phase，
+                // 这里不能提前写入 assistantContent，否则工具后文本会在后续 delta 到达时重复。
                 assistantContent.setLength(0);
                 assistantContent.append(aggregatedText);
                 currentAssistantMessage.content = assistantContent.toString();
@@ -268,22 +275,6 @@ public class ClaudeMessageHandler implements MessageCallback {
 
             // Streaming: check if the message contains tool calls
             // If tool_use is present, we need to update messages even in streaming mode to render tool blocks
-            boolean hasToolUse = false;
-            if (mergedRaw.has("message") && mergedRaw.getAsJsonObject("message").has("content")) {
-                var contentArray = mergedRaw.getAsJsonObject("message").get("content");
-                if (contentArray.isJsonArray()) {
-                    for (var element : contentArray.getAsJsonArray()) {
-                        if (element.isJsonObject() && element.getAsJsonObject().has("type")) {
-                            String type = element.getAsJsonObject().get("type").getAsString();
-                            if ("tool_use".equals(type)) {
-                                hasToolUse = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
             // Tool calls act as segment boundaries: subsequent text/thinking should go into new blocks
             if (hasToolUse) {
                 textSegmentActive = false;
@@ -326,6 +317,96 @@ public class ClaudeMessageHandler implements MessageCallback {
         } catch (Exception e) {
             LOG.warn("Failed to parse assistant message JSON: " + e.getMessage());
         }
+    }
+
+    /**
+     * 判断 assistant raw 中是否包含 tool_use block。
+     * 流式场景下，该信息用于区分“纯文本 corrective snapshot”和“进入新 segment 的结构性 snapshot”。
+     *
+     * @param raw assistant raw JSON
+     * @return true 表示存在 tool_use
+     */
+    private boolean containsToolUseBlock(JsonObject raw) {
+        if (raw == null || !raw.has("message") || !raw.get("message").isJsonObject()) {
+            return false;
+        }
+        JsonObject message = raw.getAsJsonObject("message");
+        if (!message.has("content") || !message.get("content").isJsonArray()) {
+            return false;
+        }
+
+        JsonArray contentArray = message.getAsJsonArray("content");
+        for (int i = 0; i < contentArray.size(); i++) {
+            if (!contentArray.get(i).isJsonObject()) {
+                continue;
+            }
+            JsonObject block = contentArray.get(i).getAsJsonObject();
+            if (block.has("type") && "tool_use".equals(block.get("type").getAsString())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 在 streaming 过程中，若完整 assistant snapshot 已经引入 tool_use，
+     * 则 tool 之后的 text/thinking 尾段仍可能属于后续增量 phase。
+     * 这里先裁掉最后一个工具边界后的纯文本尾段，避免后续 delta 再次写入时形成重复 block。
+     *
+     * @param raw 已合并的 assistant raw
+     * @return 裁剪后的 raw
+     */
+    private JsonObject trimTrailingPlainBlocksAfterLastToolBoundary(JsonObject raw) {
+        if (raw == null || !raw.has("message") || !raw.get("message").isJsonObject()) {
+            return raw;
+        }
+        JsonObject message = raw.getAsJsonObject("message");
+        if (!message.has("content") || !message.get("content").isJsonArray()) {
+            return raw;
+        }
+
+        JsonArray contentArray = message.getAsJsonArray("content");
+        int lastToolBoundaryIndex = -1;
+        for (int i = 0; i < contentArray.size(); i++) {
+            if (!contentArray.get(i).isJsonObject()) {
+                continue;
+            }
+            JsonObject block = contentArray.get(i).getAsJsonObject();
+            if (!block.has("type") || block.get("type").isJsonNull()) {
+                continue;
+            }
+            String type = block.get("type").getAsString();
+            if ("tool_use".equals(type) || "tool_result".equals(type)) {
+                lastToolBoundaryIndex = i;
+            }
+        }
+        if (lastToolBoundaryIndex < 0 || lastToolBoundaryIndex >= contentArray.size() - 1) {
+            return raw;
+        }
+
+        JsonArray trimmed = new JsonArray();
+        for (int i = 0; i <= lastToolBoundaryIndex; i++) {
+            trimmed.add(contentArray.get(i).deepCopy());
+        }
+        for (int i = lastToolBoundaryIndex + 1; i < contentArray.size(); i++) {
+            if (!contentArray.get(i).isJsonObject()) {
+                trimmed.add(contentArray.get(i).deepCopy());
+                continue;
+            }
+            JsonObject block = contentArray.get(i).getAsJsonObject();
+            if (!block.has("type") || block.get("type").isJsonNull()) {
+                trimmed.add(block.deepCopy());
+                continue;
+            }
+            String type = block.get("type").getAsString();
+            if (!"text".equals(type) && !"thinking".equals(type)) {
+                trimmed.add(block.deepCopy());
+            }
+        }
+
+        message.add("content", trimmed);
+        raw.add("message", message);
+        return raw;
     }
 
     /**
@@ -520,7 +601,11 @@ public class ClaudeMessageHandler implements MessageCallback {
             isThinking = false;
             callbackHandler.notifyThinkingStatusChanged(false);
         }
-        ClaudeNotifier.clearStatus(project);
+        // message_end 只是消息语义边界；在测试环境或极端初始化阶段 project 可能尚不可用。
+        // 这里的状态栏清理属于附加 UI 行为，不应影响后续由 stream_end/onComplete 负责的主状态机收口。
+        if (project != null) {
+            ClaudeNotifier.clearStatus(project);
+        }
 
         // FIX: handleMessageEnd should not reset loading/busy state.
         // Regardless of streaming or non-streaming mode, state reset should be handled uniformly by:

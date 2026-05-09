@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { ClaudeMessage } from '../types';
+import type { ClaudeContentOrResultBlock, ClaudeMessage } from '../types';
 
 export const THROTTLE_INTERVAL = 50; // 50ms throttle interval
 
@@ -44,6 +44,161 @@ interface UseStreamingMessagesReturn {
   // Reset function
   resetStreamingState: () => void;
 }
+
+const normalizeMultilineText = (value: string): string => value.replace(/\r\n?/g, '\n');
+
+const getOverlapLength = (left: string, right: string): number => {
+  const max = Math.min(left.length, right.length);
+  for (let size = max; size > 0; size -= 1) {
+    if (left.slice(-size) === right.slice(0, size)) {
+      return size;
+    }
+  }
+  return 0;
+};
+
+/**
+ * 合并 snapshot 与本地 streaming 文本时，优先保留本地段内容，
+ * 但会吸收明显的 suffix/prefix 重叠，避免 markdown fence 等尾部重复。
+ */
+const mergeTextWithOverlap = (existingText: string, streamingText: string): string => {
+  const normalizedExisting = normalizeMultilineText(existingText);
+  const normalizedStreaming = normalizeMultilineText(streamingText);
+  if (!normalizedExisting) return normalizedStreaming;
+  if (!normalizedStreaming) return normalizedExisting;
+  if (normalizedExisting === normalizedStreaming) return normalizedStreaming;
+  if (normalizedStreaming.includes(normalizedExisting)) return normalizedStreaming;
+  if (normalizedExisting.includes(normalizedStreaming)) return normalizedStreaming;
+
+  const overlap = getOverlapLength(normalizedExisting, normalizedStreaming);
+  if (overlap > 0) {
+    return normalizedExisting + normalizedStreaming.slice(overlap);
+  }
+
+  const reverseOverlap = getOverlapLength(normalizedStreaming, normalizedExisting);
+  if (reverseOverlap > 0) {
+    return normalizedStreaming + normalizedExisting.slice(reverseOverlap);
+  }
+
+  return normalizedStreaming;
+};
+
+const isTextBlock = (block: unknown): block is { type: 'text'; text: string } =>
+  Boolean(block) &&
+  typeof block === 'object' &&
+  (block as { type?: string }).type === 'text' &&
+  typeof (block as { text?: unknown }).text === 'string';
+
+const isThinkingBlock = (block: unknown): block is { type: 'thinking'; thinking: string } =>
+  Boolean(block) &&
+  typeof block === 'object' &&
+  (block as { type?: string }).type === 'thinking' &&
+  typeof (block as { thinking?: unknown }).thinking === 'string';
+
+const areStreamingBlocksEquivalent = (left: unknown, right: unknown): boolean => {
+  if (isTextBlock(left) && isTextBlock(right)) {
+    return normalizeMultilineText(left.text) === normalizeMultilineText(right.text);
+  }
+  if (isThinkingBlock(left) && isThinkingBlock(right)) {
+    return normalizeMultilineText(left.thinking) === normalizeMultilineText(right.thinking);
+  }
+  return false;
+};
+
+const isStreamingReplaceableBlock = (block: unknown): block is { type: 'text' | 'thinking' } =>
+  Boolean(block) &&
+  typeof block === 'object' &&
+  (((block as { type?: string }).type === 'text') || ((block as { type?: string }).type === 'thinking'));
+
+/**
+ * 当同一轮 phase replay 被重复回放时，压缩连续重复的 thinking/text 片段，
+ * 避免本地临时 streaming block 在没有结构性边界时重复渲染。
+ */
+const collapseDuplicateStreamingPhases = (blocks: any[]): any[] => {
+  const output: any[] = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    const current = blocks[i];
+    const next = blocks[i + 1];
+    const hasPhasePair =
+      (isThinkingBlock(current) || isTextBlock(current)) &&
+      (isThinkingBlock(next) || isTextBlock(next));
+
+    if (hasPhasePair) {
+      const pair = [current, next];
+      const previousPair = output.slice(-2);
+      if (
+        previousPair.length === 2 &&
+        areStreamingBlocksEquivalent(previousPair[0], pair[0]) &&
+        areStreamingBlocksEquivalent(previousPair[1], pair[1])
+      ) {
+        i += 1;
+        continue;
+      }
+    }
+
+    const previous = output[output.length - 1];
+    if (
+      previous &&
+      areStreamingBlocksEquivalent(previous, current)
+    ) {
+      continue;
+    }
+
+    output.push(current);
+  }
+
+  return output;
+};
+
+/**
+ * 仅替换当前 streaming 已覆盖到的 text/thinking block。
+ * 超出当前 phase 范围、但来自 backend snapshot 的 trailing block 应保留，
+ * 否则本地 patch 会把尚未收口的结构性快照误删。
+ */
+const mergeStreamingBlocksIntoSnapshot = (
+  existingBlocks: ClaudeContentOrResultBlock[],
+  streamingBlocks: ClaudeContentOrResultBlock[],
+): ClaudeContentOrResultBlock[] => {
+  const output: ClaudeContentOrResultBlock[] = [];
+  const existingReplaceableCount = existingBlocks.filter(isStreamingReplaceableBlock).length;
+  let streamingReplaceableIndex = 0;
+  let streamingBlockIndex = 0;
+
+  for (const block of existingBlocks) {
+    if (!isStreamingReplaceableBlock(block)) {
+      output.push(block);
+      while (
+        streamingBlockIndex < streamingBlocks.length &&
+        !isStreamingReplaceableBlock(streamingBlocks[streamingBlockIndex])
+      ) {
+        streamingBlockIndex += 1;
+      }
+      continue;
+    }
+
+    const replacement = streamingBlocks[streamingBlockIndex];
+    if (replacement && isStreamingReplaceableBlock(replacement)) {
+      output.push(replacement);
+      streamingReplaceableIndex += 1;
+      streamingBlockIndex += 1;
+      continue;
+    }
+
+    output.push(block);
+  }
+
+  if (streamingReplaceableIndex >= existingReplaceableCount) {
+    while (streamingBlockIndex < streamingBlocks.length) {
+      const trailing = streamingBlocks[streamingBlockIndex];
+      if (isStreamingReplaceableBlock(trailing)) {
+        output.push(trailing);
+      }
+      streamingBlockIndex += 1;
+    }
+  }
+
+  return output;
+};
 
 /**
  * Hook for managing streaming message state and helper functions
@@ -129,9 +284,10 @@ export function useStreamingMessages(): UseStreamingMessagesReturn {
       }
       if (block.type === 'text') {
         const text = textSegments[textIdx];
+        const existingText = typeof block.text === 'string' ? block.text : '';
         textIdx += 1;
         if (typeof text === 'string' && text.length > 0) {
-          output.push({ type: 'text', text });
+          output.push({ type: 'text', text: mergeTextWithOverlap(existingText, text) });
         }
         continue;
       }
@@ -149,13 +305,13 @@ export function useStreamingMessages(): UseStreamingMessagesReturn {
           output.push({ type: 'thinking', thinking: normalized });
         }
       }
-      const text = textSegments[phase];
-      if (typeof text === 'string' && text.length > 0) {
-        output.push({ type: 'text', text });
+        const text = textSegments[phase];
+        if (typeof text === 'string' && text.length > 0) {
+          output.push({ type: 'text', text });
+        }
       }
-    }
 
-    return output;
+    return collapseDuplicateStreamingPhases(output);
   };
 
   /**
@@ -191,7 +347,8 @@ export function useStreamingMessages(): UseStreamingMessagesReturn {
   const patchAssistantForStreaming = (assistant: ClaudeMessage): ClaudeMessage => {
     const existingRaw = (assistant.raw && typeof assistant.raw === 'object') ? (assistant.raw as any) : { message: { content: [] } };
     const existingBlocks = extractRawBlocks(existingRaw);
-    const newBlocks = buildStreamingBlocks(existingBlocks);
+    const streamingBlocks = buildStreamingBlocks(existingBlocks);
+    const newBlocks = mergeStreamingBlocksIntoSnapshot(existingBlocks, streamingBlocks);
 
     const rawPatched = existingRaw.message
       ? { ...existingRaw, message: { ...(existingRaw.message || {}), content: newBlocks } }
