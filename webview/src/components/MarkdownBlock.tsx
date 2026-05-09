@@ -2,7 +2,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { memo, useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { openBrowser, openFile } from '../utils/bridge';
+import { openBrowser, openClass, openFile } from '../utils/bridge';
 import { linkifyFilePathHtml } from '../utils/linkifyFilePath';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
@@ -523,7 +523,9 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
       return;
     }
 
-    if (/^(https?:|mailto:)/.test(href)) {
+    if (/^class:/.test(href)) {
+      openClass(href.slice('class:'.length));
+    } else if (/^(https?:|mailto:)/.test(href)) {
       openBrowser(href);
     } else {
       openFile(href);

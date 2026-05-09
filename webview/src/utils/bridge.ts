@@ -56,6 +56,13 @@ export const openBrowser = (url?: string) => {
   sendBridgeEvent('open_browser', url);
 };
 
+export const openClass = (className?: string) => {
+  if (!className) {
+    return;
+  }
+  sendBridgeEvent('open_class', className);
+};
+
 export const sendToJava = (message: string, payload: any = {}) => {
   const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
   sendBridgeEvent(message, payloadStr);

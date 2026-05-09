@@ -1,5 +1,7 @@
 const FILE_PATH_PATTERN =
   /(^|[\s([>{'"])((?:(?:[A-Za-z]:[\\/])|(?:\.{1,2}[\\/])|\/)?(?:[\w.-]+[\\/])+[\w.-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?)(?=$|[\s)\]<'"},;!?])/g;
+const JAVA_FQCN_PATTERN =
+  /(^|[\s([>{'"])((?:[a-z_][a-z0-9_]*\.)+[A-Z][A-Za-z0-9_]*)(?=$|[\s)\]<'"},;!?])/g;
 
 /**
  * 判断当前文本节点是否位于不允许做文件路径增强的容器里。
@@ -61,6 +63,48 @@ function replaceTextNodeWithAnchors(textNode: Text): void {
 }
 
 /**
+ * 将单个文本节点中的 Java FQCN 替换成类跳转锚点。
+ * 第一版只接受包名全小写、末段类名首字母大写的 FQCN，
+ * 以尽量降低把普通句子误判成类名的概率。
+ *
+ * @param textNode 当前待处理文本节点
+ */
+function replaceTextNodeWithClassAnchors(textNode: Text): void {
+  const text = textNode.textContent ?? '';
+  JAVA_FQCN_PATTERN.lastIndex = 0;
+  if (!JAVA_FQCN_PATTERN.test(text)) {
+    return;
+  }
+
+  JAVA_FQCN_PATTERN.lastIndex = 0;
+  const fragment = document.createDocumentFragment();
+  let lastIndex = 0;
+
+  text.replace(JAVA_FQCN_PATTERN, (match, prefix: string, className: string, offset: number) => {
+    const classStart = offset + prefix.length;
+
+    if (classStart > lastIndex) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex, classStart)));
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = `class:${className}`;
+    anchor.textContent = className;
+    anchor.setAttribute('data-link-type', 'java-class');
+    fragment.appendChild(anchor);
+
+    lastIndex = classStart + className.length;
+    return match;
+  });
+
+  if (lastIndex < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+
+  textNode.parentNode?.replaceChild(fragment, textNode);
+}
+
+/**
  * 对已生成的 HTML 结果做轻量级文件路径增强。
  * 只在普通正文文本节点里把形如 `src/main/App.tsx:42` 的路径包装成链接，
  * 后续点击时复用现有 open_file 桥接能力，不改动后端协议。
@@ -86,5 +130,15 @@ export function linkifyFilePathHtml(html: string): string {
   }
 
   textNodes.forEach(replaceTextNodeWithAnchors);
+  const classTextNodes: Text[] = [];
+  const classWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  while (classWalker.nextNode()) {
+    const textNode = classWalker.currentNode as Text;
+    if (!textNode.textContent?.trim() || shouldSkipNode(textNode)) {
+      continue;
+    }
+    classTextNodes.push(textNode);
+  }
+  classTextNodes.forEach(replaceTextNodeWithClassAnchors);
   return doc.body.innerHTML.trim();
 }

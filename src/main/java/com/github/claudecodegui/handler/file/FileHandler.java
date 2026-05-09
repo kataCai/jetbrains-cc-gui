@@ -26,9 +26,10 @@ public class FileHandler extends BaseMessageHandler {
 
     private static final Logger LOG = Logger.getInstance(FileHandler.class);
 
-    private static final String[] SUPPORTED_TYPES = {"list_files", "open_file", "open_browser"};
+    private static final String[] SUPPORTED_TYPES = {"list_files", "open_file", "open_browser", "open_class"};
 
     private final OpenFileHandler openFileHandler;
+    private final OpenClassHandler openClassHandler;
     private final OpenFileCollector openFileCollector;
     private final RecentFileCollector recentFileCollector;
     private final FileSystemCollector fileSystemCollector;
@@ -37,6 +38,7 @@ public class FileHandler extends BaseMessageHandler {
     public FileHandler(HandlerContext context) {
         super(context);
         this.openFileHandler = new OpenFileHandler(context);
+        this.openClassHandler = new OpenClassHandler(context);
         this.openFileCollector = new OpenFileCollector(context);
         this.recentFileCollector = new RecentFileCollector(context);
         this.fileSystemCollector = new FileSystemCollector();
@@ -61,6 +63,10 @@ public class FileHandler extends BaseMessageHandler {
             }
             case "open_browser" -> {
                 openFileHandler.handleOpenBrowser(content);
+                yield true;
+            }
+            case "open_class" -> {
+                openClassHandler.handleOpenClass(content);
                 yield true;
             }
             default -> false;
