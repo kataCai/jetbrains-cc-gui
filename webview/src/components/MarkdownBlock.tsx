@@ -3,6 +3,7 @@ import DOMPurify from 'dompurify';
 import { memo, useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { openBrowser, openFile } from '../utils/bridge';
+import { linkifyFilePathHtml } from '../utils/linkifyFilePath';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
 import { markedHighlight } from 'marked-highlight';
@@ -212,10 +213,13 @@ function renderStreamingContent(content: string): string {
     .join('');
 
   // Sanitize the assembled HTML to prevent XSS even during streaming
-  return DOMPurify.sanitize(raw, {
+  const sanitized = DOMPurify.sanitize(raw, {
     ALLOWED_TAGS: ['p', 'br', 'pre', 'code', 'strong', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
     ALLOWED_ATTR: ['class'],
   });
+
+  // 流式阶段也允许点击已完整输出的文件路径，保持与非流式渲染一致的交互体验。
+  return linkifyFilePathHtml(sanitized);
 }
 
 // Mermaid render counter for generating unique IDs
@@ -439,7 +443,8 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
         wrapper.appendChild(btn);
       });
 
-      return doc.body.innerHTML.trim();
+      // 非流式阶段在完整 markdown 解析后统一做文件路径增强，避免污染代码块和已有链接。
+      return linkifyFilePathHtml(doc.body.innerHTML.trim());
     } catch {
       return content;
     }
