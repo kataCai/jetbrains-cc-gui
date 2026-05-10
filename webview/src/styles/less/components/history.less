@@ -38,9 +38,20 @@
 
 .history-item-meta {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-tertiary);
+}
+
+.history-meta-dot {
+    color: var(--text-tertiary);
+    opacity: 0.5;
+}
+
+.history-filesize-large {
+    color: #ff9500;
+    font-weight: 500;
 }
 
 /* 历史记录头部样式 */
@@ -157,6 +168,7 @@
 
     .codicon {
         font-size: 14px;
+        pointer-events: none;
     }
 }
 
@@ -178,6 +190,7 @@
 
     .codicon {
         font-size: 14px;
+        pointer-events: none;
     }
 
     /* 已收藏状态：始终显示金色星标 */
@@ -205,6 +218,7 @@
 
     .codicon {
         font-size: 14px;
+        pointer-events: none;
     }
 }
 
@@ -226,21 +240,12 @@
     opacity: 1;
 }
 
+/* 非 hover 状态下只隐藏“额外操作”按钮，保留已收藏星标占位，避免 hover 时宽度突变 */
 .history-item:not(:hover) .history-action-buttons.has-favorite .history-edit-btn,
 .history-item:not(:hover) .history-action-buttons.has-favorite .history-export-btn,
 .history-item:not(:hover) .history-action-buttons.has-favorite .history-delete-btn {
     visibility: hidden;
     opacity: 0;
-}
-
-.history-action-buttons.has-favorite {
-    display: flex;
-}
-
-.history-item:not(:hover) .history-action-buttons.has-favorite .history-edit-btn,
-.history-item:not(:hover) .history-action-buttons.has-favorite .history-export-btn,
-.history-item:not(:hover) .history-action-buttons.has-favorite .history-delete-btn {
-    display: none;
 }
 
 .history-item:hover .history-action-buttons {
@@ -301,6 +306,7 @@
 
     .codicon {
         font-size: 14px;
+        pointer-events: none;
     }
 }
 
@@ -402,4 +408,69 @@
 .history-title-cancel-btn:active {
     transform: scale(0.92);
     background-color: rgba(255, 59, 48, 0.25);
+}
+
+.history-session-id-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.history-session-id {
+    font-family: var(--idea-editor-font-family, monospace);
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+
+.history-copy-id-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    line-height: 1;
+
+    .codicon {
+        font-size: 12px;
+        pointer-events: none;
+    }
+}
+
+.history-item:hover .history-copy-id-btn {
+    opacity: 1;
+}
+
+.history-copy-id-btn:hover {
+    background-color: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+    color: var(--accent-primary);
+}
+
+.history-copy-id-btn:active {
+    transform: scale(0.92);
+    background-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+}
+
+.history-copy-id-btn.copied {
+    opacity: 1;
+    color: var(--color-success);
+}
+
+.history-copy-id-btn.copied:hover {
+    background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
+}
+
+.history-copy-id-btn.failed {
+    opacity: 1;
+    color: var(--color-error);
+}
+
+.history-copy-id-btn.failed:hover {
+    background-color: color-mix(in srgb, var(--color-error) 15%, transparent);
 }

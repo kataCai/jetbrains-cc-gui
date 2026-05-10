@@ -34,6 +34,8 @@ export interface ClaudeMessage {
   timestamp?: string;
   isStreaming?: boolean;
   isOptimistic?: boolean;
+  /** 前端根据一次完整 assistant 响应耗时补写的展示字段，后端快照当前不会直接返回。 */
+  durationMs?: number;
   /** Runtime-only: numeric turn identifier for streaming assistant isolation. */
   __turnId?: number;
   [key: string]: unknown;
@@ -53,6 +55,7 @@ export interface HistorySessionSummary {
   isFavorited?: boolean;
   favoritedAt?: number;
   provider?: string; // 'claude' or 'codex'
+  fileSize?: number;
 }
 
 export interface HistoryData {

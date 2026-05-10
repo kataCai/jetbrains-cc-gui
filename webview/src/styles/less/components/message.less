@@ -97,7 +97,7 @@
 /* Message Copy Button - appears on hover for assistant messages */
 .message-copy-btn {
     position: absolute;
-    bottom: 8px;
+    top: 8px;
     right: 8px;
     width: 28px;
     height: 28px;
@@ -160,6 +160,36 @@
         opacity: 1;
         visibility: visible;
         transform: translateY(-2px);
+    }
+}
+
+.message-duration {
+    margin-top: 8px;
+    display: flex;
+    justify-content: center;
+
+    .message-duration-inner {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 14px;
+        border: 1px solid var(--border-secondary);
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--text-tertiary);
+    }
+
+    .message-duration-flag {
+        font-size: 12px;
+        opacity: 0.7;
+    }
+
+    .message-duration-cost {
+        opacity: 0.8;
+    }
+
+    .message-duration-value {
+        font-family: var(--idea-editor-font-family, monospace);
     }
 }
 

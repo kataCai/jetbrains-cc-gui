@@ -81,6 +81,17 @@ const CopyButton = memo(function CopyButton({
   );
 });
 
+function formatDurationMs(durationMs: number): string {
+  const seconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(remainder).padStart(2, '0')}`;
+}
+
 function isToolBlockOfType(block: ClaudeContentBlock, toolNames: Set<string>): boolean {
   return block.type === 'tool_use' && isToolName(block.name, toolNames);
 }
@@ -252,10 +263,11 @@ export const MessageItem = memo(function MessageItem({
     }
     return '';
   }, [message, extractMarkdownContent]);
+  const hasCopyableText = markdownContent.trim().length > 0;
 
   const handleCopyMessage = useCallback(async () => {
     // Prevent copying if message is empty or already in "copied" state
-    if (!markdownContent.trim() || copiedMessageIndex === messageIndex) return;
+    if (!hasCopyableText || copiedMessageIndex === messageIndex) return;
 
     const success = await copyToClipboard(markdownContent);
     if (success) {
@@ -272,7 +284,7 @@ export const MessageItem = memo(function MessageItem({
         copyTimeoutRef.current = null;
       }, 1500);
     }
-  }, [markdownContent, messageIndex, copiedMessageIndex]);
+  }, [hasCopyableText, markdownContent, messageIndex, copiedMessageIndex]);
 
   // Cleanup timeout on unmount to prevent memory leaks
   useEffect(() => {
@@ -530,18 +542,20 @@ export const MessageItem = memo(function MessageItem({
           <div className="message-timestamp-header">
             {formatTime(message.timestamp)}
           </div>
-          <CopyButton
-            className="message-copy-btn-inline"
-            isCopied={copiedMessageIndex === messageIndex}
-            onClick={handleCopyMessage}
-            copyLabel={t('markdown.copyMessage')}
-            copySuccessText={t('markdown.copySuccess')}
-          />
+          {hasCopyableText && (
+            <CopyButton
+              className="message-copy-btn-inline"
+              isCopied={copiedMessageIndex === messageIndex}
+              onClick={handleCopyMessage}
+              copyLabel={t('markdown.copyMessage')}
+              copySuccessText={t('markdown.copySuccess')}
+            />
+          )}
         </div>
       )}
 
       {/* Copy button for assistant messages only */}
-      {message.type === 'assistant' && !isMessageStreaming && (
+      {message.type === 'assistant' && !isMessageStreaming && hasCopyableText && (
         <CopyButton
           isCopied={copiedMessageIndex === messageIndex}
           onClick={handleCopyMessage}
@@ -560,6 +574,16 @@ export const MessageItem = memo(function MessageItem({
       <div className="message-content">
         {renderGroupedBlocks()}
       </div>
+
+      {message.type === 'assistant' && !isMessageStreaming && typeof message.durationMs === 'number' && (
+        <div className="message-duration">
+          <span className="message-duration-inner">
+            <span className="message-duration-flag codicon codicon-clock"></span>
+            <span className="message-duration-cost">{t('chat.totalDuration')}</span>
+            <span className="message-duration-value">{formatDurationMs(message.durationMs)}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 });

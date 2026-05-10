@@ -38,4 +38,23 @@ describe('linkifyFilePathHtml', () => {
     expect(doc.querySelector('a')).toBeNull();
     expect(doc.querySelector('code')?.textContent).toBe('src/main/App.tsx:42');
   });
+
+  it('converts standalone source filenames covered by the whitelist into clickable anchors', () => {
+    const html = linkifyFilePathHtml('<p>Check application.properties and index.jsp before retrying.</p>');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const anchors = Array.from(doc.querySelectorAll('a'));
+
+    expect(anchors).toHaveLength(2);
+    expect(anchors[0]?.getAttribute('href')).toBe('application.properties');
+    expect(anchors[0]?.textContent).toBe('application.properties');
+    expect(anchors[1]?.getAttribute('href')).toBe('index.jsp');
+    expect(anchors[1]?.textContent).toBe('index.jsp');
+  });
+
+  it('does not treat domain-like text as standalone source filenames', () => {
+    const html = linkifyFilePathHtml('<p>Visit example.com or internal.service for help.</p>');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    expect(doc.querySelector('a')).toBeNull();
+  });
 });

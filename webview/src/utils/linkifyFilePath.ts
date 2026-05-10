@@ -1,7 +1,27 @@
 const FILE_PATH_PATTERN =
   /(^|[\s([>{'"])((?:(?:[A-Za-z]:[\\/])|(?:\.{1,2}[\\/])|\/)?(?:[\w.-]+[\\/])+[\w.-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?)(?=$|[\s)\]<'"},;!?])/g;
+const STANDALONE_FILENAME_PATTERN =
+  /(^|[\s([>{'"])([A-Za-z0-9._-]+\.[A-Za-z]{2,})(?=$|[\s)\]<'"},;!?])/g;
 const JAVA_FQCN_PATTERN =
   /(^|[\s([>{'"])((?:[a-z_][a-z0-9_]*\.)+[A-Z][A-Za-z0-9_]*)(?=$|[\s)\]<'"},;!?])/g;
+
+const SOURCE_FILE_EXTENSIONS = new Set([
+  'adoc', 'asp', 'aspx', 'astro', 'avsc', 'bash', 'bat', 'blade', 'c', 'cc', 'cfg', 'clj', 'cljs', 'cljc',
+  'cmd', 'cmake', 'conf', 'config', 'cpp', 'cs', 'css', 'cts', 'cxx', 'dart', 'ddl', 'dml', 'dockerfile',
+  'editorconfig', 'ejs', 'env', 'erb', 'ex', 'exs', 'fish', 'fs', 'fsx', 'ftl', 'gitignore', 'go', 'gql',
+  'gradle', 'graphql', 'groovy', 'h', 'hbs', 'hcl', 'hpp', 'hrl', 'hs', 'htm', 'html', 'hxx', 'ini', 'java',
+  'js', 'json', 'jsp', 'jspx', 'jsx', 'kts', 'kt', 'latex', 'less', 'lock', 'log', 'lua', 'markdown', 'maven',
+  'md', 'mk', 'mjs', 'mod', 'mustache', 'mts', 'nim', 'njk', 'php', 'phtml', 'pl', 'pm', 'prefs', 'properties',
+  'proto', 'ps1', 'py', 'pyi', 'pyw', 'r', 'R', 'rb', 'rake', 'rc', 'rs', 'rst', 'sass', 'scala', 'scss',
+  'sh', 'sol', 'sql', 'sum', 'svg', 'svelte', 'swift', 'tex', 'tf', 'thrift', 'toml', 'ts', 'tsv', 'tsx',
+  'twig', 'txt', 'vb', 'vm', 'vue', 'xml', 'yaml', 'yml', 'zig', 'zsh',
+]);
+
+const COMMON_LOWERCASE_FILE_NAMES = [
+  'readme', 'changelog', 'license', 'contributing', 'todo', 'notes', 'makefile', 'dockerfile', 'vagrantfile',
+  'gemfile', 'rakefile', 'procfile', 'bower', 'package', 'tsconfig', 'webpack', 'rollup', 'vite', 'eslint',
+  'prettier', 'stylelint', 'babel', 'jest', 'karma', 'mocha', 'nyc', 'istanbul', 'svgo', 'postcss',
+];
 
 /**
  * 判断当前文本节点是否位于不允许做文件路径增强的容器里。
@@ -20,6 +40,44 @@ function shouldSkipNode(node: Node): boolean {
     current = current.parentElement;
   }
   return false;
+}
+
+/**
+ * 判断一个独立文件名是否适合在正文里被当作可点击源码文件处理。
+ * 这里刻意比“任意点号字符串都可点击”更保守，避免把域名、包名片段误判成文件名。
+ *
+ * @param fileName 当前命中的独立文件名文本
+ * @return 若命中白名单且满足命名约束则返回 true
+ */
+function isStandaloneSourceFileName(fileName: string): boolean {
+  if (!fileName || fileName.length < 3) {
+    return false;
+  }
+
+  const lastDotIndex = fileName.lastIndexOf('.');
+  if (lastDotIndex <= 0 || lastDotIndex >= fileName.length - 1) {
+    return false;
+  }
+
+  const namePart = fileName.slice(0, lastDotIndex);
+  const extension = fileName.slice(lastDotIndex + 1).toLowerCase();
+  if (!SOURCE_FILE_EXTENSIONS.has(extension)) {
+    return false;
+  }
+
+  // 对全小写文件名做额外约束，降低 example.com 这类文本被误链化的概率。
+  if (/^[a-z][a-z0-9._-]*$/.test(namePart) && !/[A-Z]/.test(namePart)) {
+    const lowerName = namePart.toLowerCase();
+    if (namePart.includes('_') || namePart.includes('-') || namePart.includes('.')) {
+      return true;
+    }
+
+    if (COMMON_LOWERCASE_FILE_NAMES.some((item) => lowerName.startsWith(item) || lowerName.endsWith(item))) {
+      return true;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -54,6 +112,54 @@ function replaceTextNodeWithAnchors(textNode: Text): void {
     lastIndex = pathStart + filePath.length;
     return match;
   });
+
+  if (lastIndex < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+
+  textNode.parentNode?.replaceChild(fragment, textNode);
+}
+
+/**
+ * 将正文里的独立源码文件名替换成锚点。
+ * 这里只处理白名单扩展名，且复用项目根相对路径打开逻辑，不改动现有桥接协议。
+ *
+ * @param textNode 当前待处理文本节点
+ */
+function replaceTextNodeWithStandaloneFileAnchors(textNode: Text): void {
+  const text = textNode.textContent ?? '';
+  STANDALONE_FILENAME_PATTERN.lastIndex = 0;
+  if (!STANDALONE_FILENAME_PATTERN.test(text)) {
+    return;
+  }
+
+  STANDALONE_FILENAME_PATTERN.lastIndex = 0;
+  const fragment = document.createDocumentFragment();
+  let lastIndex = 0;
+
+  text.replace(STANDALONE_FILENAME_PATTERN, (match, prefix: string, fileName: string, offset: number) => {
+    const fileStart = offset + prefix.length;
+
+    if (!isStandaloneSourceFileName(fileName)) {
+      return match;
+    }
+
+    if (fileStart > lastIndex) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex, fileStart)));
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = fileName;
+    anchor.textContent = fileName;
+    fragment.appendChild(anchor);
+
+    lastIndex = fileStart + fileName.length;
+    return match;
+  });
+
+  if (lastIndex === 0) {
+    return;
+  }
 
   if (lastIndex < text.length) {
     fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
@@ -130,6 +236,16 @@ export function linkifyFilePathHtml(html: string): string {
   }
 
   textNodes.forEach(replaceTextNodeWithAnchors);
+  const standaloneFileTextNodes: Text[] = [];
+  const standaloneFileWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  while (standaloneFileWalker.nextNode()) {
+    const textNode = standaloneFileWalker.currentNode as Text;
+    if (!textNode.textContent?.trim() || shouldSkipNode(textNode)) {
+      continue;
+    }
+    standaloneFileTextNodes.push(textNode);
+  }
+  standaloneFileTextNodes.forEach(replaceTextNodeWithStandaloneFileAnchors);
   const classTextNodes: Text[] = [];
   const classWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
   while (classWalker.nextNode()) {

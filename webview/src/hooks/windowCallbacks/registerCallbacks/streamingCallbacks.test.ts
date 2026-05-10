@@ -210,4 +210,36 @@ describe('registerStreamingCallbacks', () => {
     expect(typeof (window as any).__lastStreamEndedAt).toBe('number');
     expect((window as any).__streamEndProcessedTurnId).toBe(15);
   });
+
+  it('onStreamEnd stamps durationMs on the completed assistant message', () => {
+    const options = createOptions();
+    options.streamingContentRef.current = 'final buffered tail';
+    options.isStreamingRef.current = true;
+    options.streamingMessageIndexRef.current = 0;
+    options.streamingTurnIdRef.current = 18;
+
+    registerStreamingCallbacks(options);
+
+    const previousMessages: ClaudeMessage[] = [
+      {
+        type: 'assistant',
+        content: 'stale snapshot',
+        isStreaming: true,
+        timestamp: new Date().toISOString(),
+        __turnId: 18,
+      },
+    ];
+
+    (window as any).__sessionTransitioning = false;
+    (window as any).__cancelPendingUpdateMessages = vi.fn();
+    (window as any).__turnStartedAt = Date.now() - 65000;
+
+    (window as any).onStreamEnd?.('31');
+
+    const updater = (options.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater(previousMessages);
+
+    expect(typeof nextMessages[0].durationMs).toBe('number');
+    expect((nextMessages[0].durationMs as number)).toBeGreaterThanOrEqual(64000);
+  });
 });

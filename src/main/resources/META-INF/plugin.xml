@@ -145,8 +145,9 @@
         <action id="ClaudeCodeGUI.SendFilePathToInputAction"
                 class="com.github.claudecodegui.action.editor.SendFilePathToInputAction"
                 icon="/icons/cc-gui-icon.svg">
-            <!-- Add to project file tree context menu -->
+            <!-- 同时挂到项目树和编辑器标签页菜单，避免只在文件树可用 -->
             <add-to-group group-id="ProjectViewPopupMenu" anchor="first"/>
+            <add-to-group group-id="EditorTabPopupMenu" anchor="first"/>
         </action>
 
         <!-- Generate Commit Message with AI Action -->

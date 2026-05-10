@@ -4,6 +4,7 @@ import type { HistoryData, HistorySessionSummary } from '../../types';
 import VirtualList from './VirtualList';
 import { extractCommandMessageContent } from '../../utils/messageUtils';
 import { sendBridgeEvent } from '../../utils/bridge';
+import { copyToClipboard } from '../../utils/copyUtils';
 import { ProviderModelIcon } from '../shared/ProviderModelIcon';
 
 // Deep search timeout (milliseconds)
@@ -49,6 +50,18 @@ const getComparableTimestamp = (timestamp: string | undefined) => {
   return Number.isNaN(value) ? 0 : value;
 };
 
+const formatFileSize = (bytes: number | undefined): { text: string; isMB: boolean } => {
+  if (!bytes || bytes <= 0) {
+    return { text: '0 KB', isMB: false };
+  }
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return { text: `${kb.toFixed(1)} KB`, isMB: false };
+  }
+  const mb = kb / 1024;
+  return { text: `${mb.toFixed(1)} MB`, isMB: true };
+};
+
 const deduplicateHistorySessions = (sessions: HistorySessionSummary[]) => {
   const deduplicated = new Map<string, HistorySessionSummary>();
 
@@ -91,13 +104,20 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
   const [editingTitle, setEditingTitle] = useState(''); // Title content being edited
   const [isDeepSearching, setIsDeepSearching] = useState(false); // Deep search in-progress state
   const deepSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Deep search timeout timer
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Copy status timeout timer
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null); // Last copied session ID
+  const [copyFailedSessionId, setCopyFailedSessionId] = useState<string | null>(null); // Last failed copy session ID
 
-  // Clean up deep search timeout timer
+  // Clean up timeout timers
   useEffect(() => {
     return () => {
       if (deepSearchTimeoutRef.current) {
         clearTimeout(deepSearchTimeoutRef.current);
         deepSearchTimeoutRef.current = null;
+      }
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
       }
     };
   }, []);
@@ -289,6 +309,27 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
     setEditingTitle('');
   };
 
+  const handleCopySessionId = async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = null;
+    }
+    const success = await copyToClipboard(sessionId);
+    if (success) {
+      setCopiedSessionId(sessionId);
+      setCopyFailedSessionId(null);
+    } else {
+      setCopyFailedSessionId(sessionId);
+      setCopiedSessionId(null);
+    }
+    copyTimeoutRef.current = setTimeout(() => {
+      setCopiedSessionId(null);
+      setCopyFailedSessionId(null);
+      copyTimeoutRef.current = null;
+    }, 2000);
+  };
+
   // Deep search: clear cache and reload history
   const handleDeepSearch = () => {
     if (isDeepSearching) return;
@@ -439,7 +480,46 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
         </div>
         <div className="history-item-meta">
           <span>{t('history.messageCount', { count: session.messageCount })}</span>
-          <span style={{ fontFamily: 'var(--idea-editor-font-family, monospace)', color: '#666' }}>{session.sessionId.slice(0, 8)}</span>
+          {session.fileSize ? (() => {
+            const { text, isMB } = formatFileSize(session.fileSize);
+            return (
+              <>
+                <span className="history-meta-dot">•</span>
+                <span className={isMB ? 'history-filesize-large' : undefined}>{text}</span>
+              </>
+            );
+          })() : null}
+          <span className="history-meta-dot">•</span>
+          <div className="history-session-id-container">
+            <span
+              className="history-session-id"
+              title={session.sessionId}
+            >
+              {session.sessionId.slice(0, 8)}
+            </span>
+            <button
+              className={`history-copy-id-btn ${copiedSessionId === session.sessionId ? 'copied' : ''} ${copyFailedSessionId === session.sessionId ? 'failed' : ''}`}
+              onClick={(e) => handleCopySessionId(e, session.sessionId)}
+              title={
+                copiedSessionId === session.sessionId
+                  ? t('history.sessionIdCopied')
+                  : copyFailedSessionId === session.sessionId
+                    ? t('history.copyFailed')
+                    : t('history.copySessionId')
+              }
+              aria-label={t('history.copySessionId')}
+            >
+              <span
+                className={`codicon ${
+                  copiedSessionId === session.sessionId
+                    ? 'codicon-check'
+                    : copyFailedSessionId === session.sessionId
+                      ? 'codicon-error'
+                      : 'codicon-copy'
+                }`}
+              ></span>
+            </button>
+          </div>
         </div>
       </div>
     );
