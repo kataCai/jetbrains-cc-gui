@@ -23,6 +23,8 @@ ext.getLocalProperty = { String key, String defaultValue = null ->
 
 // Get custom JDK path from local properties (support both property names)
 def localJavaHome = getLocalProperty('java.home') ?: getLocalProperty('org.gradle.java.home')
+def localJavaToolchainVersion = getLocalProperty('java.toolchain.version', '17')
+def configuredJavaLanguageVersion = Integer.parseInt(localJavaToolchainVersion)
 
 checkstyle {
     toolVersion = '10.12.5'
@@ -38,7 +40,7 @@ java {
 
     // Use Java Toolchain for consistent JDK across all tasks
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion = JavaLanguageVersion.of(configuredJavaLanguageVersion)
     }
 }
 
@@ -58,7 +60,7 @@ if (localJavaHome) {
             // Skip runIde task to use JBR for JCEF support
             if (it.name != 'runIde') {
                 javaLauncher = javaToolchains.launcherFor {
-                    languageVersion = JavaLanguageVersion.of(17)
+                    languageVersion = JavaLanguageVersion.of(configuredJavaLanguageVersion)
                 }
             }
         }
@@ -634,4 +636,418 @@ tasks.named('buildPlugin') {
             delete(tempDir)
         }
     }
+}
+
+def isolatedAndroidStudioDir = layout.buildDirectory.dir('android-studio-isolated')
+
+tasks.register('prepareIsolatedAndroidStudioTestEnv') {
+    dependsOn('buildPlugin')
+
+    doLast {
+        def osName = System.getProperty('os.name').toLowerCase(Locale.ROOT)
+        def isMac = osName.contains('mac')
+        def isWindows = osName.contains('windows')
+        if (!isMac && !isWindows) {
+            throw new GradleException("Unsupported OS for isolated Android Studio test environment: ${System.getProperty('os.name')}")
+        }
+
+        def isolatedRoot = isolatedAndroidStudioDir.get().asFile
+        def configDir = new File(isolatedRoot, 'config')
+        def systemDir = new File(isolatedRoot, 'system')
+        def logDir = new File(isolatedRoot, 'log')
+        def pluginsDir = new File(isolatedRoot, 'plugins')
+        def pluginTargetDir = new File(pluginsDir, pluginName)
+        def launchScript = new File(isolatedRoot, 'launch-android-studio-isolated.sh')
+        def launchScriptWin = new File(isolatedRoot, 'launch-android-studio-isolated.cmd')
+        def propertiesFile = new File(isolatedRoot, 'idea.properties')
+        def vmOptionsFile = new File(isolatedRoot, 'studio.vmoptions')
+        def readmeFile = new File(isolatedRoot, 'README.md')
+        def wrapperAppDir = new File(isolatedRoot, 'Android Studio CCGUI Isolated.app')
+        def wrapperContentsDir = new File(wrapperAppDir, 'Contents')
+        def wrapperMacOsDir = new File(wrapperContentsDir, 'MacOS')
+        def wrapperInfoPlist = new File(wrapperContentsDir, 'Info.plist')
+        def wrapperExecutable = new File(wrapperMacOsDir, 'android-studio-ccgui-isolated')
+        def isolatedPathsSelector = 'AndroidStudio2025.3.3-CCGUI-Isolated'
+        def androidStudioMacApp = getLocalProperty('android.studio.mac.app', '/Applications/Android Studio.app')
+        def androidStudioWindowsDir = getLocalProperty('android.studio.windows.dir', 'C:\\Program Files\\Android\\Android Studio')
+        def androidStudioJbrMac = "${androidStudioMacApp}/Contents/jbr/Contents/Home"
+        def androidStudioJbrWindows = "${androidStudioWindowsDir}\\jbr"
+        def macSelectorHomePlaceholder = '$HOME/Library/Application Support/Google/$PATHS_SELECTOR'
+        def windowsSelectorHomePlaceholder = '%APPDATA%\\Google\\%PATHS_SELECTOR%'
+
+        [configDir, systemDir, logDir, pluginsDir].each { it.mkdirs() }
+        if (isMac) {
+            wrapperMacOsDir.mkdirs()
+        }
+
+        delete(pluginTargetDir)
+        def distributionZip = file("${layout.buildDirectory.get().asFile}/distributions/${pluginName}-${project.version}.zip")
+        if (!distributionZip.exists()) {
+            throw new GradleException("Distribution zip not found: ${distributionZip.absolutePath}")
+        }
+        copy {
+            from zipTree(distributionZip)
+            into pluginsDir
+        }
+
+        def extraIdeaProperties = ''
+        def sandboxPropertiesFile = file('sandbox-idea.properties')
+        if (sandboxPropertiesFile.exists()) {
+            extraIdeaProperties = sandboxPropertiesFile.getText('UTF-8').trim()
+        }
+
+        propertiesFile.setText("""idea.config.path=${configDir.absolutePath}
+idea.system.path=${systemDir.absolutePath}
+idea.plugins.path=${pluginsDir.absolutePath}
+idea.log.path=${logDir.absolutePath}
+idea.paths.selector=${isolatedPathsSelector}
+idea.auto.reload.plugins=false
+idea.dynamic.plugins.allowed=false
+idea.is.internal=true
+idea.plugin.in.sandbox.mode=true
+idea.plugins.load.timeout=60000
+${extraIdeaProperties}
+""".stripIndent(), 'UTF-8')
+
+        vmOptionsFile.setText("""-Xms512m
+-Xmx2048m
+-Didea.paths.selector=${isolatedPathsSelector}
+-Djb.vmOptionsFile=${vmOptionsFile.absolutePath}
+""".stripIndent(), 'UTF-8')
+
+        if (isMac) {
+            wrapperInfoPlist.setText("""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${wrapperExecutable.name}</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.github.claudecodegui.androidstudio.isolated</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Android Studio CCGUI Isolated</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${project.version}</string>
+    <key>CFBundleVersion</key>
+    <string>${project.version}</string>
+    <key>LSBackgroundOnly</key>
+    <false/>
+</dict>
+</plist>
+""".stripIndent(), 'UTF-8')
+
+            wrapperExecutable.setText("""#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+CONTENTS_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
+ISOLATED_ROOT="\$(cd "\$CONTENTS_DIR/../.." && pwd)"
+            STUDIO_PROPERTIES="\$ISOLATED_ROOT/idea.properties"
+STUDIO_VM_OPTIONS="\$ISOLATED_ROOT/studio.vmoptions"
+ANDROID_STUDIO_APP="${androidStudioMacApp}"
+PATHS_SELECTOR="AndroidStudio2025.3.3-CCGUI-Isolated"
+SELECTOR_HOME="${macSelectorHomePlaceholder}"
+STUDIO_JDK_FILE="\$SELECTOR_HOME/studio.jdk"
+DEFAULT_STUDIO_JDK="${androidStudioJbrMac}"
+PRODUCT_INFO_JSON="\$ANDROID_STUDIO_APP/Contents/Resources/product-info.json"
+MAIN_VMOPTIONS_FILE="\$ANDROID_STUDIO_APP/Contents/bin/studio.vmoptions"
+
+mkdir -p "\$SELECTOR_HOME"
+
+if [ ! -f "\$STUDIO_JDK_FILE" ]; then
+  AUTO_DETECTED_JCEF_JDK="\$(python3 - <<'PY'
+from pathlib import Path
+root = Path.home() / 'Library' / 'Java' / 'JetBrainsRuntime'
+candidates = sorted([p for p in root.glob('jbr_jcef-*') if p.is_dir()])
+print(candidates[-1] if candidates else '')
+PY
+)"
+  if [ -n "\$AUTO_DETECTED_JCEF_JDK" ]; then
+    printf '%s\\n' "\$AUTO_DETECTED_JCEF_JDK" > "\$STUDIO_JDK_FILE"
+  fi
+fi
+
+STUDIO_JDK="\$DEFAULT_STUDIO_JDK"
+if [ -f "\$STUDIO_JDK_FILE" ]; then
+  CUSTOM_STUDIO_JDK="\$(python3 - <<'PY' "\$STUDIO_JDK_FILE"
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).read_text(encoding='utf-8').strip())
+PY
+)"
+  if [ -n "\$CUSTOM_STUDIO_JDK" ]; then
+    STUDIO_JDK="\$CUSTOM_STUDIO_JDK"
+  fi
+fi
+
+if [ ! -x "\$STUDIO_JDK/bin/java" ] && [ -x "\$STUDIO_JDK/Contents/Home/bin/java" ]; then
+  STUDIO_JDK="\$STUDIO_JDK/Contents/Home"
+fi
+
+JAVA_BIN="\$STUDIO_JDK/bin/java"
+
+if [ ! -x "\$JAVA_BIN" ]; then
+  echo "Android Studio JBR not found: \$JAVA_BIN" >&2
+  exit 1
+fi
+
+if [ ! -f "\$PRODUCT_INFO_JSON" ]; then
+  echo "product-info.json not found: \$PRODUCT_INFO_JSON" >&2
+  exit 1
+fi
+
+if [ ! -f "\$MAIN_VMOPTIONS_FILE" ]; then
+  echo "Main vmoptions file not found: \$MAIN_VMOPTIONS_FILE" >&2
+  exit 1
+fi
+
+if [ ! -f "\$STUDIO_PROPERTIES" ]; then
+  echo "Isolated idea.properties not found: \$STUDIO_PROPERTIES" >&2
+  exit 1
+fi
+
+if [ ! -f "\$STUDIO_VM_OPTIONS" ]; then
+  echo "Isolated studio.vmoptions not found: \$STUDIO_VM_OPTIONS" >&2
+  exit 1
+fi
+
+export STUDIO_PROPERTIES
+export STUDIO_VM_OPTIONS
+export STUDIO_JDK
+
+MAIN_CLASS=""
+CLASSPATH=""
+JVM_ARGS=()
+while IFS= read -r line; do
+  case "\$line" in
+    MAIN_CLASS=*)
+      MAIN_CLASS="\${line#MAIN_CLASS=}"
+      ;;
+    CLASSPATH=*)
+      CLASSPATH="\${line#CLASSPATH=}"
+      ;;
+    JVM_ARG=*)
+      JVM_ARGS+=("\${line#JVM_ARG=}")
+      ;;
+  esac
+done <<EOF
+\$(python3 - <<'PY' "\$PRODUCT_INFO_JSON" "\$ANDROID_STUDIO_APP"
+import json
+import sys
+
+product_info_path = sys.argv[1]
+android_studio_app = sys.argv[2]
+app_package = android_studio_app
+contents_dir = f"{android_studio_app}/Contents"
+lib_dir = f"{contents_dir}/lib"
+modules_descriptor = f"{contents_dir}/modules/module-descriptors.dat"
+
+with open(product_info_path, 'r', encoding='utf-8') as fh:
+    product = json.load(fh)
+
+launch = product['launch'][0]
+classpath = ':'.join(f"{lib_dir}/{name}" for name in launch['bootClassPathJarNames'])
+
+print(f"MAIN_CLASS={launch['mainClass']}")
+print(f"CLASSPATH={classpath}")
+
+for argument in launch.get('additionalJvmArguments', []):
+    if argument.startswith('-Didea.paths.selector='):
+        continue
+    argument = argument.replace('\$APP_PACKAGE', app_package)
+    argument = argument.replace('\$IDE_HOME', contents_dir)
+    argument = argument.replace('\$IDE_LIB', lib_dir)
+    argument = argument.replace('\$MODULES_DESCRIPTORS', modules_descriptor)
+    print(f"JVM_ARG={argument}")
+PY
+)
+EOF
+
+if [ -z "\$MAIN_CLASS" ] || [ -z "\$CLASSPATH" ]; then
+  echo "Failed to parse Android Studio launch configuration from \$PRODUCT_INFO_JSON" >&2
+  exit 1
+fi
+
+MAIN_VM_ARGS=()
+while IFS= read -r line; do
+  if [ -n "\$line" ]; then
+    MAIN_VM_ARGS+=("\$line")
+  fi
+done < "\$MAIN_VMOPTIONS_FILE"
+
+ISOLATED_VM_ARGS=()
+while IFS= read -r line; do
+  if [ -n "\$line" ]; then
+    ISOLATED_VM_ARGS+=("\$line")
+  fi
+done < "\$STUDIO_VM_OPTIONS"
+
+exec "\$JAVA_BIN" \
+  "\${MAIN_VM_ARGS[@]}" \
+  "\${ISOLATED_VM_ARGS[@]}" \
+  "\${JVM_ARGS[@]}" \
+  -Dide.native.launcher=true \
+  -Didea.properties.file="\$STUDIO_PROPERTIES" \
+  -classpath "\$CLASSPATH" \
+  "\$MAIN_CLASS" \
+  "\$@"
+""".stripIndent(), 'UTF-8')
+            ant.chmod(file: wrapperExecutable, perm: '755')
+
+            launchScript.setText("""#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+WRAPPER_BIN="\$SCRIPT_DIR/Android Studio CCGUI Isolated.app/Contents/MacOS/android-studio-ccgui-isolated"
+LOG_FILE="\$SCRIPT_DIR/log/launcher.out"
+IDE_LOG_FILE="\$SCRIPT_DIR/log/idea.log"
+
+if [ ! -x "\$WRAPPER_BIN" ]; then
+  echo "Wrapper executable not found: \$WRAPPER_BIN" >&2
+  exit 1
+fi
+
+mkdir -p "\$SCRIPT_DIR/log"
+: > "\$LOG_FILE"
+"\$WRAPPER_BIN" "\$@" >> "\$LOG_FILE" 2>&1 &
+LAUNCH_PID=\$!
+
+for _ in {1..20}; do
+  if [ -f "\$IDE_LOG_FILE" ] || ! kill -0 "\$LAUNCH_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+if [ -f "\$IDE_LOG_FILE" ]; then
+  echo "Launched isolated Android Studio (pid \$LAUNCH_PID). IDE log: \$IDE_LOG_FILE"
+else
+  echo "Launcher process started (pid \$LAUNCH_PID). Startup log: \$LOG_FILE"
+fi
+""".stripIndent(), 'UTF-8')
+            ant.chmod(file: launchScript, perm: '755')
+        } else {
+            wrapperAppDir.deleteDir()
+
+            launchScript.setText("""#!/bin/bash
+echo "This isolated launcher is intended for macOS. Use launch-android-studio-isolated.cmd on Windows." >&2
+exit 1
+""".stripIndent(), 'UTF-8')
+        }
+
+        launchScriptWin.setText("""@echo off
+setlocal
+
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+set "ISOLATED_ROOT=%SCRIPT_DIR%"
+set "STUDIO_PROPERTIES=%ISOLATED_ROOT%\\idea.properties"
+set "STUDIO_VM_OPTIONS=%ISOLATED_ROOT%\\studio.vmoptions"
+set "PATHS_SELECTOR=${isolatedPathsSelector}"
+set "SELECTOR_HOME=${windowsSelectorHomePlaceholder}"
+set "STUDIO_JDK_FILE=%SELECTOR_HOME%\\studio.jdk"
+set "DEFAULT_STUDIO_JDK=${androidStudioJbrWindows}"
+set "ANDROID_STUDIO_DIR=${androidStudioWindowsDir}"
+set "LAUNCHER_OUT=%ISOLATED_ROOT%\\log\\launcher.out"
+
+if not exist "%SELECTOR_HOME%" mkdir "%SELECTOR_HOME%"
+if not exist "%ISOLATED_ROOT%\\log" mkdir "%ISOLATED_ROOT%\\log"
+
+set "STUDIO_JDK=%DEFAULT_STUDIO_JDK%"
+if exist "%STUDIO_JDK_FILE%" set /p STUDIO_JDK=<"%STUDIO_JDK_FILE%"
+if not exist "%STUDIO_JDK%\\bin\\java.exe" (
+  echo Android Studio JBR not found: %STUDIO_JDK%\\bin\\java.exe 1>&2
+  exit /b 1
+)
+
+if not exist "%STUDIO_PROPERTIES%" (
+  echo Isolated idea.properties not found: %STUDIO_PROPERTIES% 1>&2
+  exit /b 1
+)
+
+if not exist "%STUDIO_VM_OPTIONS%" (
+  echo Isolated studio.vmoptions not found: %STUDIO_VM_OPTIONS% 1>&2
+  exit /b 1
+)
+
+set "STUDIO_PROPERTIES=%STUDIO_PROPERTIES%"
+set "STUDIO_VM_OPTIONS=%STUDIO_VM_OPTIONS%"
+set "STUDIO_JDK=%STUDIO_JDK%"
+start "" "%ANDROID_STUDIO_DIR%\\bin\\studio64.exe" > "%LAUNCHER_OUT%" 2>&1
+echo Launched isolated Android Studio using %ANDROID_STUDIO_DIR%\\bin\\studio64.exe
+""".stripIndent().replace('\n', '\r\n'), 'UTF-8')
+
+        readmeFile.setText("""# Isolated Android Studio Test Environment
+
+This directory contains an isolated Android Studio sandbox for testing the local ${pluginName} plugin build.
+
+## Layout
+
+- `config/`: isolated IDE config
+- `system/`: caches and sandbox system data
+- `log/`: IDE logs
+- `plugins/${pluginName}/`: plugin files unpacked from the current distribution ZIP built by this project
+- `idea.properties`: custom IDE path overrides
+- `studio.vmoptions`: isolated VM options, avoiding reuse of the default user `studio.vmoptions`
+- `launch-android-studio-isolated.sh`: macOS launcher script
+- `launch-android-studio-isolated.cmd`: Windows launcher script
+${isMac ? '- `Android Studio CCGUI Isolated.app`: macOS wrapper app containing the isolated launcher' : '- `Android Studio CCGUI Isolated.app`: only generated on macOS'}
+
+## Usage
+
+macOS:
+
+```bash
+./build/android-studio-isolated/launch-android-studio-isolated.sh
+```
+
+Windows:
+
+```bat
+build\\android-studio-isolated\\launch-android-studio-isolated.cmd
+```
+
+## Runtime Selection
+
+On macOS, the wrapper directly invokes the Android Studio JBR instead of the native `studio` launcher, avoiding the default `AndroidStudio2025.3.3` path selector being injected back into the process.
+The macOS wrapper prefers the selector-specific `studio.jdk` under `${macSelectorHomePlaceholder}/studio.jdk`. If that file is missing, it auto-initializes it from the latest installed `~/Library/Java/JetBrainsRuntime/jbr_jcef-*` and falls back to `${androidStudioJbrMac}`.
+On Windows, the launcher relies on `studio64.exe` plus isolated selector/config paths and prefers the selector-specific `studio.jdk` under `${windowsSelectorHomePlaceholder}\\studio.jdk`, falling back to `${androidStudioJbrWindows}`.
+
+## Local Overrides
+
+You can override the Android Studio installation path in `local.properties` before running `./gradlew prepareIsolatedAndroidStudioTestEnv`:
+
+```properties
+android.studio.mac.app=/Applications/Android Studio.app
+android.studio.windows.dir=C:\\Program Files\\Android\\Android Studio
+```
+
+Only set the property that matches the machine you are generating on.
+
+## Verification Status
+
+- macOS launcher generation and selector-specific `studio.jdk` reuse have been verified on this project.
+- Windows launcher generation is implemented, but runtime behavior still needs to be verified on an actual Windows machine before treating it as production-proven.
+
+## Notes
+
+The config/system/plugins/log/vmoptions are isolated under `build/android-studio-isolated/`.
+The plugin loaded by this environment comes from the current `build/distributions/${pluginName}-${project.version}.zip`, so each rerun uses the latest build output from the current project workspace.
+""".stripIndent(), 'UTF-8')
+
+        println "Prepared isolated Android Studio test environment at: ${isolatedRoot.absolutePath}"
+        println "Launch script: ${launchScript.absolutePath}"
+    }
+}
+
+tasks.register('launchIsolatedAndroidStudio', Exec) {
+    dependsOn('prepareIsolatedAndroidStudioTestEnv')
+    workingDir isolatedAndroidStudioDir.get().asFile
+    commandLine './launch-android-studio-isolated.sh'
 }

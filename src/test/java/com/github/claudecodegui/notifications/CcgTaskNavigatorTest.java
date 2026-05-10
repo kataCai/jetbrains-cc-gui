@@ -6,10 +6,22 @@ import org.junit.Test;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 
 public class CcgTaskNavigatorTest {
+
+    @Test
+    public void shouldConstructSafelyOnNonWindowsPlatforms() {
+        if (com.github.claudecodegui.util.PlatformUtils.isWindows()) {
+            return;
+        }
+
+        CcgTaskNavigator navigator = new CcgTaskNavigator();
+
+        assertNotNull(navigator);
+    }
 
     @Test
     public void shouldPreferDetachedWindowBeforeToolWindowSelection() {

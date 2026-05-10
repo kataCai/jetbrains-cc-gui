@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 
@@ -19,6 +20,17 @@ import static org.junit.Assert.assertSame;
  * 验证系统通知提醒器的降级、复用与点击回调行为。
  */
 public class SystemReminderNotifierTest {
+
+    @Test
+    public void shouldConstructSafelyOnNonWindowsPlatforms() {
+        if (com.github.claudecodegui.util.PlatformUtils.isWindows()) {
+            return;
+        }
+
+        SystemReminderNotifier notifier = new SystemReminderNotifier();
+
+        assertNotNull(notifier);
+    }
 
     @Test
     public void shouldSkipWhenEnvironmentDoesNotSupportSystemTray() {

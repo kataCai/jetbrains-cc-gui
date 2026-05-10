@@ -76,3 +76,4 @@ logs/*.log
 .workflow
 .worktrees/
 data/gotify.db
+foam-daily-notes

@@ -8,9 +8,21 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public class WindowsForegroundWindowActivatorTest {
+
+    @Test
+    public void shouldConstructSafelyOnNonWindowsPlatforms() {
+        if (com.github.claudecodegui.util.PlatformUtils.isWindows()) {
+            return;
+        }
+
+        WindowsForegroundWindowActivator activator = new WindowsForegroundWindowActivator();
+
+        assertNotNull(activator);
+    }
 
     @Test
     public void shouldNotRestoreVisibleWindowWhenActivatingForeground() {

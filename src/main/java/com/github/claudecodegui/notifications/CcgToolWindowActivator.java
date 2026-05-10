@@ -77,7 +77,7 @@ public class CcgToolWindowActivator {
             CcgToolWindowActivator::findProjectWindow,
             CcgToolWindowActivator::findToolWindow,
             PlatformUtils::isWindows,
-            new WindowsForegroundWindowActivator()::tryActivate
+            CcgToolWindowActivator::tryActivateOnWindows
         );
     }
 
@@ -100,7 +100,7 @@ public class CcgToolWindowActivator {
         this.platformDetector = platformDetector != null ? platformDetector : PlatformUtils::isWindows;
         this.nativeProjectWindowActivator = nativeProjectWindowActivator != null
             ? nativeProjectWindowActivator
-            : new WindowsForegroundWindowActivator()::tryActivate;
+            : CcgToolWindowActivator::tryActivateOnWindows;
     }
 
     /**
@@ -191,6 +191,10 @@ public class CcgToolWindowActivator {
             return null;
         }
         return new IdeToolWindowHandle(toolWindow);
+    }
+
+    private static boolean tryActivateOnWindows(Project project, boolean restoreWindow) {
+        return new WindowsForegroundWindowActivator().tryActivate(project, restoreWindow);
     }
 
     private static final class IdeProjectWindowHandle implements ProjectWindowHandle {

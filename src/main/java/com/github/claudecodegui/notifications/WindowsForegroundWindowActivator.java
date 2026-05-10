@@ -3,6 +3,7 @@ package com.github.claudecodegui.notifications;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.WindowManager;
+import com.github.claudecodegui.util.PlatformUtils;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.Kernel32;
@@ -46,14 +47,14 @@ public class WindowsForegroundWindowActivator {
     }
 
     public WindowsForegroundWindowActivator() {
-        this(WindowsForegroundWindowActivator::resolveWindowHandle, new JnaWin32Facade());
+        this(WindowsForegroundWindowActivator::resolveWindowHandle, createDefaultWin32Facade());
     }
 
     WindowsForegroundWindowActivator(WindowHandleProvider windowHandleProvider, Win32Facade win32Facade) {
         this.windowHandleProvider = windowHandleProvider != null
             ? windowHandleProvider
             : WindowsForegroundWindowActivator::resolveWindowHandle;
-        this.win32Facade = win32Facade != null ? win32Facade : new JnaWin32Facade();
+        this.win32Facade = win32Facade != null ? win32Facade : createDefaultWin32Facade();
     }
 
     public boolean tryActivate(Project project) {
@@ -125,6 +126,54 @@ public class WindowsForegroundWindowActivator {
         }
         Pointer pointer = Native.getWindowPointer(frame);
         return pointer != null ? Pointer.nativeValue(pointer) : 0L;
+    }
+
+    private static Win32Facade createDefaultWin32Facade() {
+        return PlatformUtils.isWindows() ? new JnaWin32Facade() : NoOpWin32Facade.INSTANCE;
+    }
+
+    private enum NoOpWin32Facade implements Win32Facade {
+        INSTANCE;
+
+        @Override
+        public boolean showWindow(long hwnd, int command) {
+            return false;
+        }
+
+        @Override
+        public boolean bringWindowToTop(long hwnd) {
+            return false;
+        }
+
+        @Override
+        public boolean setForegroundWindow(long hwnd) {
+            return false;
+        }
+
+        @Override
+        public long setFocus(long hwnd) {
+            return 0L;
+        }
+
+        @Override
+        public long getForegroundWindow() {
+            return 0L;
+        }
+
+        @Override
+        public int getCurrentThreadId() {
+            return 0;
+        }
+
+        @Override
+        public int getWindowThreadProcessId(long hwnd) {
+            return 0;
+        }
+
+        @Override
+        public boolean attachThreadInput(int sourceThreadId, int targetThreadId, boolean attach) {
+            return false;
+        }
     }
 
     private static final class JnaWin32Facade implements Win32Facade {

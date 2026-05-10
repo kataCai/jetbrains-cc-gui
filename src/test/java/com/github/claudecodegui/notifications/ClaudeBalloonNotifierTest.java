@@ -17,6 +17,17 @@ import static org.junit.Assert.assertSame;
 public class ClaudeBalloonNotifierTest {
 
     @Test
+    public void shouldConstructSafelyOnNonWindowsPlatforms() {
+        if (com.github.claudecodegui.util.PlatformUtils.isWindows()) {
+            return;
+        }
+
+        ClaudeBalloonNotifier notifier = new ClaudeBalloonNotifier();
+
+        assertNotNull(notifier);
+    }
+
+    @Test
     public void shouldAddOpenTaskActionWhenReminderHasNavigationContext() {
         RecordingNotificationGateway gateway = new RecordingNotificationGateway();
         RecordingTaskNavigator navigator = new RecordingTaskNavigator();

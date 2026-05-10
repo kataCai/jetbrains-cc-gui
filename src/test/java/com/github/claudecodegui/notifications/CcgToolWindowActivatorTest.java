@@ -9,8 +9,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 
 public class CcgToolWindowActivatorTest {
+
+    @Test
+    public void shouldConstructSafelyOnNonWindowsPlatforms() {
+        if (com.github.claudecodegui.util.PlatformUtils.isWindows()) {
+            return;
+        }
+
+        CcgToolWindowActivator activator = new CcgToolWindowActivator();
+
+        assertNotNull(activator);
+    }
 
     @Test
     public void shouldRestoreMinimizedProjectWindowBeforeShowingToolWindow() {
