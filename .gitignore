@@ -76,6 +76,9 @@ openspec/
 
 # 自定义沙箱目录（如果启用）
 .sandbox/
+.pluginVerifier/
+/idea-sandbox/
+/sandbox/
 logs/*.log
 .codex-*.log
 .intellijPlatform/
