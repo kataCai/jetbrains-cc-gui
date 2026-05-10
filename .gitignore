@@ -52,6 +52,7 @@ bin/
 node_modules/
 **/node_modules/
 webview/dist/
+*.zip
 
 src/main/resources/html/*
 
