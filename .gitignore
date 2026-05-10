@@ -52,7 +52,14 @@ bin/
 node_modules/
 **/node_modules/
 webview/dist/
+
+# Keep locally packaged release archives out of Git history.
 *.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
 
 src/main/resources/html/*
 
