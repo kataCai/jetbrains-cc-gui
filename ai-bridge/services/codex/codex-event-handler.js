@@ -112,6 +112,7 @@ export function createInitialEventState(emitMessage) {
     commandApprovalAbortRequested: false,
     runtimePolicyLogged: false,
     suppressNoResponseFallback: false,
+    messageEndObserved: false,
     currentThreadId: null,
     finalResponse: '',
     assistantText: '',

@@ -69,6 +69,10 @@ interface BasicConfigSectionProps {
   onTaskReminderOnlyWhenIdeUnfocusedChange?: (channel: TaskReminderChannel, enabled: boolean) => void;
   onTaskReminderSelectedSoundChange?: (soundId: string) => void;
   onTaskReminderCustomSoundPathChange?: (path: string) => void;
+  onTaskRecoveryPolicyFieldChange?: (
+    field: 'enabled' | 'recoverCompletedOnParseNoise' | 'retryTransientErrors' | 'maxAttempts' | 'initialDelayMs',
+    value: boolean | number,
+  ) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onTestPopup?: () => void;
@@ -136,6 +140,7 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onTaskReminderOnlyWhenIdeUnfocusedChange={props.onTaskReminderOnlyWhenIdeUnfocusedChange}
           onTaskReminderSelectedSoundChange={props.onTaskReminderSelectedSoundChange}
           onTaskReminderCustomSoundPathChange={props.onTaskReminderCustomSoundPathChange}
+          onTaskRecoveryPolicyFieldChange={props.onTaskRecoveryPolicyFieldChange}
           onSaveCustomSoundPath={props.onSaveCustomSoundPath}
           onTestSound={props.onTestSound}
           onTestPopup={props.onTestPopup}

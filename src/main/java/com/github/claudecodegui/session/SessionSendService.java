@@ -202,7 +202,27 @@ public class SessionSendService {
                 agentPrompt,
                 state.getReasoningEffort(),
                 handler
-        ).thenApply(result -> null);
+        ).thenCompose(result -> {
+            // Codex 旧链路里 callback.onError 不一定会让 future 异常结束，
+            // 因此这里必须显式根据 result.success 再做一次兜底判定，
+            // 避免上层把“实际失败/取消”误当成正常完成。
+            if (result != null && result.success) {
+                return CompletableFuture.completedFuture(null);
+            }
+
+            String errorMessage = (result != null && result.error != null && !result.error.trim().isEmpty())
+                ? result.error
+                : "codex_send_failed";
+            if (result != null && result.recoveryAction != null && !result.recoveryAction.trim().isEmpty()) {
+                errorMessage = errorMessage
+                    + " | recoveryAction=" + result.recoveryAction
+                    + " | recoveryCategory=" + (result.recoveryCategory != null ? result.recoveryCategory : "")
+                    + " | recovered=" + result.recovered;
+            }
+            CompletableFuture<Void> failedFuture = new CompletableFuture<>();
+            failedFuture.completeExceptionally(new RuntimeException(errorMessage));
+            return failedFuture;
+        });
     }
 
     private CompletableFuture<Void> sendToClaude(

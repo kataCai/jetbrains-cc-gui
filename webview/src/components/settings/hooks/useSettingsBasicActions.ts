@@ -77,6 +77,10 @@ export interface UseSettingsBasicActionsReturn {
   ) => void;
   handleTaskReminderSelectedSoundChange: (soundId: string) => void;
   handleTaskReminderCustomSoundPathChange: (path: string) => void;
+  handleTaskRecoveryPolicyFieldChange: (
+    field: 'enabled' | 'recoverCompletedOnParseNoise' | 'retryTransientErrors' | 'maxAttempts' | 'initialDelayMs',
+    value: boolean | number,
+  ) => void;
   handleSaveCustomSoundPath: () => void;
   handleTestSound: () => void;
   handleTestPopup: () => void;
@@ -348,6 +352,19 @@ export function useSettingsBasicActions({
     }));
   }, []);
 
+  const handleTaskRecoveryPolicyFieldChange = useCallback((
+    field: 'enabled' | 'recoverCompletedOnParseNoise' | 'retryTransientErrors' | 'maxAttempts' | 'initialDelayMs',
+    value: boolean | number,
+  ) => {
+    updateAndPersistTaskReminder((prev) => ({
+      ...prev,
+      recoveryPolicy: {
+        ...prev.recoveryPolicy,
+        [field]: value,
+      },
+    }));
+  }, [updateAndPersistTaskReminder]);
+
   const handleSaveCustomSoundPath = useCallback(() => {
     // 自定义路径走显式保存，和 browse / test 的行为拆开，
     // 这样用户可以先编辑路径，再决定是否真正写入配置。
@@ -444,6 +461,7 @@ export function useSettingsBasicActions({
     handleTaskReminderOnlyWhenIdeUnfocusedChange,
     handleTaskReminderSelectedSoundChange,
     handleTaskReminderCustomSoundPathChange,
+    handleTaskRecoveryPolicyFieldChange,
     handleSaveCustomSoundPath,
     handleTestSound,
     handleTestPopup,

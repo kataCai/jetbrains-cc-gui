@@ -23,7 +23,8 @@ export async function handleCodexCommand(command, args, stdinData) {
           baseUrl,
           apiKey,
           reasoningEffort,
-          attachments  // Image attachments (local_image format)
+          attachments,  // Image attachments (local_image format)
+          recoveryConfig
         } = stdinData;
         await codexSendMessage(
           message,
@@ -34,7 +35,8 @@ export async function handleCodexCommand(command, args, stdinData) {
           baseUrl || '',
           apiKey || '',
           reasoningEffort || 'medium',
-          attachments || []  // Pass attachments to message service
+          attachments || [],  // Pass attachments to message service
+          recoveryConfig || {}
         );
       } else {
         await codexSendMessage(args[0], args[1], args[2], args[3], args[4]);

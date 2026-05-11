@@ -14,6 +14,9 @@ public class SDKResult {
     public List<Object> messages;
     public String rawOutput;
     public String finalResult;
+    public String recoveryCategory;
+    public String recoveryAction;
+    public boolean recovered;
 
     public SDKResult() {
         this.messages = new ArrayList<>();

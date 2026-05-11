@@ -140,6 +140,15 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 if (obj.has("error")) {
                     errorMessage = obj.get("error").getAsString();
                 }
+                if (obj.has("details") && obj.get("details").isJsonObject()) {
+                    JsonObject details = obj.getAsJsonObject("details");
+                    if (details.has("recoveryCategory") && !details.get("recoveryCategory").isJsonNull()) {
+                        result.recoveryCategory = details.get("recoveryCategory").getAsString();
+                    }
+                    if (details.has("recoveryAction") && !details.get("recoveryAction").isJsonNull()) {
+                        result.recoveryAction = details.get("recoveryAction").getAsString();
+                    }
+                }
             } catch (Exception ignored) {
             }
             hadSendError[0] = true;
@@ -309,6 +318,18 @@ public class CodexSDKBridge extends BaseSDKBridge {
                     LOG.info("[Codex] CLI Login mode: skipping apiKey/baseUrl, using native OAuth tokens");
                 }
 
+                // 透传任务恢复策略配置，供 Node 侧统一决定“转成功/自动重试/最终失败”。
+                try {
+                    JsonObject recoveryConfig = new CodemossSettingsService()
+                            .getTaskReminderConfig()
+                            .getAsJsonObject("recoveryPolicy");
+                    if (recoveryConfig != null) {
+                        stdinInput.add("recoveryConfig", recoveryConfig);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("[Codex] Failed to load recovery policy config: " + e.getMessage());
+                }
+
                 // Process attachments for Codex (images need to be saved as temp files)
                 // Codex SDK requires local file paths, not base64 data
                 JsonArray attachmentsArray = buildCodexAttachments(attachments, tempImageFiles);
@@ -418,6 +439,21 @@ public class CodexSDKBridge extends BaseSDKBridge {
 
                         String line;
                         while ((line = reader.readLine()) != null) {
+                            if (line.startsWith("{\"success\":true")) {
+                                try {
+                                    JsonObject completionObj = gson.fromJson(line, JsonObject.class);
+                                    if (completionObj.has("recovered") && !completionObj.get("recovered").isJsonNull()) {
+                                        result.recovered = completionObj.get("recovered").getAsBoolean();
+                                    }
+                                    if (completionObj.has("recoveryCategory") && !completionObj.get("recoveryCategory").isJsonNull()) {
+                                        result.recoveryCategory = completionObj.get("recoveryCategory").getAsString();
+                                    }
+                                    if (completionObj.has("result") && !completionObj.get("result").isJsonNull()) {
+                                        result.finalResult = completionObj.get("result").getAsString();
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            }
                             // Capture Node.js error logs
                             if (line.startsWith("[UNCAUGHT_ERROR]")
                                     || line.startsWith("[UNHANDLED_REJECTION]")

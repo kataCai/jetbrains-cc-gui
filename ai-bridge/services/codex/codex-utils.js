@@ -163,9 +163,10 @@ export const SESSION_CONTEXT_SCAN_MAX_LINES = 1200;
  * Build error response with helpful diagnostics
  *
  * @param {Error} error - The error object
+ * @param {object} metadata - 附加恢复元信息
  * @returns {object} Structured error payload
  */
-export function buildErrorPayload(error) {
+export function buildErrorPayload(error, metadata = {}) {
   const rawError = error?.message || String(error);
   const errorName = error?.name || 'Error';
 
@@ -222,7 +223,11 @@ export function buildErrorPayload(error) {
       rawError,
       errorName,
       isAuthError,
-      isNetworkError
-    }
+      isNetworkError,
+      recoveryCategory: metadata.recoveryCategory || null,
+      recoveryAction: metadata.recoveryAction || null,
+      evidence: metadata.evidence || null,
+      provider: metadata.provider || 'codex',
+    },
   };
 }

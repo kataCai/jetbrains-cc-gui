@@ -1122,7 +1122,36 @@ public class CodemossSettingsService {
         mergeChannel(source, normalized, "balloon", false);
         mergeChannel(source, normalized, "sound", true);
         mergeChannel(source, normalized, "system", false);
+        mergeRecoveryPolicy(source, normalized);
         return normalized;
+    }
+
+    /**
+     * 合并任务恢复策略配置。
+     * 首期只暴露恢复成功与瞬时错误重试两个核心能力，避免设置项过度膨胀。
+     */
+    private void mergeRecoveryPolicy(JsonObject source, JsonObject normalized) {
+        if (!source.has("recoveryPolicy") || !source.get("recoveryPolicy").isJsonObject()) {
+            return;
+        }
+        JsonObject sourcePolicy = source.getAsJsonObject("recoveryPolicy");
+        JsonObject targetPolicy = normalized.getAsJsonObject("recoveryPolicy");
+
+        if (sourcePolicy.has("enabled") && !sourcePolicy.get("enabled").isJsonNull()) {
+            targetPolicy.addProperty("enabled", sourcePolicy.get("enabled").getAsBoolean());
+        }
+        if (sourcePolicy.has("recoverCompletedOnParseNoise") && !sourcePolicy.get("recoverCompletedOnParseNoise").isJsonNull()) {
+            targetPolicy.addProperty("recoverCompletedOnParseNoise", sourcePolicy.get("recoverCompletedOnParseNoise").getAsBoolean());
+        }
+        if (sourcePolicy.has("retryTransientErrors") && !sourcePolicy.get("retryTransientErrors").isJsonNull()) {
+            targetPolicy.addProperty("retryTransientErrors", sourcePolicy.get("retryTransientErrors").getAsBoolean());
+        }
+        if (sourcePolicy.has("maxAttempts") && !sourcePolicy.get("maxAttempts").isJsonNull()) {
+            targetPolicy.addProperty("maxAttempts", sourcePolicy.get("maxAttempts").getAsInt());
+        }
+        if (sourcePolicy.has("initialDelayMs") && !sourcePolicy.get("initialDelayMs").isJsonNull()) {
+            targetPolicy.addProperty("initialDelayMs", sourcePolicy.get("initialDelayMs").getAsInt());
+        }
     }
 
     private void mergeChannel(
@@ -1180,7 +1209,22 @@ public class CodemossSettingsService {
         sound.addProperty("customSoundPath", "");
         taskReminder.add("sound", sound);
         taskReminder.add("system", createDefaultReminderChannel(false, true, "waiting_confirm", "final_error", "completed"));
+        taskReminder.add("recoveryPolicy", createDefaultRecoveryPolicyConfig());
         return taskReminder;
+    }
+
+    /**
+     * 创建默认恢复策略配置。
+     * 这份默认值与 Codex Node 侧的首期恢复策略保持一致。
+     */
+    private JsonObject createDefaultRecoveryPolicyConfig() {
+        JsonObject policy = new JsonObject();
+        policy.addProperty("enabled", true);
+        policy.addProperty("recoverCompletedOnParseNoise", true);
+        policy.addProperty("retryTransientErrors", true);
+        policy.addProperty("maxAttempts", 2);
+        policy.addProperty("initialDelayMs", 1200);
+        return policy;
     }
 
     private JsonObject createDefaultReminderChannel(boolean enabled, boolean onlyWhenIdeUnfocused, String... states) {

@@ -40,6 +40,18 @@ export interface TaskReminderSoundConfig extends TaskReminderChannelConfig {
 }
 
 /**
+ * 任务恢复策略配置。
+ * 首期只开放最有价值的恢复与重试参数，避免设置页过度复杂。
+ */
+export interface TaskRecoveryPolicyConfig {
+  enabled: boolean;
+  recoverCompletedOnParseNoise: boolean;
+  retryTransientErrors: boolean;
+  maxAttempts: number;
+  initialDelayMs: number;
+}
+
+/**
  * 前端侧使用的 canonical task reminder 配置结构。
  */
 export interface TaskReminderConfig {
@@ -47,6 +59,7 @@ export interface TaskReminderConfig {
   balloon: TaskReminderChannelConfig;
   sound: TaskReminderSoundConfig;
   system: TaskReminderChannelConfig;
+  recoveryPolicy: TaskRecoveryPolicyConfig;
 }
 
 /**
@@ -95,6 +108,13 @@ export const DEFAULT_TASK_REMINDER_CONFIG: TaskReminderConfig = {
     states: DEFAULT_SYSTEM_STATES,
     onlyWhenIdeUnfocused: true,
   },
+  recoveryPolicy: {
+    enabled: true,
+    recoverCompletedOnParseNoise: true,
+    retryTransientErrors: true,
+    maxAttempts: 2,
+    initialDelayMs: 1200,
+  },
 };
 
 /**
@@ -139,11 +159,15 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
   const balloonRaw = (source.balloon && typeof source.balloon === 'object') ? source.balloon as Record<string, unknown> : {};
   const soundRaw = (source.sound && typeof source.sound === 'object') ? source.sound as Record<string, unknown> : {};
   const systemRaw = (source.system && typeof source.system === 'object') ? source.system as Record<string, unknown> : {};
+  const recoveryPolicyRaw = (source.recoveryPolicy && typeof source.recoveryPolicy === 'object')
+    ? source.recoveryPolicy as Record<string, unknown>
+    : {};
 
   const popupDefault = DEFAULT_TASK_REMINDER_CONFIG.popup;
   const balloonDefault = DEFAULT_TASK_REMINDER_CONFIG.balloon;
   const soundDefault = DEFAULT_TASK_REMINDER_CONFIG.sound;
   const systemDefault = DEFAULT_TASK_REMINDER_CONFIG.system;
+  const recoveryPolicyDefault = DEFAULT_TASK_REMINDER_CONFIG.recoveryPolicy;
 
   return {
     popup: {
@@ -183,6 +207,23 @@ export const normalizeTaskReminderConfig = (raw: unknown): TaskReminderConfig =>
         systemRaw.onlyWhenIdeUnfocused,
         systemDefault.onlyWhenIdeUnfocused,
       ),
+    },
+    recoveryPolicy: {
+      enabled: toBoolean(recoveryPolicyRaw.enabled, recoveryPolicyDefault.enabled),
+      recoverCompletedOnParseNoise: toBoolean(
+        recoveryPolicyRaw.recoverCompletedOnParseNoise,
+        recoveryPolicyDefault.recoverCompletedOnParseNoise,
+      ),
+      retryTransientErrors: toBoolean(
+        recoveryPolicyRaw.retryTransientErrors,
+        recoveryPolicyDefault.retryTransientErrors,
+      ),
+      maxAttempts: typeof recoveryPolicyRaw.maxAttempts === 'number'
+        ? recoveryPolicyRaw.maxAttempts
+        : recoveryPolicyDefault.maxAttempts,
+      initialDelayMs: typeof recoveryPolicyRaw.initialDelayMs === 'number'
+        ? recoveryPolicyRaw.initialDelayMs
+        : recoveryPolicyDefault.initialDelayMs,
     },
   };
 };

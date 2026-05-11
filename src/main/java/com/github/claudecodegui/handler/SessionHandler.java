@@ -491,8 +491,18 @@ public class SessionHandler extends BaseMessageHandler {
 
     private void notifySendFailed(Throwable throwable) {
         if (taskStateService != null) {
-            // 失败原因尽量沿用真实异常，方便前端弹窗、状态栏和日志看到同一份上下文。
-            taskStateService.onSendFailed(getSessionId(), throwable != null ? throwable.getMessage() : "send_failed");
+            // Codex 恢复链路会把“可取消”“可恢复”的场景编码进异常文本。
+            // 这里先做最小解析，把状态机从“一律最终失败”升级为可区分取消/恢复/失败。
+            String reason = throwable != null ? throwable.getMessage() : "send_failed";
+            if (reason != null && reason.contains("recoveryAction=mark_cancelled")) {
+                taskStateService.onCancelled(getSessionId(), reason);
+            } else if (reason != null && reason.contains("recovered=true")) {
+                taskStateService.onRecovered(getSessionId(), reason);
+                taskStateService.onSendCompleted(getSessionId());
+            } else {
+                // 失败原因尽量沿用真实异常，方便前端弹窗、状态栏和日志看到同一份上下文。
+                taskStateService.onSendFailed(getSessionId(), reason);
+            }
             dispatchTaskReminder(false);
             publishRemoteTaskEvent(null);
         }

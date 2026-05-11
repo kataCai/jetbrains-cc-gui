@@ -107,6 +107,10 @@ export interface BehaviorTabProps {
   ) => void;
   onTaskReminderSelectedSoundChange?: (soundId: string) => void;
   onTaskReminderCustomSoundPathChange?: (path: string) => void;
+  onTaskRecoveryPolicyFieldChange?: (
+    field: 'enabled' | 'recoverCompletedOnParseNoise' | 'retryTransientErrors' | 'maxAttempts' | 'initialDelayMs',
+    value: boolean | number,
+  ) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onTestPopup?: () => void;
@@ -133,6 +137,7 @@ const BehaviorTab = ({
   onTaskReminderOnlyWhenIdeUnfocusedChange = () => {},
   onTaskReminderSelectedSoundChange = () => {},
   onTaskReminderCustomSoundPathChange = () => {},
+  onTaskRecoveryPolicyFieldChange = () => {},
   onSaveCustomSoundPath = () => {},
   onTestSound = () => {},
   onTestPopup = () => {},
@@ -537,6 +542,68 @@ const BehaviorTab = ({
             />
             <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskReminder.onlyWhenIdeUnfocused', 'Only when IDE unfocused')}</span>
           </label>
+        </div>
+
+        <div className={styles.customSoundSection}>
+          <div className={styles.fieldHeader}>
+            <span className="codicon codicon-debug-restart" />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskRecovery.label', 'Task Recovery / 任务恢复')}</span>
+          </div>
+          <label style={{ display: 'block', marginBottom: '8px' }}>
+            <input
+              aria-label="Recovery policy enabled"
+              type="checkbox"
+              checked={taskReminderConfig.recoveryPolicy.enabled}
+              onChange={(event) => onTaskRecoveryPolicyFieldChange('enabled', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>{t('settings.basic.taskRecovery.enabled', 'Enabled')}</span>
+          </label>
+          <label style={{ display: 'block', marginBottom: '8px' }}>
+            <input
+              aria-label="Recover parse noise as completed"
+              type="checkbox"
+              checked={taskReminderConfig.recoveryPolicy.recoverCompletedOnParseNoise}
+              onChange={(event) => onTaskRecoveryPolicyFieldChange('recoverCompletedOnParseNoise', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>
+              {t('settings.basic.taskRecovery.promoteSuccess', 'Treat post-success parse noise as completed')}
+            </span>
+          </label>
+          <label style={{ display: 'block', marginBottom: '12px' }}>
+            <input
+              aria-label="Retry transient errors"
+              type="checkbox"
+              checked={taskReminderConfig.recoveryPolicy.retryTransientErrors}
+              onChange={(event) => onTaskRecoveryPolicyFieldChange('retryTransientErrors', event.target.checked)}
+            />
+            <span style={{ marginLeft: '6px' }}>
+              {t('settings.basic.taskRecovery.retryTransient', 'Auto retry transient network/provider errors')}
+            </span>
+          </label>
+          <div className={styles.nodePathInputWrapper} style={{ marginBottom: '8px' }}>
+            <input
+              type="number"
+              min={1}
+              max={5}
+              className={styles.nodePathInput}
+              aria-label="Max retry attempts"
+              value={taskReminderConfig.recoveryPolicy.maxAttempts}
+              onChange={(event) => onTaskRecoveryPolicyFieldChange('maxAttempts', Number(event.target.value || 1))}
+            />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskRecovery.maxAttempts', 'Max retry attempts')}</span>
+          </div>
+          <div className={styles.nodePathInputWrapper}>
+            <input
+              type="number"
+              min={0}
+              step={100}
+              className={styles.nodePathInput}
+              aria-label="Initial retry delay milliseconds"
+              value={taskReminderConfig.recoveryPolicy.initialDelayMs}
+              onChange={(event) => onTaskRecoveryPolicyFieldChange('initialDelayMs', Number(event.target.value || 0))}
+            />
+            <span className={styles.fieldLabel}>{t('settings.basic.taskRecovery.initialDelayMs', 'Initial retry delay (ms)')}</span>
+          </div>
         </div>
       </div>
     </div>

@@ -65,4 +65,22 @@ describe('taskReminder config normalization', () => {
 
     expect(normalized.popup.states).toEqual(['waiting_confirm', 'final_error']);
   });
+
+  it('preserves recovery policy overrides and backfills defaults', () => {
+    const normalized = normalizeTaskReminderConfig({
+      recoveryPolicy: {
+        enabled: false,
+        retryTransientErrors: false,
+        maxAttempts: 4,
+      },
+    });
+
+    expect(normalized.recoveryPolicy).toEqual({
+      enabled: false,
+      recoverCompletedOnParseNoise: true,
+      retryTransientErrors: false,
+      maxAttempts: 4,
+      initialDelayMs: 1200,
+    });
+  });
 });

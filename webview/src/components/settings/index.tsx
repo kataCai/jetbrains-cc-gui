@@ -142,6 +142,7 @@ const SettingsView = ({
     handleTaskReminderOnlyWhenIdeUnfocusedChange,
     handleTaskReminderSelectedSoundChange,
     handleTaskReminderCustomSoundPathChange,
+    handleTaskRecoveryPolicyFieldChange,
     handleSaveCustomSoundPath,
     handleTestSound,
     handleTestPopup,
@@ -455,9 +456,10 @@ const SettingsView = ({
               onTaskReminderEnabledChange={handleTaskReminderEnabledChange}
               onTaskReminderStateToggle={handleTaskReminderStateToggle}
               onTaskReminderOnlyWhenIdeUnfocusedChange={handleTaskReminderOnlyWhenIdeUnfocusedChange}
-              onTaskReminderSelectedSoundChange={handleTaskReminderSelectedSoundChange}
-              onTaskReminderCustomSoundPathChange={handleTaskReminderCustomSoundPathChange}
-              onSaveCustomSoundPath={handleSaveCustomSoundPath}
+          onTaskReminderSelectedSoundChange={handleTaskReminderSelectedSoundChange}
+          onTaskReminderCustomSoundPathChange={handleTaskReminderCustomSoundPathChange}
+          onTaskRecoveryPolicyFieldChange={handleTaskRecoveryPolicyFieldChange}
+          onSaveCustomSoundPath={handleSaveCustomSoundPath}
               onTestSound={handleTestSound}
               onTestPopup={handleTestPopup}
               onTestBalloon={handleTestBalloon}

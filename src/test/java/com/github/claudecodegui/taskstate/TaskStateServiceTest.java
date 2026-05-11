@@ -58,4 +58,18 @@ public class TaskStateServiceTest {
         assertEquals("req-timeout", snapshot.getRequestId());
         assertNotNull(snapshot.getLatestEvent().getTimestamp());
     }
+
+    @Test
+    public void shouldSupportRetryingAndRecoveredTransitions() {
+        TaskStateService service = new TaskStateService();
+
+        service.onSendStarted("session-recovery");
+        service.onRetrying("session-recovery", "network_timeout");
+        assertEquals(TaskState.RETRYING, service.getCurrentSnapshot().getState());
+        assertEquals("network_timeout", service.getCurrentSnapshot().getLatestEvent().getReason());
+
+        service.onRecovered("session-recovery", "runtime_terminated_after_success");
+        assertEquals(TaskState.RECOVERED, service.getCurrentSnapshot().getState());
+        assertEquals("runtime_terminated_after_success", service.getCurrentSnapshot().getLatestEvent().getReason());
+    }
 }
