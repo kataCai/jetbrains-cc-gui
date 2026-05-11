@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import RemoteDebugSection from './index';
 import type {
+  FeishuRemoteCollabConfig,
   GotifyWebRemoteCollabConfig,
   RemoteCollabDebugSnapshot,
   RemoteCollabProviderOperationResult,
@@ -63,6 +64,21 @@ const createGotifyConfig = (): GotifyWebRemoteCollabConfig => ({
   lastError: '',
 });
 
+const createFeishuConfig = (): FeishuRemoteCollabConfig => ({
+  enabled: true,
+  appId: 'cli_test',
+  appSecret: 'secret_test',
+  encryptKey: '',
+  verificationToken: '',
+  botName: 'cc-bot',
+  boundOpenId: 'ou_123',
+  boundChatId: '',
+  bindingToken: 'bind-1',
+  connectionStatus: 'error',
+  lastError: 'invalid app secret',
+  eventMode: 'long_poll',
+});
+
 describe('RemoteDebugSection', () => {
   it('renders overview metrics and latest operation summary', () => {
     render(
@@ -71,6 +87,7 @@ describe('RemoteDebugSection', () => {
         providerOperationResult={createOperationResult()}
         telegramConfig={createTelegramConfig()}
         gotifyConfig={createGotifyConfig()}
+        feishuConfig={createFeishuConfig()}
         onStartTelegramBinding={vi.fn()}
         onSendRemoteTestMessage={vi.fn()}
         onTestRemoteCollabProvider={vi.fn()}
@@ -94,6 +111,7 @@ describe('RemoteDebugSection', () => {
         providerOperationResult={createOperationResult()}
         telegramConfig={createTelegramConfig()}
         gotifyConfig={createGotifyConfig()}
+        feishuConfig={createFeishuConfig()}
         onStartTelegramBinding={vi.fn()}
         onSendRemoteTestMessage={vi.fn()}
         onTestRemoteCollabProvider={vi.fn()}
@@ -120,6 +138,7 @@ describe('RemoteDebugSection', () => {
         providerOperationResult={createOperationResult()}
         telegramConfig={createTelegramConfig()}
         gotifyConfig={createGotifyConfig()}
+        feishuConfig={createFeishuConfig()}
         onStartTelegramBinding={vi.fn()}
         onSendRemoteTestMessage={vi.fn()}
         onTestRemoteCollabProvider={vi.fn()}
@@ -150,6 +169,7 @@ describe('RemoteDebugSection', () => {
         }}
         telegramConfig={createTelegramConfig()}
         gotifyConfig={createGotifyConfig()}
+        feishuConfig={createFeishuConfig()}
         onStartTelegramBinding={onStartTelegramBinding}
         onSendRemoteTestMessage={onSendRemoteTestMessage}
         onTestRemoteCollabProvider={vi.fn()}
@@ -190,6 +210,7 @@ describe('RemoteDebugSection', () => {
         }}
         telegramConfig={createTelegramConfig()}
         gotifyConfig={createGotifyConfig()}
+        feishuConfig={createFeishuConfig()}
         onStartTelegramBinding={vi.fn()}
         onSendRemoteTestMessage={vi.fn()}
         onTestRemoteCollabProvider={onTestRemoteCollabProvider}
@@ -213,5 +234,67 @@ describe('RemoteDebugSection', () => {
     expect(onRunRemoteCollabProviderAction).toHaveBeenCalledWith('gotify_web', 'send_test_event');
     expect(onRunRemoteCollabProviderAction).toHaveBeenCalledWith('gotify_web', 'send_test_pending_request');
     expect(onRunRemoteCollabProviderAction).toHaveBeenCalledWith('gotify_web', 'poll_results_once');
+  });
+
+  it('renders feishu debug panel and forwards feishu debug actions', () => {
+    const onTestRemoteCollabProvider = vi.fn();
+
+    render(
+      <RemoteDebugSection
+        debugSnapshot={createDebugSnapshot()}
+        providerOperationResult={{
+          operationType: 'test',
+          providerId: 'feishu',
+          actionKey: 'health_check',
+          result: {
+            message: 'tenant token ready',
+          },
+        }}
+        telegramConfig={createTelegramConfig()}
+        gotifyConfig={createGotifyConfig()}
+        feishuConfig={createFeishuConfig()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={onTestRemoteCollabProvider}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onRefresh={vi.fn()}
+        activeProviderId="feishu"
+      /> as any
+    );
+
+    expect(screen.getByRole('heading', { name: 'Feishu Debug Panel' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Telegram Debug Panel' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Gotify/Web Debug Panel' })).toBeNull();
+    expect(screen.getByText('ou_123')).toBeTruthy();
+    expect(screen.getByText((content) => content.includes('invalid app secret'))).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Feishu health check' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Feishu test message' }));
+    fireEvent.change(screen.getByPlaceholderText('ou_xxx'), {
+      target: { value: 'ou_debug' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('oc_xxx'), {
+      target: { value: 'oc_debug' },
+    });
+    fireEvent.change(screen.getByDisplayValue('/cc-bind <bindingToken>'), {
+      target: { value: '/cc-approve req-9' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Inject Feishu inbound command' }));
+
+    expect(onTestRemoteCollabProvider).toHaveBeenCalledWith('feishu', 'health_check');
+    expect(onTestRemoteCollabProvider).toHaveBeenCalledWith(
+      'feishu',
+      'send_test_message',
+      { message: 'CC GUI Feishu test message' }
+    );
+    expect(onTestRemoteCollabProvider).toHaveBeenCalledWith(
+      'feishu',
+      'handle_inbound_message',
+      {
+        openId: 'ou_debug',
+        chatId: 'oc_debug',
+        message: '/cc-approve req-9',
+      }
+    );
   });
 });

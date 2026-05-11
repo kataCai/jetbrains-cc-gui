@@ -42,6 +42,7 @@ public class CodemossSettingsServiceRemoteCollabTest {
         JsonObject providers = remoteCollab.getAsJsonObject("providers");
         JsonObject telegram = providers.getAsJsonObject("telegram");
         JsonObject gotifyWeb = providers.getAsJsonObject("gotify_web");
+        JsonObject feishu = providers.getAsJsonObject("feishu");
 
         assertFalse(remoteCollab.get("enabled").getAsBoolean());
         assertFalse(debug.get("enabled").getAsBoolean());
@@ -66,6 +67,19 @@ public class CodemossSettingsServiceRemoteCollabTest {
         assertEquals(3, gotifyWeb.get("resultPollIntervalSeconds").getAsInt());
         assertEquals("disabled", gotifyWeb.get("connectionStatus").getAsString());
         assertEquals("", gotifyWeb.get("lastError").getAsString());
+
+        assertFalse(feishu.get("enabled").getAsBoolean());
+        assertEquals("", feishu.get("appId").getAsString());
+        assertEquals("", feishu.get("appSecret").getAsString());
+        assertEquals("", feishu.get("encryptKey").getAsString());
+        assertEquals("", feishu.get("verificationToken").getAsString());
+        assertEquals("", feishu.get("botName").getAsString());
+        assertEquals("", feishu.get("boundOpenId").getAsString());
+        assertEquals("", feishu.get("boundChatId").getAsString());
+        assertEquals("", feishu.get("bindingToken").getAsString());
+        assertEquals("long_poll", feishu.get("eventMode").getAsString());
+        assertEquals("disabled", feishu.get("connectionStatus").getAsString());
+        assertEquals("", feishu.get("lastError").getAsString());
     }
 
     @Test
@@ -164,6 +178,13 @@ public class CodemossSettingsServiceRemoteCollabTest {
         gotifyWeb.addProperty("workspaceBaseUrl", "https://workspace.example");
         gotifyWeb.addProperty("resultPollIntervalSeconds", 0);
         providers.add("gotify_web", gotifyWeb);
+
+        JsonObject feishu = new JsonObject();
+        feishu.addProperty("enabled", true);
+        feishu.addProperty("appId", "cli_a1");
+        feishu.addProperty("appSecret", "secret-a1");
+        feishu.addProperty("eventMode", " long_poll ");
+        providers.add("feishu", feishu);
         remoteCollab.add("providers", providers);
 
         service.saveRemoteCollabConfig(remoteCollab);
@@ -172,6 +193,7 @@ public class CodemossSettingsServiceRemoteCollabTest {
         JsonObject normalizedProviders = normalized.getAsJsonObject("providers");
         JsonObject normalizedTelegram = normalizedProviders.getAsJsonObject("telegram");
         JsonObject normalizedGotifyWeb = normalizedProviders.getAsJsonObject("gotify_web");
+        JsonObject normalizedFeishu = normalizedProviders.getAsJsonObject("feishu");
 
         assertTrue(normalized.get("enabled").getAsBoolean());
         assertTrue(normalized.getAsJsonObject("debug").get("enabled").getAsBoolean());
@@ -185,6 +207,10 @@ public class CodemossSettingsServiceRemoteCollabTest {
         assertEquals("secret-token", normalizedGotifyWeb.get("apiToken").getAsString());
         assertEquals("https://workspace.example", normalizedGotifyWeb.get("workspaceBaseUrl").getAsString());
         assertEquals(1, normalizedGotifyWeb.get("resultPollIntervalSeconds").getAsInt());
+        assertTrue(normalizedFeishu.get("enabled").getAsBoolean());
+        assertEquals("cli_a1", normalizedFeishu.get("appId").getAsString());
+        assertEquals("secret-a1", normalizedFeishu.get("appSecret").getAsString());
+        assertEquals("long_poll", normalizedFeishu.get("eventMode").getAsString());
     }
 
     private void writeConfig(Path tempHome, JsonObject config) throws Exception {

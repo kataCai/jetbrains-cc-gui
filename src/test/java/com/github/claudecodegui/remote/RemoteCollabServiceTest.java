@@ -196,6 +196,19 @@ public class RemoteCollabServiceTest {
     }
 
     @Test
+    public void shouldRegisterConfiguredFeishuProviderBeforeBuildingViewModel() throws Exception {
+        RemoteCollabService service = newRemoteCollabService();
+
+        JsonObject viewModel = service.buildRemoteCollabViewModel(new FeishuConfiguredRemoteCollabSettingsService());
+
+        JsonObject feishuOption = findProviderOption(viewModel.getAsJsonArray("providerOptions"), "feishu");
+        assertNotNull(feishuOption);
+        assertTrue(feishuOption.get("registered").getAsBoolean());
+        assertTrue(feishuOption.get("enabled").getAsBoolean());
+        assertNotNull(service.getProviderRegistry().getProvider("feishu"));
+    }
+
+    @Test
     public void shouldRoutePendingRequestToConfiguredInteractiveProviderOnly() throws Exception {
         RemoteCollabProviderRegistry providerRegistry = new RemoteCollabProviderRegistry();
         FakeProvider telegramProvider = new FakeProvider(
@@ -457,6 +470,41 @@ public class RemoteCollabServiceTest {
             config.addProperty("enabled", true);
             config.add("debug", debug);
             config.addProperty("interactiveProviderId", "gotify_web");
+            config.add("notifyProviderIds", notifyProviderIds);
+            config.add("providers", providers);
+            return config;
+        }
+    }
+
+    private static final class FeishuConfiguredRemoteCollabSettingsService extends CodemossSettingsService {
+        @Override
+        public JsonObject getRemoteCollabConfig() {
+            JsonObject telegram = new JsonObject();
+            telegram.addProperty("enabled", true);
+
+            JsonObject feishu = new JsonObject();
+            feishu.addProperty("enabled", true);
+            feishu.addProperty("appId", "cli_xxx");
+            feishu.addProperty("appSecret", "secret_xxx");
+            feishu.addProperty("eventMode", "long_poll");
+            feishu.addProperty("connectionStatus", "disabled");
+            feishu.addProperty("lastError", "");
+
+            JsonObject debug = new JsonObject();
+            debug.addProperty("enabled", true);
+
+            JsonObject providers = new JsonObject();
+            providers.add("telegram", telegram);
+            providers.add("feishu", feishu);
+
+            JsonArray notifyProviderIds = new JsonArray();
+            notifyProviderIds.add("telegram");
+            notifyProviderIds.add("feishu");
+
+            JsonObject config = new JsonObject();
+            config.addProperty("enabled", true);
+            config.add("debug", debug);
+            config.addProperty("interactiveProviderId", "feishu");
             config.add("notifyProviderIds", notifyProviderIds);
             config.add("providers", providers);
             return config;

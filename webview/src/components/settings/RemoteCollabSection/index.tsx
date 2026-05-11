@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
+  FeishuRemoteCollabConfig,
   GotifyWebRemoteCollabConfig,
   RemoteCollabConfig,
   RemoteCollabDebugSnapshot,
@@ -51,6 +52,7 @@ const RemoteCollabSection = ({
   const { t } = useTranslation();
   const [telegramDraft, setTelegramDraft] = useState<TelegramRemoteCollabConfig>(remoteCollabConfig.telegram);
   const [gotifyDraft, setGotifyDraft] = useState<GotifyWebRemoteCollabConfig>(remoteCollabConfig.providers.gotify_web);
+  const [feishuDraft, setFeishuDraft] = useState<FeishuRemoteCollabConfig>(remoteCollabConfig.providers.feishu);
   const [testMessage, setTestMessage] = useState('CC GUI Telegram test message');
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
 
@@ -62,6 +64,10 @@ const RemoteCollabSection = ({
   useEffect(() => {
     setGotifyDraft(remoteCollabConfig.providers.gotify_web);
   }, [remoteCollabConfig.providers.gotify_web]);
+
+  useEffect(() => {
+    setFeishuDraft(remoteCollabConfig.providers.feishu);
+  }, [remoteCollabConfig.providers.feishu]);
 
   const activeProvider = remoteCollabConfig.providerOptions.find((provider) => provider.providerId === activeProviderId) ?? null;
 
@@ -84,9 +90,11 @@ const RemoteCollabSection = ({
           remoteCollabProviderOperationResult={remoteCollabProviderOperationResult}
           telegramDraft={telegramDraft}
           gotifyDraft={gotifyDraft}
+          feishuDraft={feishuDraft}
           testMessage={testMessage}
           setTelegramDraft={setTelegramDraft}
           setGotifyDraft={setGotifyDraft}
+          setFeishuDraft={setFeishuDraft}
           setTestMessage={setTestMessage}
           onBack={() => setActiveProviderId(null)}
           onSaveRemoteCollabProviderConfig={onSaveRemoteCollabProviderConfig}

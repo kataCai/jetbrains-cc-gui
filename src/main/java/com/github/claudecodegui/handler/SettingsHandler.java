@@ -80,7 +80,9 @@ public class SettingsHandler extends BaseMessageHandler {
         "run_remote_collab_provider_action",
         "save_telegram_config",
         "start_telegram_binding",
-        "send_remote_test_message"
+        "send_remote_test_message",
+        "start_feishu_binding",
+        "send_feishu_test_message"
     };
 
     public SettingsHandler(HandlerContext context, TaskReminderDispatcher taskReminderDispatcher) {
@@ -284,6 +286,12 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "send_remote_test_message":
                 remoteCollabSettingsHandler.handleSendRemoteTestMessage(content);
+                return true;
+            case "start_feishu_binding":
+                remoteCollabSettingsHandler.handleStartFeishuBinding(content);
+                return true;
+            case "send_feishu_test_message":
+                remoteCollabSettingsHandler.handleSendFeishuTestMessage(content);
                 return true;
             default:
                 return false;

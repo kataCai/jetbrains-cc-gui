@@ -79,6 +79,20 @@ describe('useRemoteCollabSettings', () => {
               serverUrl: 'https://gotify.example',
             },
           },
+          {
+            providerId: 'feishu',
+            displayName: 'Feishu',
+            description: 'Feishu bot direct messages',
+            capabilities: ['BINDING', 'HEALTH_CHECK', 'INLINE_ACTION_CALLBACK'],
+            registered: true,
+            enabled: true,
+            connectionStatus: 'error',
+            config: {
+              appId: 'cli_test',
+              boundOpenId: 'ou_123',
+              lastError: 'invalid secret',
+            },
+          },
         ],
         providers: {
           telegram: {
@@ -91,6 +105,13 @@ describe('useRemoteCollabSettings', () => {
             serverUrl: 'https://gotify.example',
             resultPollIntervalSeconds: 0,
           },
+          feishu: {
+            ...DEFAULT_REMOTE_COLLAB_CONFIG.providers.feishu,
+            enabled: true,
+            appId: 'cli_test',
+            boundOpenId: 'ou_123',
+            lastError: 'invalid secret',
+          },
         },
       });
     });
@@ -98,12 +119,51 @@ describe('useRemoteCollabSettings', () => {
     expect(result.current.remoteCollabConfig.debug.enabled).toBe(true);
     expect(result.current.remoteCollabConfig.interactiveProviderId).toBe('gotify_web');
     expect(result.current.remoteCollabConfig.notifyProviderIds).toEqual(['telegram', 'gotify_web']);
-    expect(result.current.remoteCollabConfig.providerOptions).toHaveLength(2);
+    expect(result.current.remoteCollabConfig.providerOptions).toHaveLength(3);
     expect(result.current.remoteCollabConfig.providerOptions[1].providerId).toBe('gotify_web');
+    expect(result.current.remoteCollabConfig.providerOptions[2].providerId).toBe('feishu');
     expect(result.current.remoteCollabConfig.providers.telegram.botToken).toBe('telegram-token');
     expect(result.current.remoteCollabConfig.providers.gotify_web.serverUrl).toBe('https://gotify.example');
     expect(result.current.remoteCollabConfig.providers.gotify_web.resultPollIntervalSeconds).toBe(1);
+    expect(result.current.remoteCollabConfig.providers.feishu.appId).toBe('cli_test');
+    expect(result.current.remoteCollabConfig.providers.feishu.boundOpenId).toBe('ou_123');
+    expect(result.current.remoteCollabConfig.providers.feishu.lastError).toBe('invalid secret');
     expect(result.current.remoteCollabConfig.telegram.botToken).toBe('telegram-token');
+  });
+
+  it('normalizes feishu config before saving it and preserves status fields', () => {
+    const { result } = renderHook(() => useRemoteCollabSettings());
+
+    act(() => {
+      result.current.handleSaveRemoteCollabProviderConfig('feishu', {
+        enabled: true,
+        appId: 'cli_test',
+        appSecret: 'secret_test',
+        botName: 'cc-bot',
+        boundOpenId: 'ou_abc',
+        bindingToken: 'bind-1',
+        eventMode: 'long_poll',
+        connectionStatus: 'connected',
+        lastError: '',
+      });
+    });
+
+    expect(result.current.remoteCollabConfig.providers.feishu).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        appId: 'cli_test',
+        appSecret: 'secret_test',
+        botName: 'cc-bot',
+        boundOpenId: 'ou_abc',
+        bindingToken: 'bind-1',
+        eventMode: 'long_poll',
+        connectionStatus: 'connected',
+        lastError: '',
+      })
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'save_remote_collab_provider_config:{"providerId":"feishu","config":{"enabled":true,"appId":"cli_test","appSecret":"secret_test","encryptKey":"","verificationToken":"","botName":"cc-bot","boundOpenId":"ou_abc","boundChatId":"","bindingToken":"bind-1","connectionStatus":"connected","lastError":"","eventMode":"long_poll"}}'
+    );
   });
 
   it('normalizes telegram config before saving it and keeps other providers intact', () => {

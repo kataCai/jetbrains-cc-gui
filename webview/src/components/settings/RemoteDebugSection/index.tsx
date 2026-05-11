@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type {
+  FeishuRemoteCollabConfig,
   GotifyWebRemoteCollabConfig,
   RemoteCollabDebugSnapshot,
   RemoteCollabProviderOperationResult,
@@ -7,6 +8,7 @@ import type {
 } from '../hooks/useRemoteCollabSettings';
 import DebugActivityPanel from './DebugActivityPanel';
 import DebugOverviewPanel from './DebugOverviewPanel';
+import FeishuDebugPanel from './FeishuDebugPanel';
 import GotifyDebugPanel from './GotifyDebugPanel';
 import ProviderDebugPanel from './ProviderDebugPanel';
 import styles from './style.module.less';
@@ -16,6 +18,7 @@ interface RemoteDebugSectionProps {
   providerOperationResult: RemoteCollabProviderOperationResult | null;
   telegramConfig: TelegramRemoteCollabConfig;
   gotifyConfig: GotifyWebRemoteCollabConfig;
+  feishuConfig: FeishuRemoteCollabConfig;
   activeProviderId?: string;
   onStartTelegramBinding: () => void;
   onSendRemoteTestMessage: (message: string) => void;
@@ -33,6 +36,7 @@ const RemoteDebugSection = ({
   providerOperationResult,
   telegramConfig,
   gotifyConfig,
+  feishuConfig,
   activeProviderId,
   onStartTelegramBinding,
   onSendRemoteTestMessage,
@@ -44,6 +48,7 @@ const RemoteDebugSection = ({
   // 详情态只暴露当前 provider 的调试入口，避免用户在单渠道页看到其他渠道的操作噪音。
   const showTelegramPanel = !activeProviderId || activeProviderId === 'telegram';
   const showGotifyPanel = !activeProviderId || activeProviderId === 'gotify_web';
+  const showFeishuPanel = !activeProviderId || activeProviderId === 'feishu';
 
   return (
     <div className={styles.section}>
@@ -78,6 +83,13 @@ const RemoteDebugSection = ({
             providerOperationResult={providerOperationResult}
             onTestRemoteCollabProvider={onTestRemoteCollabProvider}
             onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
+          />
+        )}
+        {showFeishuPanel && (
+          <FeishuDebugPanel
+            feishuConfig={feishuConfig}
+            providerOperationResult={providerOperationResult}
+            onTestRemoteCollabProvider={onTestRemoteCollabProvider}
           />
         )}
       </div>

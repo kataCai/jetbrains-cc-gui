@@ -126,6 +126,14 @@ public class RemoteCollabSettingsHandler {
     }
 
     /**
+     * 飞书绑定入口。
+     * 第一阶段复用通用 provider action 协议，避免继续追加平台专属 handler 分支。
+     */
+    public void handleStartFeishuBinding(String content) {
+        handleRunRemoteCollabProviderAction(gson.toJson(wrapProviderActionRequest("feishu", "start_binding", parseRequest(content))));
+    }
+
+    /**
      * ?? provider ??????? Telegram ???Gotify/Web ??????
      */
     public void handleRunRemoteCollabProviderAction(String content) {
@@ -153,6 +161,10 @@ public class RemoteCollabSettingsHandler {
      */
     public void handleSendRemoteTestMessage(String content) {
         handleTestRemoteCollabProvider(gson.toJson(wrapProviderActionRequest("telegram", "send_test_message", parseRequest(content))));
+    }
+
+    public void handleSendFeishuTestMessage(String content) {
+        handleTestRemoteCollabProvider(gson.toJson(wrapProviderActionRequest("feishu", "send_test_message", parseRequest(content))));
     }
 
     /**
@@ -241,6 +253,13 @@ public class RemoteCollabSettingsHandler {
             }
             return executeLegacyTelegramAction(actionKey, request);
         }
+        if ("feishu".equals(providerId)) {
+            RemoteCollabProvider feishuProvider = remoteCollabService.getProviderRegistry().getProvider(providerId);
+            if (feishuProvider instanceof RemoteCollabProviderActionHandler actionHandler) {
+                return actionHandler.executeAction(context.getSettingsService(), actionKey, request);
+            }
+            return executeLegacyFeishuAction(actionKey, request);
+        }
         // 其他 provider 动作可能早于设置页完整刷新触发，这里先确保配置驱动的 provider 已完成注册。
         remoteCollabService.buildRemoteCollabViewModel(context.getSettingsService());
         RemoteCollabProvider provider = remoteCollabService.getProviderRegistry().getProvider(providerId);
@@ -264,6 +283,25 @@ public class RemoteCollabSettingsHandler {
             return result;
         }
         throw new IllegalArgumentException("Unsupported Telegram action: " + actionKey);
+    }
+
+    private JsonObject executeLegacyFeishuAction(String actionKey, JsonObject request) throws Exception {
+        if ("start_binding".equals(actionKey)) {
+            return remoteCollabService.startFeishuBinding(context.getSettingsService());
+        }
+        if ("health_check".equals(actionKey) || "test_connection".equals(actionKey)) {
+            return remoteCollabService.healthCheckFeishu(context.getSettingsService());
+        }
+        if ("send_test_message".equals(actionKey)) {
+            String message = request != null && request.has("message") && !request.get("message").isJsonNull()
+                ? request.get("message").getAsString()
+                : null;
+            remoteCollabService.sendFeishuTestMessage(context.getSettingsService(), message);
+            JsonObject result = new JsonObject();
+            result.addProperty("message", "Feishu 测试消息已发送");
+            return result;
+        }
+        throw new IllegalArgumentException("Unsupported Feishu action: " + actionKey);
     }
 
     private void pushProviderOperationResult(String operationType, String providerId, String actionKey, JsonObject result) {

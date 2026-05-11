@@ -69,6 +69,29 @@ const createConfig = (): RemoteCollabConfig => {
           lastError: '',
         },
       },
+      {
+        providerId: 'feishu',
+        displayName: 'Feishu',
+        description: 'Feishu bot direct messages',
+        capabilities: ['BINDING', 'HEALTH_CHECK', 'INLINE_ACTION_CALLBACK'],
+        registered: true,
+        enabled: true,
+        connectionStatus: 'error',
+        config: {
+          enabled: true,
+          appId: 'cli_test',
+          appSecret: 'secret_test',
+          encryptKey: '',
+          verificationToken: '',
+          botName: 'cc-gui-bot',
+          boundOpenId: 'ou_123',
+          boundChatId: '',
+          bindingToken: 'bind-1',
+          connectionStatus: 'error',
+          lastError: 'invalid app secret',
+          eventMode: 'long_poll',
+        },
+      },
     ],
     providers: {
       telegram,
@@ -80,6 +103,20 @@ const createConfig = (): RemoteCollabConfig => {
         resultPollIntervalSeconds: 3,
         connectionStatus: 'disabled',
         lastError: '',
+      },
+      feishu: {
+        enabled: true,
+        appId: 'cli_test',
+        appSecret: 'secret_test',
+        encryptKey: '',
+        verificationToken: '',
+        botName: 'cc-gui-bot',
+        boundOpenId: 'ou_123',
+        boundChatId: '',
+        bindingToken: 'bind-1',
+        connectionStatus: 'error',
+        lastError: 'invalid app secret',
+        eventMode: 'long_poll',
       },
     },
     telegram,
@@ -293,6 +330,91 @@ describe('RemoteCollabSection', () => {
         serverUrl: 'https://gotify.example.com',
         workspaceBaseUrl: 'https://workspace.example.com',
       })
+    );
+  });
+
+  it('renders feishu detail with connection status and last error, and forwards feishu actions', () => {
+    const onSaveRemoteCollabProviderConfig = vi.fn();
+    const onTestRemoteCollabProvider = vi.fn();
+    const onRunRemoteCollabProviderAction = vi.fn();
+    const config = createConfig();
+    config.debug.enabled = true;
+
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={config}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={{
+          operationType: 'test',
+          providerId: 'feishu',
+          actionKey: 'health_check',
+          result: {
+            message: 'token failed',
+          },
+        }}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={onSaveRemoteCollabProviderConfig}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={onTestRemoteCollabProvider}
+        onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Feishu settings' }));
+
+    expect(screen.getByRole('heading', { name: 'Feishu Settings' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Connection Status' })).toBeTruthy();
+    expect(screen.getAllByText((content) => content.includes('invalid app secret')).length).toBeGreaterThan(0);
+    expect(screen.getByDisplayValue('cli_test')).toBeTruthy();
+    expect(screen.getAllByText('ou_123').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByLabelText('Enable remote debug tools'));
+    expect(screen.getByRole('heading', { name: 'Feishu Debug Panel' })).toBeTruthy();
+
+    fireEvent.change(screen.getByPlaceholderText('cli_xxx'), {
+      target: { value: 'cli_new' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Feishu settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Feishu binding' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Feishu health check' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Feishu test message' }));
+    fireEvent.change(screen.getByPlaceholderText('ou_xxx'), {
+      target: { value: 'ou_simulated' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('oc_xxx'), {
+      target: { value: 'oc_simulated' },
+    });
+    fireEvent.change(screen.getByDisplayValue('/cc-bind <bindingToken>'), {
+      target: { value: '/cc-reply req-22 looks good' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Inject Feishu inbound command' }));
+
+    expect(onSaveRemoteCollabProviderConfig).toHaveBeenCalledWith(
+      'feishu',
+      expect.objectContaining({
+        appId: 'cli_new',
+      })
+    );
+    expect(onRunRemoteCollabProviderAction).toHaveBeenCalledWith('feishu', 'start_binding');
+    expect(onTestRemoteCollabProvider).toHaveBeenCalledWith('feishu', 'health_check');
+    expect(onTestRemoteCollabProvider).toHaveBeenCalledWith(
+      'feishu',
+      'send_test_message',
+      { message: 'CC GUI Feishu test message' }
+    );
+    expect(onTestRemoteCollabProvider).toHaveBeenCalledWith(
+      'feishu',
+      'handle_inbound_message',
+      {
+        openId: 'ou_simulated',
+        chatId: 'oc_simulated',
+        message: '/cc-reply req-22 looks good',
+      }
     );
   });
 

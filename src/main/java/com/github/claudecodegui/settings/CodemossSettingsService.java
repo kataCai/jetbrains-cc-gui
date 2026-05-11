@@ -50,6 +50,7 @@ public class CodemossSettingsService {
     private static final String PROVIDERS_KEY = "providers";
     private static final String TELEGRAM_KEY = "telegram";
     private static final String GOTIFY_WEB_KEY = "gotify_web";
+    private static final String FEISHU_KEY = "feishu";
 
     private final Gson gson;
 
@@ -1622,9 +1623,14 @@ public class CodemossSettingsService {
         if (gotifyWebSource == null) {
             gotifyWebSource = getOptionalObject(source, GOTIFY_WEB_KEY);
         }
+        JsonObject feishuSource = getOptionalObject(providerSource, FEISHU_KEY);
+        if (feishuSource == null) {
+            feishuSource = getOptionalObject(source, FEISHU_KEY);
+        }
 
         providers.add(TELEGRAM_KEY, normalizeTelegramConfig(telegramSource));
         providers.add(GOTIFY_WEB_KEY, normalizeGotifyWebConfig(gotifyWebSource));
+        providers.add(FEISHU_KEY, normalizeFeishuConfig(feishuSource));
         mergeUnknownProviderConfigs(providerSource, providers);
         normalized.add(PROVIDERS_KEY, providers);
 
@@ -1696,6 +1702,9 @@ public class CodemossSettingsService {
         if (GOTIFY_WEB_KEY.equals(providerId)) {
             return normalizeGotifyWebConfig(providerConfig);
         }
+        if (FEISHU_KEY.equals(providerId)) {
+            return normalizeFeishuConfig(providerConfig);
+        }
         return providerConfig == null ? new JsonObject() : providerConfig.deepCopy();
     }
 
@@ -1743,6 +1752,7 @@ public class CodemossSettingsService {
         JsonObject providers = new JsonObject();
         providers.add(TELEGRAM_KEY, createDefaultTelegramConfig());
         providers.add(GOTIFY_WEB_KEY, createDefaultGotifyWebConfig());
+        providers.add(FEISHU_KEY, createDefaultFeishuConfig());
         return providers;
     }
 
@@ -1773,6 +1783,52 @@ public class CodemossSettingsService {
         gotifyWeb.addProperty("connectionStatus", "disabled");
         gotifyWeb.addProperty("lastError", "");
         return gotifyWeb;
+    }
+
+    /**
+     * Feishu 第一阶段配置模型。
+     * 当前先覆盖 appId/appSecret、绑定标识和基础连接状态，后续事件订阅字段继续沿用这个结构扩展。
+     */
+    private JsonObject createDefaultFeishuConfig() {
+        JsonObject feishu = new JsonObject();
+        feishu.addProperty(ENABLED_KEY, false);
+        feishu.addProperty("appId", "");
+        feishu.addProperty("appSecret", "");
+        feishu.addProperty("encryptKey", "");
+        feishu.addProperty("verificationToken", "");
+        feishu.addProperty("botName", "");
+        feishu.addProperty("boundOpenId", "");
+        feishu.addProperty("boundChatId", "");
+        feishu.addProperty("bindingToken", "");
+        feishu.addProperty("bindingTokenExpiresAt", 0L);
+        feishu.addProperty("eventMode", "long_poll");
+        feishu.addProperty("connectionStatus", "disabled");
+        feishu.addProperty("lastError", "");
+        return feishu;
+    }
+
+    private JsonObject normalizeFeishuConfig(JsonObject source) {
+        JsonObject normalized = createDefaultFeishuConfig();
+        if (source == null) {
+            return normalized;
+        }
+
+        copyBooleanProperty(source, normalized, ENABLED_KEY);
+        copyStringProperty(source, normalized, "appId");
+        copyStringProperty(source, normalized, "appSecret");
+        copyStringProperty(source, normalized, "encryptKey");
+        copyStringProperty(source, normalized, "verificationToken");
+        copyStringProperty(source, normalized, "botName");
+        copyStringProperty(source, normalized, "boundOpenId");
+        copyStringProperty(source, normalized, "boundChatId");
+        copyStringProperty(source, normalized, "bindingToken");
+        if (source.has("bindingTokenExpiresAt") && !source.get("bindingTokenExpiresAt").isJsonNull()) {
+            normalized.addProperty("bindingTokenExpiresAt", Math.max(0L, source.get("bindingTokenExpiresAt").getAsLong()));
+        }
+        copyStringProperty(source, normalized, "connectionStatus");
+        copyStringProperty(source, normalized, "lastError");
+        normalized.addProperty("eventMode", normalizeString(getOptionalString(source, "eventMode"), "long_poll"));
+        return normalized;
     }
 
     /**

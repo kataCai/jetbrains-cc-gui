@@ -2,6 +2,7 @@
 
 const TELEGRAM_PROVIDER_ID = 'telegram';
 const GOTIFY_WEB_PROVIDER_ID = 'gotify_web';
+const FEISHU_PROVIDER_ID = 'feishu';
 
 // WebView 与 Java 侧桥接统一走 sendToJava，避免各个设置面板自行拼接窗口对象访问。
 const sendToJava = (message: string) => {
@@ -47,6 +48,21 @@ export interface GotifyWebRemoteCollabConfig {
   lastError: string;
 }
 
+export interface FeishuRemoteCollabConfig {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  encryptKey: string;
+  verificationToken: string;
+  botName: string;
+  boundOpenId: string;
+  boundChatId: string;
+  bindingToken: string;
+  connectionStatus: string;
+  lastError: string;
+  eventMode: string;
+}
+
 export interface RemoteCollabDebugConfig {
   enabled: boolean;
 }
@@ -85,12 +101,14 @@ export type RemoteCollabProviderConfig = Record<string, unknown>;
 type NormalizedProviderConfig =
   | TelegramRemoteCollabConfig
   | GotifyWebRemoteCollabConfig
+  | FeishuRemoteCollabConfig
   | RemoteCollabProviderConfig;
 
 export interface RemoteCollabProvidersConfig {
   telegram: TelegramRemoteCollabConfig;
   gotify_web: GotifyWebRemoteCollabConfig;
-  [providerId: string]: TelegramRemoteCollabConfig | GotifyWebRemoteCollabConfig | RemoteCollabProviderConfig;
+  feishu: FeishuRemoteCollabConfig;
+  [providerId: string]: TelegramRemoteCollabConfig | GotifyWebRemoteCollabConfig | FeishuRemoteCollabConfig | RemoteCollabProviderConfig;
 }
 
 export interface RemoteCollabConfig extends RemoteCollabRoutingPolicy {
@@ -128,9 +146,25 @@ const createDefaultGotifyWebConfig = (): GotifyWebRemoteCollabConfig => ({
   lastError: '',
 });
 
+const createDefaultFeishuConfig = (): FeishuRemoteCollabConfig => ({
+  enabled: false,
+  appId: '',
+  appSecret: '',
+  encryptKey: '',
+  verificationToken: '',
+  botName: '',
+  boundOpenId: '',
+  boundChatId: '',
+  bindingToken: '',
+  connectionStatus: 'disabled',
+  lastError: '',
+  eventMode: 'long_poll',
+});
+
 const createDefaultProviderOptions = (
   telegram: TelegramRemoteCollabConfig,
-  gotifyWeb: GotifyWebRemoteCollabConfig
+  gotifyWeb: GotifyWebRemoteCollabConfig,
+  feishu: FeishuRemoteCollabConfig
 ): RemoteCollabProviderOption[] => ([
   {
     providerId: TELEGRAM_PROVIDER_ID,
@@ -152,6 +186,16 @@ const createDefaultProviderOptions = (
     enabled: gotifyWeb.enabled,
     connectionStatus: gotifyWeb.connectionStatus,
     config: { ...gotifyWeb },
+  },
+  {
+    providerId: FEISHU_PROVIDER_ID,
+    displayName: 'Feishu',
+    description: 'Feishu bot direct messages',
+    capabilities: ['BINDING', 'HEALTH_CHECK', 'INLINE_ACTION_CALLBACK', 'PENDING_REQUEST_PUSH', 'TASK_EVENT_PUSH'],
+    registered: false,
+    enabled: feishu.enabled,
+    connectionStatus: feishu.connectionStatus,
+    config: { ...feishu },
   },
 ]);
 
@@ -187,6 +231,26 @@ const normalizeGotifyWebConfig = (value: unknown): GotifyWebRemoteCollabConfig =
   };
 };
 
+const normalizeFeishuConfig = (value: unknown): FeishuRemoteCollabConfig => {
+  const source = isRecord(value) ? value : {};
+  return {
+    enabled: Boolean(source.enabled),
+    appId: typeof source.appId === 'string' ? source.appId : '',
+    appSecret: typeof source.appSecret === 'string' ? source.appSecret : '',
+    encryptKey: typeof source.encryptKey === 'string' ? source.encryptKey : '',
+    verificationToken: typeof source.verificationToken === 'string' ? source.verificationToken : '',
+    botName: typeof source.botName === 'string' ? source.botName : '',
+    boundOpenId: typeof source.boundOpenId === 'string' ? source.boundOpenId : '',
+    boundChatId: typeof source.boundChatId === 'string' ? source.boundChatId : '',
+    bindingToken: typeof source.bindingToken === 'string' ? source.bindingToken : '',
+    connectionStatus: typeof source.connectionStatus === 'string' ? source.connectionStatus : 'disabled',
+    lastError: typeof source.lastError === 'string' ? source.lastError : '',
+    eventMode: typeof source.eventMode === 'string' && source.eventMode.trim().length > 0
+      ? source.eventMode
+      : 'long_poll',
+  };
+};
+
 const normalizeDebugConfig = (value: unknown): RemoteCollabDebugConfig => {
   const source = isRecord(value) ? value : {};
   return {
@@ -209,7 +273,12 @@ const normalizeNotifyProviderIds = (value: unknown, interactiveProviderId: strin
 const normalizeExtraProviders = (value: unknown): Record<string, RemoteCollabProviderConfig> => {
   const source = isRecord(value) ? value : {};
   return Object.entries(source).reduce<Record<string, RemoteCollabProviderConfig>>((accumulator, [providerId, providerConfig]) => {
-    if (providerId === TELEGRAM_PROVIDER_ID || providerId === GOTIFY_WEB_PROVIDER_ID || !isRecord(providerConfig)) {
+    if (
+      providerId === TELEGRAM_PROVIDER_ID
+      || providerId === GOTIFY_WEB_PROVIDER_ID
+      || providerId === FEISHU_PROVIDER_ID
+      || !isRecord(providerConfig)
+    ) {
       return accumulator;
     }
     accumulator[providerId] = { ...providerConfig };
@@ -220,11 +289,12 @@ const normalizeExtraProviders = (value: unknown): Record<string, RemoteCollabPro
 const normalizeProviderOptions = (
   value: unknown,
   telegram: TelegramRemoteCollabConfig,
-  gotifyWeb: GotifyWebRemoteCollabConfig
+  gotifyWeb: GotifyWebRemoteCollabConfig,
+  feishu: FeishuRemoteCollabConfig
 ): RemoteCollabProviderOption[] => {
   const source = Array.isArray(value) ? value : [];
   if (source.length === 0) {
-    return createDefaultProviderOptions(telegram, gotifyWeb);
+    return createDefaultProviderOptions(telegram, gotifyWeb, feishu);
   }
 
   return source
@@ -255,12 +325,14 @@ const buildRemoteCollabConfig = (params: {
   providerOptions: RemoteCollabProviderOption[];
   telegram: TelegramRemoteCollabConfig;
   gotifyWeb: GotifyWebRemoteCollabConfig;
+  feishu: FeishuRemoteCollabConfig;
   extraProviders?: Record<string, RemoteCollabProviderConfig>;
 }): RemoteCollabConfig => {
   const providers: RemoteCollabProvidersConfig = {
     ...(params.extraProviders ?? {}),
     telegram: params.telegram,
     gotify_web: params.gotifyWeb,
+    feishu: params.feishu,
   };
 
   return {
@@ -276,15 +348,17 @@ const buildRemoteCollabConfig = (params: {
 
 const defaultTelegram = createDefaultTelegramConfig();
 const defaultGotifyWeb = createDefaultGotifyWebConfig();
+const defaultFeishu = createDefaultFeishuConfig();
 
 export const DEFAULT_REMOTE_COLLAB_CONFIG: RemoteCollabConfig = buildRemoteCollabConfig({
   enabled: false,
   debug: { enabled: false },
   interactiveProviderId: TELEGRAM_PROVIDER_ID,
   notifyProviderIds: [TELEGRAM_PROVIDER_ID],
-  providerOptions: createDefaultProviderOptions(defaultTelegram, defaultGotifyWeb),
+  providerOptions: createDefaultProviderOptions(defaultTelegram, defaultGotifyWeb, defaultFeishu),
   telegram: defaultTelegram,
   gotifyWeb: defaultGotifyWeb,
+  feishu: defaultFeishu,
 });
 
 /**
@@ -296,6 +370,7 @@ export const normalizeRemoteCollabConfig = (value: unknown): RemoteCollabConfig 
   const providersSource = isRecord(source.providers) ? source.providers : {};
   const telegram = normalizeTelegramConfig(providersSource.telegram ?? source.telegram);
   const gotifyWeb = normalizeGotifyWebConfig(providersSource.gotify_web ?? source.gotify_web);
+  const feishu = normalizeFeishuConfig(providersSource.feishu ?? source.feishu);
   const interactiveProviderId = normalizeString(source.interactiveProviderId, TELEGRAM_PROVIDER_ID);
 
   return buildRemoteCollabConfig({
@@ -303,9 +378,10 @@ export const normalizeRemoteCollabConfig = (value: unknown): RemoteCollabConfig 
     debug: normalizeDebugConfig(source.debug),
     interactiveProviderId,
     notifyProviderIds: normalizeNotifyProviderIds(source.notifyProviderIds, interactiveProviderId),
-    providerOptions: normalizeProviderOptions(source.providerOptions, telegram, gotifyWeb),
+    providerOptions: normalizeProviderOptions(source.providerOptions, telegram, gotifyWeb, feishu),
     telegram,
     gotifyWeb,
+    feishu,
     extraProviders: normalizeExtraProviders(providersSource),
   });
 };
@@ -367,6 +443,9 @@ const normalizeProviderConfigForSave = (providerId: string, config: unknown): No
   }
   if (providerId === GOTIFY_WEB_PROVIDER_ID) {
     return normalizeGotifyWebConfig(config);
+  }
+  if (providerId === FEISHU_PROVIDER_ID) {
+    return normalizeFeishuConfig(config);
   }
   return isRecord(config) ? { ...config } : {};
 };

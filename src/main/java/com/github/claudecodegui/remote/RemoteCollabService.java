@@ -4,9 +4,11 @@ import com.github.claudecodegui.remote.debug.RemoteCollabDebugService;
 import com.github.claudecodegui.remote.provider.RemoteCollabCapability;
 import com.github.claudecodegui.remote.provider.RemoteCollabProvider;
 import com.github.claudecodegui.remote.provider.RemoteCollabProviderDescriptor;
+import com.github.claudecodegui.remote.provider.RemoteFeishuOperationsProvider;
 import com.github.claudecodegui.remote.provider.RemoteCollabProviderRegistry;
 import com.github.claudecodegui.remote.provider.RemoteTelegramOperationsProvider;
 import com.github.claudecodegui.remote.providers.gotify.GotifyWebRemoteCollabProvider;
+import com.github.claudecodegui.remote.providers.feishu.FeishuRemoteCollabProvider;
 import com.github.claudecodegui.remote.providers.telegram.TelegramRemoteCollabProvider;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.google.gson.JsonArray;
@@ -57,6 +59,18 @@ public final class RemoteCollabService {
             RemoteCollabCapability.RESULT_POLLING,
             RemoteCollabCapability.HEALTH_CHECK,
             RemoteCollabCapability.WORKSPACE_LINK
+        )
+    );
+    private static final RemoteCollabProviderDescriptor FEISHU_PROVIDER_DESCRIPTOR = new RemoteCollabProviderDescriptor(
+        "feishu",
+        "Feishu",
+        "通过 Feishu 机器人私聊完成通知、绑定和远程交互。",
+        EnumSet.of(
+            RemoteCollabCapability.TASK_EVENT_PUSH,
+            RemoteCollabCapability.PENDING_REQUEST_PUSH,
+            RemoteCollabCapability.BINDING,
+            RemoteCollabCapability.INLINE_ACTION_CALLBACK,
+            RemoteCollabCapability.HEALTH_CHECK
         )
     );
     private static final RemoteCollabService FALLBACK_INSTANCE =
@@ -367,14 +381,19 @@ public final class RemoteCollabService {
         JsonObject telegram = providers.has("telegram") && providers.get("telegram").isJsonObject()
             ? providers.getAsJsonObject("telegram").deepCopy()
             : new JsonObject();
+        JsonObject feishu = providers.has("feishu") && providers.get("feishu").isJsonObject()
+            ? providers.getAsJsonObject("feishu").deepCopy()
+            : new JsonObject();
 
         // 配置模型已经升级到 providers 树，但设置页桥接还处在兼容阶段，
         // 这里继续补出顶层 telegram 视图，避免前端在阶段 2~4 之间出现联调断层。
         telegram.addProperty("connectionStatus", getConnectionStatus());
         telegram.addProperty("currentInstanceReceivesUpdates", isCurrentInstanceReceivingUpdates());
         providers.add("telegram", telegram.deepCopy());
+        providers.add("feishu", feishu.deepCopy());
         config.add("providers", providers);
         config.add("telegram", telegram);
+        config.add("feishu", feishu);
         config.add("routingPolicy", buildRoutingPolicyView(config));
         config.add("providerOptions", buildProviderOptions(providers));
         return config;
@@ -480,6 +499,14 @@ public final class RemoteCollabService {
         return null;
     }
 
+    private RemoteFeishuOperationsProvider getRegisteredFeishuOperationsProvider() {
+        RemoteCollabProvider provider = providerRegistry.getProvider("feishu");
+        if (provider instanceof RemoteFeishuOperationsProvider feishuProvider) {
+            return feishuProvider;
+        }
+        return null;
+    }
+
     /**
      * ?? Telegram ????? provider ??? registry?
      * ??????????????????????????????????? provider ???
@@ -506,6 +533,9 @@ public final class RemoteCollabService {
         if (providerConfigs.has("gotify_web") && providerConfigs.get("gotify_web").isJsonObject()) {
             ensureGotifyProviderRegistered(settingsService);
         }
+        if (providerConfigs.has("feishu") && providerConfigs.get("feishu").isJsonObject()) {
+            ensureFeishuProviderRegistered(settingsService);
+        }
     }
 
     private void ensureGotifyProviderRegistered(CodemossSettingsService settingsService) {
@@ -513,6 +543,43 @@ public final class RemoteCollabService {
             return;
         }
         providerRegistry.register(new GotifyWebRemoteCollabProvider(settingsService));
+    }
+
+    private void ensureFeishuProviderRegistered(CodemossSettingsService settingsService) {
+        if (providerRegistry.getProvider("feishu") != null) {
+            return;
+        }
+        providerRegistry.register(new FeishuRemoteCollabProvider(settingsService));
+    }
+
+    public JsonObject startFeishuBinding(CodemossSettingsService settingsService) throws IOException {
+        ensureFeishuProviderRegistered(settingsService);
+        RemoteFeishuOperationsProvider feishuProvider = getRegisteredFeishuOperationsProvider();
+        if (feishuProvider == null) {
+            throw new IllegalStateException("Feishu provider is not registered");
+        }
+        return feishuProvider.startBinding(settingsService);
+    }
+
+    public JsonObject healthCheckFeishu(CodemossSettingsService settingsService) throws IOException {
+        ensureFeishuProviderRegistered(settingsService);
+        RemoteFeishuOperationsProvider feishuProvider = getRegisteredFeishuOperationsProvider();
+        if (feishuProvider == null) {
+            throw new IllegalStateException("Feishu provider is not registered");
+        }
+        return feishuProvider.healthCheck(settingsService);
+    }
+
+    public void sendFeishuTestMessage(CodemossSettingsService settingsService, String message) throws IOException {
+        String text = message == null || message.trim().isEmpty()
+            ? "CC GUI Feishu test message"
+            : message.trim();
+        ensureFeishuProviderRegistered(settingsService);
+        RemoteFeishuOperationsProvider feishuProvider = getRegisteredFeishuOperationsProvider();
+        if (feishuProvider == null) {
+            throw new IllegalStateException("Feishu provider is not registered");
+        }
+        feishuProvider.sendTestMessage(settingsService, text);
     }
 
     private String getProviderId(RemoteCollabProvider provider) {
@@ -576,6 +643,7 @@ public final class RemoteCollabService {
         Map<String, JsonObject> optionMap = new LinkedHashMap<>();
         optionMap.put("telegram", createProviderOption(TELEGRAM_PROVIDER_DESCRIPTOR, providerConfigs, null));
         optionMap.put("gotify_web", createProviderOption(GOTIFY_WEB_PROVIDER_DESCRIPTOR, providerConfigs, null));
+        optionMap.put("feishu", createProviderOption(FEISHU_PROVIDER_DESCRIPTOR, providerConfigs, null));
 
         for (RemoteCollabProvider provider : providerRegistry.getProviders()) {
             RemoteCollabProviderDescriptor descriptor = provider.getDescriptor();

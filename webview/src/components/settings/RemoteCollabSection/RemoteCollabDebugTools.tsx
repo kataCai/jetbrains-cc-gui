@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import RemoteDebugSection from '../RemoteDebugSection';
 import type {
+  FeishuRemoteCollabConfig,
   GotifyWebRemoteCollabConfig,
   RemoteCollabDebugSnapshot,
   RemoteCollabProviderOperationResult,
@@ -15,6 +16,7 @@ interface RemoteCollabDebugToolsProps {
   remoteCollabProviderOperationResult: RemoteCollabProviderOperationResult | null;
   telegramConfig: TelegramRemoteCollabConfig;
   gotifyConfig: GotifyWebRemoteCollabConfig;
+  feishuConfig: FeishuRemoteCollabConfig;
   onDebugEnabledChange: (enabled: boolean) => void;
   onStartTelegramBinding: () => void;
   onSendRemoteTestMessage: (message: string) => void;
@@ -34,6 +36,7 @@ const RemoteCollabDebugTools = ({
   remoteCollabProviderOperationResult,
   telegramConfig,
   gotifyConfig,
+  feishuConfig,
   onDebugEnabledChange,
   onStartTelegramBinding,
   onSendRemoteTestMessage,
@@ -79,6 +82,7 @@ const RemoteCollabDebugTools = ({
             providerOperationResult={remoteCollabProviderOperationResult}
             telegramConfig={telegramConfig}
             gotifyConfig={gotifyConfig}
+            feishuConfig={feishuConfig}
             activeProviderId={activeProviderId}
             onStartTelegramBinding={onStartTelegramBinding}
             onSendRemoteTestMessage={onSendRemoteTestMessage}

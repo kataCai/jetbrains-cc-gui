@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
+  FeishuRemoteCollabConfig,
   GotifyWebRemoteCollabConfig,
   RemoteCollabDebugSnapshot,
   RemoteCollabProviderOperationResult,
@@ -8,6 +9,7 @@ import type {
   TelegramRemoteCollabConfig,
 } from '../hooks/useRemoteCollabSettings';
 import RemoteCollabDebugTools from './RemoteCollabDebugTools';
+import FeishuProviderDetail from './FeishuProviderDetail';
 import GotifyWebProviderDetail from './GotifyWebProviderDetail';
 import TelegramProviderDetail from './TelegramProviderDetail';
 import styles from './style.module.less';
@@ -19,9 +21,11 @@ interface RemoteCollabProviderDetailViewProps {
   remoteCollabProviderOperationResult: RemoteCollabProviderOperationResult | null;
   telegramDraft: TelegramRemoteCollabConfig;
   gotifyDraft: GotifyWebRemoteCollabConfig;
+  feishuDraft: FeishuRemoteCollabConfig;
   testMessage: string;
   setTelegramDraft: Dispatch<SetStateAction<TelegramRemoteCollabConfig>>;
   setGotifyDraft: Dispatch<SetStateAction<GotifyWebRemoteCollabConfig>>;
+  setFeishuDraft: Dispatch<SetStateAction<FeishuRemoteCollabConfig>>;
   setTestMessage: Dispatch<SetStateAction<string>>;
   onBack: () => void;
   onSaveRemoteCollabProviderConfig: (providerId: string, config: unknown) => void;
@@ -46,9 +50,11 @@ const RemoteCollabProviderDetailView = ({
   remoteCollabProviderOperationResult,
   telegramDraft,
   gotifyDraft,
+  feishuDraft,
   testMessage,
   setTelegramDraft,
   setGotifyDraft,
+  setFeishuDraft,
   setTestMessage,
   onBack,
   onSaveRemoteCollabProviderConfig,
@@ -62,6 +68,7 @@ const RemoteCollabProviderDetailView = ({
 }: RemoteCollabProviderDetailViewProps) => {
   const { t } = useTranslation();
   const isTelegramProvider = activeProvider.providerId === 'telegram';
+  const isFeishuProvider = activeProvider.providerId === 'feishu';
 
   return (
     <div className={styles.detailLayout}>
@@ -104,6 +111,13 @@ const RemoteCollabProviderDetailView = ({
           onStartTelegramBinding={onStartTelegramBinding}
           onSendRemoteTestMessage={onSendRemoteTestMessage}
         />
+      ) : isFeishuProvider ? (
+        <FeishuProviderDetail
+          feishuDraft={feishuDraft}
+          setFeishuDraft={setFeishuDraft}
+          onSaveRemoteCollabProviderConfig={onSaveRemoteCollabProviderConfig}
+          onRunRemoteCollabProviderAction={onRunRemoteCollabProviderAction}
+        />
       ) : (
         <GotifyWebProviderDetail
           gotifyDraft={gotifyDraft}
@@ -119,6 +133,7 @@ const RemoteCollabProviderDetailView = ({
         remoteCollabProviderOperationResult={remoteCollabProviderOperationResult}
         telegramConfig={telegramDraft}
         gotifyConfig={gotifyDraft}
+        feishuConfig={feishuDraft}
         onDebugEnabledChange={onDebugEnabledChange}
         onStartTelegramBinding={onStartTelegramBinding}
         onSendRemoteTestMessage={onSendRemoteTestMessage}

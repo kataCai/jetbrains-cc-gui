@@ -52,6 +52,7 @@ public class SettingsHandlerRemoteCollabTest {
         assertNotNull(call);
         JsonObject payload = gson.fromJson(call.payload, JsonObject.class);
         assertTrue(payload.has("telegram"));
+        assertTrue(payload.has("feishu"));
         assertTrue(payload.has("providers"));
         assertTrue(payload.has("debug"));
         assertEquals(false, payload.get("enabled").getAsBoolean());
@@ -110,6 +111,29 @@ public class SettingsHandlerRemoteCollabTest {
         assertTrue(gotifyConfig.get("enabled").getAsBoolean());
         assertEquals("https://gotify.example", gotifyConfig.get("serverUrl").getAsString());
         assertEquals(1, gotifyConfig.get("resultPollIntervalSeconds").getAsInt());
+        assertNotNull(jsCallback.findCall("window.updateRemoteCollabConfig"));
+    }
+
+    @Test
+    public void shouldPersistFeishuProviderConfigFromGenericBridgeMessage() throws Exception {
+        Path tempHome = Files.createTempDirectory("settings-handler-feishu-config-home");
+        useTemporaryHomeDirectory(tempHome);
+
+        CodemossSettingsService settingsService = new CodemossSettingsService();
+        CapturingJsCallback jsCallback = new CapturingJsCallback();
+        HandlerContext context = new HandlerContext(null, null, null, settingsService, jsCallback);
+        SettingsHandler handler = new SettingsHandler(context, null);
+
+        assertTrue(handler.handle(
+            "save_remote_collab_provider_config",
+            "{\"providerId\":\"feishu\",\"config\":{\"enabled\":true,\"appId\":\"cli_test\",\"appSecret\":\"secret_test\",\"eventMode\":\"long_poll\"}}"
+        ));
+
+        JsonObject feishuConfig = settingsService.getRemoteCollabProviderConfig("feishu");
+        assertTrue(feishuConfig.get("enabled").getAsBoolean());
+        assertEquals("cli_test", feishuConfig.get("appId").getAsString());
+        assertEquals("secret_test", feishuConfig.get("appSecret").getAsString());
+        assertEquals("long_poll", feishuConfig.get("eventMode").getAsString());
         assertNotNull(jsCallback.findCall("window.updateRemoteCollabConfig"));
     }
 

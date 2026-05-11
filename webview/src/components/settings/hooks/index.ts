@@ -60,6 +60,7 @@ export type {
   RemoteCollabRoutingPolicy,
   RemoteCollabProviderOption,
   RemoteCollabProviderOperationResult,
+  FeishuRemoteCollabConfig,
   GotifyWebRemoteCollabConfig,
   TelegramRemoteCollabConfig,
   UseRemoteCollabSettingsReturn,
