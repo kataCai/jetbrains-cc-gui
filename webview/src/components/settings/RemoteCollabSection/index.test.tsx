@@ -9,6 +9,16 @@ import type {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, string>) => {
+      const translations: Record<string, string> = {
+        'settings.remoteCollab.gotifyWebDescription': '通过 Gotify 通知和 Web 工作台进行远程协作。',
+        'settings.remoteCollab.feishuDescription': '通过飞书机器人私聊完成远程通知和审批。',
+        'settings.remoteCollab.feishuConfig': '飞书设置',
+        'settings.remoteCollab.saveFeishu': '保存飞书设置',
+        'settings.remoteCollab.startFeishuBinding': '开始飞书绑定',
+      };
+      if (translations[key]) {
+        return translations[key];
+      }
       const template = options?.defaultValue ?? key;
       return typeof template === 'string'
         ? template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => options?.[name] ?? '')
@@ -195,6 +205,62 @@ describe('RemoteCollabSection', () => {
     expect(screen.queryByText('telegram, gotify_web')).toBeNull();
   });
 
+  it('renders localized descriptions for red-box gotify and feishu providers in hub and detail views', () => {
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={createConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('通过 Gotify 通知和 Web 工作台进行远程协作。')).toBeTruthy();
+    expect(screen.getByText('通过飞书机器人私聊完成远程通知和审批。')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Gotify + Web settings' }));
+    expect(screen.getByText('通过 Gotify 通知和 Web 工作台进行远程协作。')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to providers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Feishu settings' }));
+    expect(screen.getByText('通过飞书机器人私聊完成远程通知和审批。')).toBeTruthy();
+  });
+
+  it('renders localized feishu detail title and action buttons for red-box items', () => {
+    render(
+      <RemoteCollabSection
+        remoteCollabConfig={createConfig()}
+        remoteCollabDebugSnapshot={createDebugSnapshot()}
+        remoteCollabProviderOperationResult={null}
+        onEnabledChange={vi.fn()}
+        onSaveRemoteCollabRoutingPolicy={vi.fn()}
+        onSaveRemoteCollabProviderConfig={vi.fn()}
+        onSaveTelegramConfig={vi.fn()}
+        onStartTelegramBinding={vi.fn()}
+        onSendRemoteTestMessage={vi.fn()}
+        onTestRemoteCollabProvider={vi.fn()}
+        onRunRemoteCollabProviderAction={vi.fn()}
+        onDebugEnabledChange={vi.fn()}
+        onRefreshDebugSnapshot={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Feishu settings' }));
+
+    expect(screen.getByRole('heading', { name: '飞书设置' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '保存飞书设置' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '开始飞书绑定' })).toBeTruthy();
+  });
+
   it('passes edited telegram settings and actions back to the caller', () => {
     const onSaveTelegramConfig = vi.fn();
     const onStartTelegramBinding = vi.fn();
@@ -367,7 +433,7 @@ describe('RemoteCollabSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Feishu settings' }));
 
-    expect(screen.getByRole('heading', { name: 'Feishu Settings' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '飞书设置' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Connection Status' })).toBeTruthy();
     expect(screen.getAllByText((content) => content.includes('invalid app secret')).length).toBeGreaterThan(0);
     expect(screen.getByDisplayValue('cli_test')).toBeTruthy();
@@ -379,8 +445,8 @@ describe('RemoteCollabSection', () => {
     fireEvent.change(screen.getByPlaceholderText('cli_xxx'), {
       target: { value: 'cli_new' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save Feishu settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Feishu binding' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存飞书设置' }));
+    fireEvent.click(screen.getByRole('button', { name: '开始飞书绑定' }));
     fireEvent.click(screen.getByRole('button', { name: 'Run Feishu health check' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send Feishu test message' }));
     fireEvent.change(screen.getByPlaceholderText('ou_xxx'), {

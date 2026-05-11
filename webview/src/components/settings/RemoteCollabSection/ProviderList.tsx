@@ -21,12 +21,24 @@ const ProviderList = ({
 }: ProviderListProps) => {
   const { t } = useTranslation();
 
+  // 仅对已标记缺失国际化的 provider 描述做前端兜底，避免后端返回旧英文时列表页仍然漏翻译。
+  const getLocalizedProviderDescription = (providerId: string, fallback: string): string => {
+    if (providerId === 'gotify_web') {
+      return t('settings.remoteCollab.gotifyWebDescription', { defaultValue: fallback });
+    }
+    if (providerId === 'feishu') {
+      return t('settings.remoteCollab.feishuDescription', { defaultValue: fallback });
+    }
+    return fallback;
+  };
+
   return (
     <div className={styles.providerGrid}>
       {providerOptions.map((provider) => {
         const isInteractiveRoute = provider.providerId === interactiveProviderId;
         const isNotifyRoute = notifyProviderIds.includes(provider.providerId);
         const providerDisplayName = provider.displayName || provider.providerId;
+        const providerDescription = getLocalizedProviderDescription(provider.providerId, provider.description || '-');
 
         return (
           <div key={provider.providerId} className={styles.providerCard}>
@@ -50,7 +62,7 @@ const ProviderList = ({
               </div>
               <span className={styles.providerStatus}>{provider.connectionStatus || 'disabled'}</span>
             </div>
-            <div className={styles.providerDesc}>{provider.description || '-'}</div>
+            <div className={styles.providerDesc}>{providerDescription}</div>
             <div className={styles.providerMeta}>
               <span>{provider.providerId}</span>
               <span>

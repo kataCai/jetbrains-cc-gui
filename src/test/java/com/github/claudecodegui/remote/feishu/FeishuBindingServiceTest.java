@@ -24,6 +24,7 @@ public class FeishuBindingServiceTest {
         JsonObject saved = settingsService.getRemoteCollabProviderConfig("feishu");
         assertEquals("bind-token-1", result.get("bindingToken").getAsString());
         assertEquals("/cc-bind bind-token-1", result.get("bindingCommand").getAsString());
+        assertEquals("请向飞书机器人发送绑定命令以完成绑定。", result.get("message").getAsString());
         assertEquals("bind-token-1", saved.get("bindingToken").getAsString());
         assertEquals(301_000L, saved.get("bindingTokenExpiresAt").getAsLong());
         assertEquals("connecting", saved.get("connectionStatus").getAsString());

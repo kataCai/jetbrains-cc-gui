@@ -180,7 +180,7 @@ const createDefaultProviderOptions = (
   {
     providerId: GOTIFY_WEB_PROVIDER_ID,
     displayName: 'Gotify + Web',
-    description: 'Workspace based collaboration',
+    description: 'Remote collaboration via Gotify notifications and web workspace.',
     capabilities: ['HEALTH_CHECK', 'PENDING_REQUEST_PUSH', 'RESULT_POLLING', 'TASK_EVENT_PUSH', 'WORKSPACE_LINK'],
     registered: false,
     enabled: gotifyWeb.enabled,
@@ -190,7 +190,7 @@ const createDefaultProviderOptions = (
   {
     providerId: FEISHU_PROVIDER_ID,
     displayName: 'Feishu',
-    description: 'Feishu bot direct messages',
+    description: 'Use Feishu bot direct messages for remote notifications and approvals.',
     capabilities: ['BINDING', 'HEALTH_CHECK', 'INLINE_ACTION_CALLBACK', 'PENDING_REQUEST_PUSH', 'TASK_EVENT_PUSH'],
     registered: false,
     enabled: feishu.enabled,

@@ -69,6 +69,15 @@ const RemoteCollabProviderDetailView = ({
   const { t } = useTranslation();
   const isTelegramProvider = activeProvider.providerId === 'telegram';
   const isFeishuProvider = activeProvider.providerId === 'feishu';
+  const providerDescription = activeProvider.providerId === 'gotify_web'
+    ? t('settings.remoteCollab.gotifyWebDescription', {
+      defaultValue: activeProvider.description || '-',
+    })
+    : activeProvider.providerId === 'feishu'
+      ? t('settings.remoteCollab.feishuDescription', {
+        defaultValue: activeProvider.description || '-',
+      })
+      : (activeProvider.description || '-');
 
   return (
     <div className={styles.detailLayout}>
@@ -89,7 +98,7 @@ const RemoteCollabProviderDetailView = ({
           <h4 className={styles.detailTitle}>
             {activeProvider.displayName || activeProvider.providerId}
           </h4>
-          <p className={styles.sectionDesc}>{activeProvider.description || '-'}</p>
+          <p className={styles.sectionDesc}>{providerDescription}</p>
           <div className={styles.detailMetaRow}>
             <span className={styles.providerStatusPill}>{activeProvider.connectionStatus || 'disabled'}</span>
             {activeProvider.capabilities.map((capability) => (

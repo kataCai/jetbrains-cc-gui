@@ -45,7 +45,8 @@ public class FeishuBindingService {
         JsonObject result = new JsonObject();
         result.addProperty("bindingToken", bindingToken);
         result.addProperty("bindingCommand", "/cc-bind " + bindingToken);
-        result.addProperty("message", "Send the binding command to the Feishu bot to complete binding.");
+        // 当前弹窗直接展示后端返回文案，这里改为中文以匹配中文环境下的绑定引导。
+        result.addProperty("message", "请向飞书机器人发送绑定命令以完成绑定。");
         return result;
     }
 
