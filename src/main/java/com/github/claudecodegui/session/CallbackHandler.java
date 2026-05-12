@@ -148,4 +148,15 @@ public class CallbackHandler {
             callback.onUserMessageUuidPatched(content, uuid);
         }
     }
+
+    /**
+     * 通知会话进入自动重试阶段。
+     *
+     * @param reason 重试原因或摘要
+     */
+    public void notifyRetrying(String reason) {
+        if (callback != null) {
+            callback.onRetrying(reason);
+        }
+    }
 }

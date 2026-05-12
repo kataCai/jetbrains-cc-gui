@@ -575,7 +575,12 @@ public class ClaudeChatWindow {
                 },
                 permissionHandler,
                 () -> slashCommandsFetched,
-                this::onStreamEnded
+                this::onStreamEnded,
+                reason -> {
+                    if (handlerContext != null && handlerContext.getSessionRetryingCallback() != null) {
+                        handlerContext.getSessionRetryingCallback().accept(reason);
+                    }
+                }
         ) {
             @Override
             public void onSessionIdReceived(String newSessionId) {

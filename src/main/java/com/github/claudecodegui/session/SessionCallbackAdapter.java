@@ -10,6 +10,7 @@ import com.intellij.openapi.vfs.VirtualFileManager;
 
 import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 /**
  * Named implementation of ClaudeSession.SessionCallback.
@@ -34,6 +35,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
     private final PermissionHandler permissionHandler;
     private final BooleanSupplier slashCommandsFetchedSupplier;
     private final Runnable streamEndCallback;
+    private final Consumer<String> retryingCallback;
     private final StreamDeltaThrottler contentDeltaThrottler;
     private final StreamDeltaThrottler thinkingDeltaThrottler;
     private volatile boolean active = true;
@@ -43,13 +45,15 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
             JsTarget jsTarget,
             PermissionHandler permissionHandler,
             BooleanSupplier slashCommandsFetchedSupplier,
-            Runnable streamEndCallback
+            Runnable streamEndCallback,
+            Consumer<String> retryingCallback
     ) {
         this.streamCoalescer = streamCoalescer;
         this.jsTarget = jsTarget;
         this.permissionHandler = permissionHandler;
         this.slashCommandsFetchedSupplier = slashCommandsFetchedSupplier;
         this.streamEndCallback = streamEndCallback;
+        this.retryingCallback = retryingCallback;
         this.contentDeltaThrottler = new StreamDeltaThrottler(
                 DELTA_THROTTLE_MS,
                 delta -> {
@@ -306,6 +310,16 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
             return;
         }
         jsTarget.callJavaScript("patchMessageUuid", JsUtils.escapeJs(content), JsUtils.escapeJs(uuid));
+    }
+
+    @Override
+    public void onRetrying(String reason) {
+        if (isInactive()) {
+            return;
+        }
+        if (retryingCallback != null) {
+            retryingCallback.accept(reason);
+        }
     }
 
     /**

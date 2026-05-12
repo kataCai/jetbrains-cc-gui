@@ -75,6 +75,7 @@ public class SessionSendService {
         state.setError(null);
         state.setBusy(true);
         state.setLoading(true);
+        state.clearLastRecoveryMetadata();
         ClaudeNotifier.setWaiting(project);
         callbackFacade.notifyStateChange(state.isBusy(), state.isLoading(), state.getError());
     }
@@ -203,6 +204,13 @@ public class SessionSendService {
                 state.getReasoningEffort(),
                 handler
         ).thenCompose(result -> {
+            if (result != null) {
+                state.setLastRecoveryMetadata(
+                    result.recovered,
+                    result.recoveryCategory,
+                    result.recoveryAction
+                );
+            }
             // Codex 旧链路里 callback.onError 不一定会让 future 异常结束，
             // 因此这里必须显式根据 result.success 再做一次兜底判定，
             // 避免上层把“实际失败/取消”误当成正常完成。

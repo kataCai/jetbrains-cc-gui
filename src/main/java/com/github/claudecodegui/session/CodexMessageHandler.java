@@ -65,6 +65,10 @@ public class CodexMessageHandler implements MessageCallback {
             if (content != null && !content.trim().isEmpty()) {
                 callbackHandler.notifyStatusMessage(content);
             }
+        } else if ("retrying".equals(type)) {
+            if (content != null && !content.trim().isEmpty()) {
+                callbackHandler.notifyRetrying(content);
+            }
         } else if ("message_end".equals(type)) {
             handleMessageEnd();
         } else {

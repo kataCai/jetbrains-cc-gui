@@ -283,7 +283,9 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(new SkillHandler(handlerContext));
         messageDispatcher.registerHandler(new FileHandler(handlerContext));
         messageDispatcher.registerHandler(new SettingsHandler(handlerContext, taskReminderDispatcher));
-        messageDispatcher.registerHandler(new SessionHandler(handlerContext, taskStateService, taskReminderDispatcher));
+        SessionHandler sessionHandler = new SessionHandler(handlerContext, taskStateService, taskReminderDispatcher);
+        handlerContext.setSessionRetryingCallback(sessionHandler::notifyRetrying);
+        messageDispatcher.registerHandler(sessionHandler);
         messageDispatcher.registerHandler(new FileExportHandler(handlerContext));
         messageDispatcher.registerHandler(new DiffHandler(handlerContext));
         messageDispatcher.registerHandler(new PromptEnhancerHandler(handlerContext));

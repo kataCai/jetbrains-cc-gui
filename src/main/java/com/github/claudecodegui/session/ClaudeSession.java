@@ -120,6 +120,16 @@ public class ClaudeSession {
 
         default void onUserMessageUuidPatched(String content, String uuid) {
         }
+
+        /**
+         * 通知底层 provider 已进入自动重试阶段。
+         * 该回调只承载轻量文本原因，便于上层把 RETRYING 状态同步到任务提醒链，
+         * 避免继续把“重试中”压平为普通 status 文案。
+         *
+         * @param reason 重试原因或摘要
+         */
+        default void onRetrying(String reason) {
+        }
     }
 
     public ClaudeSession(Project project, ClaudeSDKBridge claudeSDKBridge, CodexSDKBridge codexSDKBridge) {

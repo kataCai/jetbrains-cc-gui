@@ -64,6 +64,9 @@ public class SessionState {
     private volatile String provider = "claude";
     // Codex reasoning effort (thinking depth)
     private volatile String reasoningEffort = "medium";
+    private volatile boolean lastRecovered = false;
+    private volatile String lastRecoveryCategory = null;
+    private volatile String lastRecoveryAction = null;
 
     // Slash commands — volatile for cross-thread visibility (same reason as permissionMode/model/provider)
     private volatile List<String> slashCommands = new ArrayList<>();
@@ -126,6 +129,35 @@ public class SessionState {
 
     public String getReasoningEffort() {
         return reasoningEffort;
+    }
+
+    /**
+     * 返回上一轮 provider 执行是否命中过恢复链路。
+     * 该标记只用于一次 send 生命周期的收尾判断，读取后应尽快由上层清理，
+     * 避免把上一轮恢复结果误带入下一轮任务状态收口。
+     *
+     * @return true 表示上一轮执行属于“恢复后完成”
+     */
+    public boolean isLastRecovered() {
+        return lastRecovered;
+    }
+
+    /**
+     * 返回上一轮恢复链路命中的失败分类。
+     *
+     * @return 恢复分类；若上一轮未命中恢复链路则可能为 null
+     */
+    public String getLastRecoveryCategory() {
+        return lastRecoveryCategory;
+    }
+
+    /**
+     * 返回上一轮恢复链路采取的动作。
+     *
+     * @return 恢复动作；若上一轮未命中恢复链路则可能为 null
+     */
+    public String getLastRecoveryAction() {
+        return lastRecoveryAction;
     }
 
     public String getRuntimeSessionEpoch() {
@@ -193,6 +225,30 @@ public class SessionState {
 
     public void setReasoningEffort(String reasoningEffort) {
         this.reasoningEffort = reasoningEffort;
+    }
+
+    /**
+     * 记录上一轮 send 的恢复结果元信息。
+     * 仅保存与任务状态收口直接相关的最小字段，避免在 SessionState 中堆积过多 provider 细节。
+     *
+     * @param recovered 是否命中过恢复完成路径
+     * @param recoveryCategory 恢复分类
+     * @param recoveryAction 恢复动作
+     */
+    public void setLastRecoveryMetadata(boolean recovered, String recoveryCategory, String recoveryAction) {
+        this.lastRecovered = recovered;
+        this.lastRecoveryCategory = recoveryCategory;
+        this.lastRecoveryAction = recoveryAction;
+    }
+
+    /**
+     * 清理上一轮 send 留下的恢复元信息。
+     * 新一轮发送开始前和恢复状态被消费后都应调用，避免跨轮串味。
+     */
+    public void clearLastRecoveryMetadata() {
+        this.lastRecovered = false;
+        this.lastRecoveryCategory = null;
+        this.lastRecoveryAction = null;
     }
 
     public void setRuntimeSessionEpoch(String runtimeSessionEpoch) {

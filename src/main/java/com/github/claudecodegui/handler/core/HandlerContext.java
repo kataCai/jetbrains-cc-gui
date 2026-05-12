@@ -8,6 +8,8 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.jcef.JBCefBrowser;
 
+import java.util.function.Consumer;
+
 /**
  * Handler context.
  * Provides all shared resources and callbacks needed by handlers.
@@ -28,6 +30,7 @@ public class HandlerContext {
     private volatile JBCefBrowser browser;
     private volatile String currentModel = DEFAULT_MODEL;
     private volatile String currentProvider = DEFAULT_PROVIDER;
+    private volatile Consumer<String> sessionRetryingCallback;
     private volatile boolean disposed = false;
 
     /**
@@ -85,6 +88,15 @@ public class HandlerContext {
         return currentProvider;
     }
 
+    /**
+     * 返回会话层透传重试信号时要调用的桥接回调。
+     *
+     * @return 重试信号消费回调；未配置时返回 null
+     */
+    public Consumer<String> getSessionRetryingCallback() {
+        return sessionRetryingCallback;
+    }
+
     public boolean isDisposed() {
         return disposed;
     }
@@ -104,6 +116,16 @@ public class HandlerContext {
 
     public void setCurrentProvider(String currentProvider) {
         this.currentProvider = currentProvider;
+    }
+
+    /**
+     * 设置会话重试信号的桥接回调。
+     *
+     * @param sessionRetryingCallback 接收 provider 重试摘要的回调
+     * @return 无返回值
+     */
+    public void setSessionRetryingCallback(Consumer<String> sessionRetryingCallback) {
+        this.sessionRetryingCallback = sessionRetryingCallback;
     }
 
     public void setDisposed(boolean disposed) {

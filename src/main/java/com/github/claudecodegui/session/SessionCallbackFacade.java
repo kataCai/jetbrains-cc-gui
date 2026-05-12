@@ -89,4 +89,13 @@ public class SessionCallbackFacade {
     public void notifyUserMessageUuidPatched(String content, String uuid) {
         callbackHandler.notifyUserMessageUuidPatched(content, uuid);
     }
+
+    /**
+     * 透传 provider 进入自动重试阶段的生命周期信号。
+     *
+     * @param reason 重试原因或摘要
+     */
+    public void notifyRetrying(String reason) {
+        callbackHandler.notifyRetrying(reason);
+    }
 }

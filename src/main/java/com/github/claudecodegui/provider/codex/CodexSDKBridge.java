@@ -132,6 +132,26 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 assistantContent.append(content);
             }
             callback.onMessage("content", content);
+        } else if (line.startsWith("[RETRYING]")) {
+            String jsonStr = line.substring("[RETRYING]".length()).trim();
+            String retryingMessage = jsonStr;
+            try {
+                JsonObject obj = gson.fromJson(jsonStr, JsonObject.class);
+                String category = obj.has("category") && !obj.get("category").isJsonNull()
+                        ? obj.get("category").getAsString()
+                        : "retrying";
+                String retryAttempt = obj.has("retryAttempt") && !obj.get("retryAttempt").isJsonNull()
+                        ? obj.get("retryAttempt").getAsString()
+                        : "";
+                String delayMs = obj.has("delayMs") && !obj.get("delayMs").isJsonNull()
+                        ? obj.get("delayMs").getAsString()
+                        : "";
+                retryingMessage = category
+                        + (!retryAttempt.isEmpty() ? " | attempt=" + retryAttempt : "")
+                        + (!delayMs.isEmpty() ? " | delayMs=" + delayMs : "");
+            } catch (Exception ignored) {
+            }
+            callback.onMessage("retrying", retryingMessage);
         } else if (line.startsWith("[SEND_ERROR]")) {
             String jsonStr = line.substring("[SEND_ERROR]".length()).trim();
             String errorMessage = jsonStr;
@@ -476,6 +496,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
                     if (wasInterrupted) {
                         result.success = false;
                         result.error = "User interrupted";
+                        result.recoveryCategory = "user_interrupted";
+                        result.recoveryAction = "mark_cancelled";
                         callback.onComplete(result);
                     } else if (!hadSendError[0]) {
                         result.success = exitCode == 0;

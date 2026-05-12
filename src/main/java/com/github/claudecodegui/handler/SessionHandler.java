@@ -481,11 +481,41 @@ public class SessionHandler extends BaseMessageHandler {
         }
     }
 
-    private void notifySendCompleted() {
+    /**
+     * 接收 provider 透传的自动重试中间态，并同步写入统一任务状态链。
+     * 当前只保留轻量级原因摘要，优先保证 RETRYING 能被提醒系统、状态栏和远程协作消费。
+     *
+     * @param reason provider 侧给出的重试原因或重试摘要
+     * @return 无返回值
+     */
+    public void notifyRetrying(String reason) {
         if (taskStateService != null) {
-            taskStateService.onSendCompleted(getSessionId());
+            taskStateService.onRetrying(getSessionId(), reason);
             dispatchTaskReminder(false);
             publishRemoteTaskEvent(null);
+        }
+    }
+
+    /**
+     * 收口一次 send 的成功完成状态。
+     * 如果 provider 在成功结果里显式标记了“恢复后完成”，这里会先写入 RECOVERED，
+     * 再进入 COMPLETED，避免把恢复场景再次压平成普通成功。
+     */
+    private void notifySendCompleted() {
+        if (taskStateService != null) {
+            String sessionId = getSessionId();
+            ClaudeSession session = context.getSession();
+            if (session != null && session.getState().isLastRecovered()) {
+                String recoveryReason = buildRecoveryReason(session);
+                taskStateService.onRecovered(sessionId, recoveryReason);
+                dispatchTaskReminder(false);
+            }
+            taskStateService.onSendCompleted(sessionId);
+            dispatchTaskReminder(false);
+            publishRemoteTaskEvent(null);
+            if (session != null) {
+                session.getState().clearLastRecoveryMetadata();
+            }
         }
     }
 
@@ -494,7 +524,11 @@ public class SessionHandler extends BaseMessageHandler {
             // Codex 恢复链路会把“可取消”“可恢复”的场景编码进异常文本。
             // 这里先做最小解析，把状态机从“一律最终失败”升级为可区分取消/恢复/失败。
             String reason = throwable != null ? throwable.getMessage() : "send_failed";
-            if (reason != null && reason.contains("recoveryAction=mark_cancelled")) {
+            if (reason != null && (
+                reason.contains("recoveryAction=mark_cancelled")
+                    || reason.contains("User interrupted")
+                    || reason.contains("interrupt_session")
+            )) {
                 taskStateService.onCancelled(getSessionId(), reason);
             } else if (reason != null && reason.contains("recovered=true")) {
                 taskStateService.onRecovered(getSessionId(), reason);
@@ -506,6 +540,24 @@ public class SessionHandler extends BaseMessageHandler {
             dispatchTaskReminder(false);
             publishRemoteTaskEvent(null);
         }
+    }
+
+    /**
+     * 把 provider 成功结果中的恢复元信息压缩成任务状态可读原因。
+     * 这里只暴露分类和动作两个字段，避免把 Node 侧完整错误噪音再次回灌到提醒文案里。
+     */
+    private String buildRecoveryReason(ClaudeSession session) {
+        if (session == null) {
+            return "recovered";
+        }
+        String category = session.getState().getLastRecoveryCategory();
+        String action = session.getState().getLastRecoveryAction();
+        if ((category == null || category.trim().isEmpty()) && (action == null || action.trim().isEmpty())) {
+            return "recovered";
+        }
+        return "recovered"
+            + (category != null && !category.trim().isEmpty() ? " | category=" + category : "")
+            + (action != null && !action.trim().isEmpty() ? " | action=" + action : "");
     }
 
     private void dispatchTaskReminder(boolean approvalDialogOpen) {

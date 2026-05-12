@@ -147,6 +147,110 @@ public class SessionHandlerTaskReminderTest {
         }
     }
 
+    @Test
+    public void shouldEmitRecoveredBeforeCompletedWhenProviderMarksRecovered() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-recovered-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-recovered", projectDir.toString());
+            session.getState().setLastRecoveryMetadata(
+                true,
+                "runtime_terminated_after_success",
+                "promote_to_completed"
+            );
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            java.lang.reflect.Method method = SessionHandler.class.getDeclaredMethod("notifySendCompleted");
+            method.setAccessible(true);
+            method.invoke(handler);
+
+            assertEquals(TaskState.RECOVERED, dispatcher.states.get(0));
+            assertEquals(TaskState.COMPLETED, dispatcher.states.get(1));
+            assertTrue(dispatcher.reasons.get(0).contains("runtime_terminated_after_success"));
+            assertEquals(TaskState.COMPLETED, taskStateService.getCurrentSnapshot().getState());
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
+    @Test
+    public void shouldMarkCancelledWhenNotifySendFailedReceivesInterruptedError() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-cancelled-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-cancelled", projectDir.toString());
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            java.lang.reflect.Method method = SessionHandler.class.getDeclaredMethod("notifySendFailed", Throwable.class);
+            method.setAccessible(true);
+            method.invoke(handler, new RuntimeException("User interrupted"));
+
+            assertEquals(TaskState.CANCELLED, taskStateService.getCurrentSnapshot().getState());
+            assertEquals(TaskState.CANCELLED, dispatcher.states.get(0));
+            assertEquals("User interrupted", dispatcher.reasons.get(0));
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
+    @Test
+    public void shouldEmitRetryingStateWhenProviderSignalsRetrying() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-retrying-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-retrying", projectDir.toString());
+            session.getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "retry this"));
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            handler.notifyRetrying("provider_rate_limit | attempt=1 | delayMs=1200");
+
+            assertEquals(TaskState.RETRYING, taskStateService.getCurrentSnapshot().getState());
+            assertEquals(TaskState.RETRYING, dispatcher.states.get(0));
+            assertEquals("provider_rate_limit | attempt=1 | delayMs=1200", dispatcher.reasons.get(0));
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
     private static HandlerContext createContext(Path projectDir, ClaudeSession session) {
         HandlerContext context = new HandlerContext(
             createProject(projectDir),
@@ -223,6 +327,7 @@ public class SessionHandlerTaskReminderTest {
     private static class RecordingTaskReminderDispatcher extends TaskReminderDispatcher {
         private final CountDownLatch firstDispatchLatch = new CountDownLatch(1);
         private final List<TaskState> states = new ArrayList<>();
+        private final List<String> reasons = new ArrayList<>();
         private final List<String> latestUserMessagesAtDispatch = new ArrayList<>();
         private final List<String> preferredTaskSummaries = new ArrayList<>();
 
@@ -233,6 +338,7 @@ public class SessionHandlerTaskReminderTest {
         @Override
         public void dispatch(TaskStateSnapshot snapshot, boolean approvalDialogVisible) {
             states.add(snapshot.getState());
+            reasons.add(snapshot.getLatestEvent() != null ? snapshot.getLatestEvent().getReason() : null);
             latestUserMessagesAtDispatch.add(findLatestUserMessage(snapshot));
             firstDispatchLatch.countDown();
         }
@@ -240,6 +346,7 @@ public class SessionHandlerTaskReminderTest {
         @Override
         public void dispatch(TaskStateSnapshot snapshot, boolean approvalDialogVisible, String preferredTaskSummary) {
             states.add(snapshot.getState());
+            reasons.add(snapshot.getLatestEvent() != null ? snapshot.getLatestEvent().getReason() : null);
             latestUserMessagesAtDispatch.add(findLatestUserMessage(snapshot));
             preferredTaskSummaries.add(preferredTaskSummary);
             firstDispatchLatch.countDown();
