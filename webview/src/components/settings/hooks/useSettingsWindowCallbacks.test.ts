@@ -94,6 +94,14 @@ describe('useSettingsWindowCallbacks', () => {
         states: ['waiting_confirm', 'final_error', 'completed'],
         onlyWhenIdeUnfocused: true,
       },
+      // 旧配置升级后会自动补齐恢复策略，这里同步校验规范化结果。
+      recoveryPolicy: {
+        enabled: true,
+        recoverCompletedOnParseNoise: true,
+        retryTransientErrors: true,
+        maxAttempts: 2,
+        initialDelayMs: 1200,
+      },
     });
   });
 
@@ -126,6 +134,14 @@ describe('useSettingsWindowCallbacks', () => {
         enabled: false,
         states: ['waiting_confirm', 'final_error', 'completed'],
         onlyWhenIdeUnfocused: true,
+      },
+      // 兼容旧通知配置合并时，也需要保留恢复策略默认块，避免夹具缺字段。
+      recoveryPolicy: {
+        enabled: true,
+        recoverCompletedOnParseNoise: true,
+        retryTransientErrors: true,
+        maxAttempts: 2,
+        initialDelayMs: 1200,
       },
     };
     const nextConfig = setCallArg(prevConfig);

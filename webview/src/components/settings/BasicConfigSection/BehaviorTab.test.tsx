@@ -32,6 +32,14 @@ const defaultTaskReminderConfig: TaskReminderConfig = {
     states: ['waiting_confirm', 'final_error', 'completed'],
     onlyWhenIdeUnfocused: true,
   },
+  // 补齐恢复策略默认值，确保测试夹具覆盖新增配置字段并与运行时模型一致。
+  recoveryPolicy: {
+    enabled: true,
+    recoverCompletedOnParseNoise: true,
+    retryTransientErrors: true,
+    maxAttempts: 2,
+    initialDelayMs: 1200,
+  },
 };
 
 describe('BehaviorTab task reminder section', () => {
