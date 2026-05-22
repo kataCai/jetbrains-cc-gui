@@ -45,10 +45,6 @@ export function registerSessionAndSdkCallbacks(
     }
   };
 
-  window.updateSessionTitle = (title: string) => {
-    setCustomSessionTitle(title);
-  };
-
   window.addToast = (message, type) => {
     addToast(message, type as 'info' | 'success' | 'warning' | 'error' | undefined);
   };
@@ -128,12 +124,38 @@ export function registerSessionAndSdkCallbacks(
   // AI Title Callback
   // =========================================================================
 
-  window.updateSessionTitle = (sessionId: string, title: string) => {
-    if (!title || !title.trim() || !sessionId) return;
-    // Only apply the title if it matches the current session to prevent
-    // stale events from overwriting the wrong session's title.
-    if (currentSessionIdRef.current !== sessionId) return;
-    setCustomSessionTitle(title.trim());
-    updateHistoryTitle(sessionId, title.trim());
+  /**
+   * 统一兼容历史标题回放的两种前端调用签名。
+   * 1. 旧链路：`updateSessionTitle(title)`，仅在前端本地恢复标题，不做历史持久化回写。
+   * 2. 新链路：`updateSessionTitle(sessionId, title)`，要求 sessionId 与当前会话匹配，再同步标题与历史列表。
+   *
+   * @param sessionIdOrTitle 旧签名中的标题，或新签名中的 sessionId
+   * @param maybeTitle 新签名中的标题；旧签名场景下为空
+   * @return 无返回值
+   */
+  window.updateSessionTitle = (sessionIdOrTitle: string, maybeTitle?: string) => {
+    const hasExplicitSessionId = typeof maybeTitle === 'string';
+    const normalizedTitle = (hasExplicitSessionId ? maybeTitle : sessionIdOrTitle)?.trim();
+
+    if (!normalizedTitle) {
+      return;
+    }
+
+    if (!hasExplicitSessionId) {
+      // 兼容旧的一参回放链路：仅恢复当前前端标题状态，不触发历史标题持久化写回。
+      setCustomSessionTitle(normalizedTitle);
+      return;
+    }
+
+    const normalizedSessionId = sessionIdOrTitle?.trim();
+    if (!normalizedSessionId) {
+      return;
+    }
+    // 仅当事件对应当前会话时才接收，避免陈旧异步回放覆盖错误窗口。
+    if (currentSessionIdRef.current !== normalizedSessionId) {
+      return;
+    }
+    setCustomSessionTitle(normalizedTitle);
+    updateHistoryTitle(normalizedSessionId, normalizedTitle);
   };
 }

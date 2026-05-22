@@ -216,7 +216,7 @@ describe('useWindowCallbacks integration', () => {
     expect(opts.setCurrentSessionId).toHaveBeenCalledWith('new-session-123');
   });
 
-  it('updateSessionTitle writes restored custom title into frontend state', () => {
+  it('updateSessionTitle keeps backward compatibility for legacy single-argument title replay', () => {
     const opts = createOptions();
     renderHook(() => useWindowCallbacks(opts));
 
@@ -225,6 +225,34 @@ describe('useWindowCallbacks integration', () => {
     });
 
     expect(opts.setCustomSessionTitle).toHaveBeenCalledWith('中东局势怎样了');
+  });
+
+  it('updateSessionTitle updates matching current session when sessionId and title are provided', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'session-123' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      (window as any).updateSessionTitle?.('session-123', '同步github主线修改');
+    });
+
+    expect(opts.setCustomSessionTitle).toHaveBeenCalledWith('同步github主线修改');
+    expect(opts.updateHistoryTitle).toHaveBeenCalledWith('session-123', '同步github主线修改');
+  });
+
+  it('updateSessionTitle ignores mismatched sessionId in two-argument mode', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'session-current' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      (window as any).updateSessionTitle?.('session-other', '不应覆盖');
+    });
+
+    expect(opts.setCustomSessionTitle).not.toHaveBeenCalled();
+    expect(opts.updateHistoryTitle).not.toHaveBeenCalled();
   });
 
   // ===== updateMessages is blocked during transition =====

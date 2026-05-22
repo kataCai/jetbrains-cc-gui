@@ -348,7 +348,7 @@ const App = () => {
   } = useSessionManagement({
     messages,
     loading,
-    historyData: null,
+    historyData,
     currentSessionId,
     setHistoryData,
     setMessages,

@@ -395,13 +395,10 @@ public class SessionLifecycleManager {
         }
 
         try {
-            HandlerContext handlerContext = host.getHandlerContext();
-            if (handlerContext == null) {
+            String titlesJson = loadPersistedSessionTitlesJson();
+            if (titlesJson == null || titlesJson.trim().isEmpty()) {
                 return;
             }
-
-            NodeJsServiceCaller nodeJsServiceCaller = new NodeJsServiceCaller(handlerContext);
-            String titlesJson = nodeJsServiceCaller.callNodeJsTitlesService("loadTitles");
             JsonObject titles = new Gson().fromJson(titlesJson, JsonObject.class);
             if (titles == null || !titles.has(sessionId) || !titles.get(sessionId).isJsonObject()) {
                 return;
@@ -417,11 +414,34 @@ public class SessionLifecycleManager {
                 return;
             }
 
-            host.callJavaScript("updateSessionTitle", JsUtils.escapeJs(customTitle));
+            // 统一按 (sessionId, title) 两参形式回放，匹配前端新的标题同步契约；
+            // 避免恢复历史会话时因为旧的一参签名被覆盖而导致标题静默丢失。
+            host.callJavaScript(
+                    "updateSessionTitle",
+                    JsUtils.escapeJs(sessionId),
+                    JsUtils.escapeJs(customTitle)
+            );
             LOG.info("[HistoryTitleSync] Replayed restored session title to frontend. sessionId="
                     + sessionId + ", title=" + customTitle);
         } catch (Exception e) {
             LOG.warn("[HistoryTitleSync] Failed to replay restored session title: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 读取持久化的 session-titles.json 内容。
+     * 默认实现仍然走 NodeJsServiceCaller，单元测试可通过覆写该方法注入稳定测试数据，
+     * 从而把测试焦点限制在“标题回放契约”而不是外部 Node 子进程。
+     *
+     * @return titles JSON 字符串；无数据或上下文不可用时返回 null
+     * @throws Exception Node 调用或读取失败时抛出异常
+     */
+    protected String loadPersistedSessionTitlesJson() throws Exception {
+        HandlerContext handlerContext = host.getHandlerContext();
+        if (handlerContext == null) {
+            return null;
+        }
+        NodeJsServiceCaller nodeJsServiceCaller = new NodeJsServiceCaller(handlerContext);
+        return nodeJsServiceCaller.callNodeJsTitlesService("loadTitles");
     }
 }

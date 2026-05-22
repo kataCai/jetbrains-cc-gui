@@ -1,8 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { DialogProvider } from './contexts/DialogContext';
+import { SessionProvider } from './contexts/SessionContext';
+import { MessagesProvider } from './contexts/MessagesContext';
+import { UIStateProvider } from './contexts/UIStateContext';
 
 const mockSendBridgeEvent = vi.fn();
+const mockUseSessionManagement = vi.fn();
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -113,23 +118,7 @@ vi.mock('./hooks', () => {
       rewindSelectDialogOpen: false,
       setRewindSelectDialogOpen: noop,
     }),
-    useSessionManagement: () => ({
-      showNewSessionConfirm: false,
-      showInterruptConfirm: false,
-      suppressNextStatusToastRef: makeRef(false),
-      createNewSession: noop,
-      forceCreateNewSession: noop,
-      handleConfirmNewSession: noop,
-      handleCancelNewSession: noop,
-      handleConfirmInterrupt: noop,
-      handleCancelInterrupt: noop,
-      loadHistorySession: noop,
-      deleteHistorySession: noop,
-      exportHistorySession: noop,
-      toggleFavoriteSession: noop,
-      updateHistoryTitle: noop,
-      syncCurrentTabTitle: noop,
-    }),
+    useSessionManagement: (...args: unknown[]) => mockUseSessionManagement(...args),
     useStreamingMessages: () => ({
       streamingContentRef: makeRef(''),
       isStreamingRef: makeRef(false),
@@ -233,23 +222,80 @@ vi.mock('./hooks', () => {
       handleSendShortcutChange: noop,
       handleAutoOpenFileEnabledChange: noop,
     }),
+    useChatComputations: () => ({
+      findToolResult: noop,
+      getToolResultRaw: noop,
+      fileChangeMgmt: {
+        processedFiles: [],
+        baseMessageIndex: 0,
+        handleUndoFile: noop,
+        handleDiscardAll: noop,
+        handleKeepAll: noop,
+      },
+      filteredFileChanges: [],
+      subagents: [],
+      globalTodos: [],
+      rewindableMessages: [],
+      sessionTitle: 'test-session-title',
+    }),
   };
 });
 
 describe('App task reminder callback integration', () => {
+  const renderWithProviders = () => render(
+    <MessagesProvider>
+      <SessionProvider>
+        <UIStateProvider>
+          <DialogProvider>
+            <App />
+          </DialogProvider>
+        </UIStateProvider>
+      </SessionProvider>
+    </MessagesProvider>
+  );
+
   beforeEach(() => {
     mockSendBridgeEvent.mockReset();
+    mockUseSessionManagement.mockReset();
     window.showTaskReminderDialog = undefined;
     window.__pendingTaskReminderDialogRequests = undefined;
+
+    mockUseSessionManagement.mockReturnValue({
+      showNewSessionConfirm: false,
+      showInterruptConfirm: false,
+      suppressNextStatusToastRef: { current: false },
+      createNewSession: vi.fn(),
+      forceCreateNewSession: vi.fn(),
+      handleConfirmNewSession: vi.fn(),
+      handleCancelNewSession: vi.fn(),
+      handleConfirmInterrupt: vi.fn(),
+      handleCancelInterrupt: vi.fn(),
+      loadHistorySession: vi.fn(),
+      deleteHistorySession: vi.fn(),
+      deleteHistorySessions: vi.fn(),
+      exportHistorySession: vi.fn(),
+      toggleFavoriteSession: vi.fn(),
+      updateHistoryTitle: vi.fn(),
+      syncCurrentTabTitle: vi.fn(),
+    });
   });
 
   afterEach(() => {
     cleanup();
   });
 
+  it('passes real historyData into useSessionManagement instead of null', () => {
+    renderWithProviders();
+
+    expect(mockUseSessionManagement).toHaveBeenCalledTimes(1);
+    const callArg = mockUseSessionManagement.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg).toHaveProperty('historyData');
+    expect(callArg.historyData).not.toBeUndefined();
+  });
+
   it('shows reminder dialog for valid waiting_confirm payload', async () => {
     // 合法 payload 到达后，App 应注册回调并真正把提醒弹窗渲染出来。
-    render(<App />);
+    renderWithProviders();
 
     await waitFor(() => {
       expect(typeof window.showTaskReminderDialog).toBe('function');
@@ -269,7 +315,7 @@ describe('App task reminder callback integration', () => {
   });
 
   it('sends navigate_task_reminder when clicking open session', async () => {
-    render(<App />);
+    renderWithProviders();
 
     await waitFor(() => {
       expect(typeof window.showTaskReminderDialog).toBe('function');
@@ -302,7 +348,7 @@ describe('App task reminder callback integration', () => {
       }),
     ];
 
-    render(<App />);
+    renderWithProviders();
 
     expect(await screen.findByText('Queued reminder')).toBeTruthy();
     expect(window.__pendingTaskReminderDialogRequests).toEqual([]);
@@ -310,7 +356,7 @@ describe('App task reminder callback integration', () => {
 
   it('ignores invalid payload and unsupported state', async () => {
     // 非法 payload 不能污染状态树，也不应把弹窗错误打开。
-    render(<App />);
+    renderWithProviders();
 
     await waitFor(() => {
       expect(typeof window.showTaskReminderDialog).toBe('function');
@@ -333,7 +379,7 @@ describe('App task reminder callback integration', () => {
 
   it('sends restart_session when clicking retry for final_error reminder', async () => {
     // final_error 弹窗点击 retry 后，应该复用既有 restart_session 协议。
-    render(<App />);
+    renderWithProviders();
 
     await waitFor(() => {
       expect(typeof window.showTaskReminderDialog).toBe('function');
