@@ -1,6 +1,5 @@
 package com.github.claudecodegui.skill;
 
-import com.github.claudecodegui.skill.CodexSkillService;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -46,10 +45,22 @@ public final class SlashCommandRegistry {
     }
 
     // Claude built-in commands (GUI-relevant only; CLI-only and frontend-local ones are excluded)
+    // Includes commands that work via SDK or are handled by frontend locally
+    // 'local-jsx' commands (TUI UI) that have GUI equivalents are included
+    // Bundled skills from CLI that are userInvocable and work in GUI environment
     public static final List<SlashCommand> CLAUDE_BUILTIN = List.of(
-            new SlashCommand("/compact", "Toggle compact mode", "builtin"),
-            new SlashCommand("/init", "Initialize a new project", "builtin"),
-            new SlashCommand("/review", "Review changes before applying", "builtin")
+            new SlashCommand("/compact", "Summarize conversation to free context", "builtin"),
+            new SlashCommand("/init", "Initialize a new CLAUDE.md file with codebase documentation", "builtin"),
+            new SlashCommand("/plan", "Switch to plan mode", "builtin"),
+            new SlashCommand("/resume", "Resume a previous conversation", "builtin"),
+            new SlashCommand("/review", "Review a pull request", "builtin"),
+            // Bundled skills (userInvocable, no ANT-only restriction)
+            new SlashCommand("/batch", "Execute large-scale changes in parallel across isolated worktrees", "bundled"),
+            new SlashCommand("/claude-api", "Build apps with the Claude API or Anthropic SDK", "bundled"),
+            new SlashCommand("/debug", "Enable debug logging and diagnose session issues", "bundled"),
+            new SlashCommand("/loop", "Run a prompt or command on a recurring interval", "bundled"),
+            new SlashCommand("/simplify", "Review changed code for reuse, quality, and efficiency", "bundled"),
+            new SlashCommand("/update-config", "Configure settings.json (hooks, permissions, env vars)", "bundled")
     );
 
     // Codex built-in commands (GUI-relevant only; CLI-only ones like /status, /model, /quit are excluded)

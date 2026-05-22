@@ -50,11 +50,8 @@ function modeKey(kind, blockIndex) {
 }
 
 /**
- * 计算当前输入相对上次内容的“真正新增部分”。
- * 该逻辑同时兼容：
- * 1. 标准增量流
- * 2. 累计快照流
- * 3. corrective snapshot 覆写场景
+ * 计算当前输入相对上次内容的真正新增片段。
+ * 兼容标准增量流、累计快照流和 corrective snapshot 覆写场景。
  *
  * @param {string} previous 上次累计内容
  * @param {string} incoming 本次输入内容
@@ -69,34 +66,33 @@ function computeNovelDelta(previous, incoming, mode) {
     return { novel: incoming, next: incoming, mode };
   }
 
-  // 累计快照：incoming = previous + suffix
+  // 累计快照：incoming = previous + suffix，并锁定后续 corrective snapshot 处理模式。
   if (incoming.startsWith(previous)) {
     return { novel: incoming.slice(previous.length), next: incoming, mode: 'snapshot' };
   }
 
-  // 旧快照回放：不再重复输出
+  // 旧快照回放：incoming 已被 previous 覆盖时不再重复输出。
   if (previous.startsWith(incoming) || previous.endsWith(incoming)) {
     return { novel: '', next: previous, mode };
   }
 
-  // 已经确认是 snapshot 模式后，再出现分叉内容时，
-  // 说明是 corrective snapshot，应静默吸收，不再重复输出。
+  // 已确认是 snapshot 模式后，分叉内容通常是模型修正文案，应静默吸收避免重复渲染。
   if (mode === 'snapshot') {
     return { novel: '', next: incoming, mode };
   }
 
-  // 默认按标准增量流处理。
+  // 默认按 Anthropic 标准增量流处理。
   return { novel: incoming, next: previous + incoming, mode: 'incremental' };
 }
 
 /**
- * 对单个 block 的流式增量进行归一化，返回真正需要输出给前端的新增片段。
+ * 对单个 block 的流式增量进行归一化。
  *
  * @param {object} turnState 当前 turn 状态
  * @param {'text'|'thinking'} kind block 类型
  * @param {number|string|undefined|null} index block 索引
  * @param {string} incoming 本次输入内容
- * @returns {string}
+ * @returns {string} 真正需要输出给前端的新增片段
  */
 export function normalizeStreamDelta(turnState, kind, index, incoming) {
   const text = typeof incoming === 'string' ? incoming : '';
@@ -124,6 +120,7 @@ export function normalizeStreamDelta(turnState, kind, index, incoming) {
  * @param {'text'|'thinking'} kind block 类型
  * @param {number|string|undefined|null} index block 索引
  * @param {string} snapshot snapshot 内容
+ * @returns {void}
  */
 export function rememberStreamSnapshot(turnState, kind, index, snapshot) {
   const text = typeof snapshot === 'string' ? snapshot : '';
@@ -135,8 +132,7 @@ export function rememberStreamSnapshot(turnState, kind, index, snapshot) {
     blockMap.set(blockIndex, text);
   }
 
-  // 一旦确认 snapshot 在扩展旧内容，就把该 block 锁定为 snapshot 模式，
-  // 避免后续 corrective rewrite 被误判成新的增量再发一遍。
+  // snapshot 扩展旧内容时锁定模式，后续分叉 rewrite 不再误判为新增 delta。
   if (text.length > 0 && previous.length > 0 && text.startsWith(previous) && text !== previous) {
     const modeMap = getModeMap(turnState);
     modeMap.set(modeKey(kind, blockIndex), 'snapshot');

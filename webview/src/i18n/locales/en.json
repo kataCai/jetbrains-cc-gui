@@ -94,7 +94,7 @@
     "attachmentFile": "[Attachment: {{fileName}}]",
     "unknownFile": "Unknown file",
     "attachmentsUploaded": "[Attachments Uploaded]",
-    "streamingConnected": "Claude connected, understanding your question",
+    "streamingConnected": "{{provider}} connected, understanding your question",
     "showEarlierMessages": "Show {{count}} earlier messages",
     "composerMode": "Composer mode",
     "chatMode": "Chat",
@@ -111,7 +111,8 @@
       "recovered": "Recovered",
       "completed": "Completed",
       "final_error": "Needs attention"
-    }
+    },
+    "totalDuration": "This reply took"
   },
   "settings": {
     "title": "Settings",
@@ -142,7 +143,8 @@
         "french": "Français",
         "japanese": "日本語",
         "russian": "Русский",
-        "korean": "한국어"
+        "korean": "한국어",
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Node.js Path",
@@ -171,8 +173,16 @@
         "level6": "Largest (140%)"
       },
       "editorFont": {
-        "label": "Font (follows editor font)",
-        "hint": "Not editable here. To modify, go to IDEA Settings → Editor → Font (restart IDEA for plugin font to take effect)"
+        "label": "Font",
+        "hint": "Font family changes apply immediately here. Font size and line spacing still follow the editor.",
+        "followOption": "Follow editor ({{font}})",
+        "customOption": "Custom font file",
+        "customPathLabel": "Font file path",
+        "customPathPlaceholder": "Choose or enter a .ttf / .otf font file path",
+        "browse": "Browse",
+        "warningUnavailable": "Font unavailable, currently using editor font",
+        "statusFollowEditor": "Currently following editor font: {{font}}",
+        "statusCustom": "Currently using custom font: {{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -185,6 +195,20 @@
         "enabled": "Enabled",
         "disabled": "Disabled",
         "hint": "When enabled, selecting a file in the project tree will automatically send its file path to AI (note: only the file path is sent, not the file content). When disabled, manual action is required."
+      },
+      "promptEnhancer": {
+        "label": "Prompt Enhancer",
+        "modelLabel": "Enhancer Model",
+        "resetToDefault": "Restore Default",
+        "providerAvailable": "Available",
+        "providerUnavailable": "Currently unavailable",
+        "provider": {
+          "claude": "Claude Code",
+          "codex": "Codex"
+        },
+        "currentProviderAuto": "Currently using automatic selection: {{provider}}",
+        "currentProviderManual": "Currently using manually selected provider: {{provider}}",
+        "currentProviderUnavailable": "The selected provider is currently unavailable: {{provider}}"
       },
       "diffExpanded": {
         "label": "Expand Diffs by Default",
@@ -203,6 +227,12 @@
         "enabled": "Enabled",
         "disabled": "Disabled",
         "hint": "When enabled, shows current model and mode info in the IDE status bar (e.g. GUI [Opus] {Auto}). When disabled, the widget is hidden."
+      },
+      "taskCompletionNotification": {
+        "label": "Task Completion Notification",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, shows a system notification when AI task completes. When disabled, no notification appears."
       },
       "sendShortcut": {
         "label": "Send Shortcut",
@@ -279,6 +309,10 @@
     },
     "providers": "Provider Management",
     "providersDesc": "Manage Claude and Codex API provider configurations and switch between different API service providers",
+    "promptEnhancer": {
+      "title": "Prompt Enhancer",
+      "description": "Choose which provider and model should be used when enhancing prompts before sending them."
+    },
     "providerTab": {
       "claude": "Claude Code",
       "codex": "Codex"
@@ -347,6 +381,16 @@
     "commit": {
       "title": "Commit AI",
       "description": "Configure AI-generated Git commit message behavior",
+      "providerModel": {
+        "label": "Commit Model Provider",
+        "modelLabel": "Commit Model",
+        "resetToDefault": "Reset",
+        "providerAvailable": "Available",
+        "providerUnavailable": "Unavailable",
+        "currentProviderAuto": "Currently using auto selection: {{provider}}",
+        "currentProviderManual": "Currently using the manually selected provider: {{provider}}",
+        "currentProviderUnavailable": "The selected provider is currently unavailable: {{provider}}"
+      },
       "prompt": {
         "label": "Additional Prompt",
         "placeholder": "Add your extra requirements here, e.g., generate commit in English, include issue number, etc...",
@@ -401,6 +445,12 @@
           "minutesAgo_other": "{{count}} minutes ago",
           "justNow": "just now"
         }
+      },
+      "aiTitleGeneration": {
+        "label": "AI session title generation",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, a short Haiku-generated title is created after the first turn of a new session. When disabled, sessions keep using the first user message as the title."
       }
     },
     "codexFeatureUnavailable": "This settings section is not available in Codex yet. Please switch to Claude Code.",
@@ -607,6 +657,7 @@
         "deepseek": "DeepSeek",
         "minimax": "MiniMax",
         "xiaomi": "Xiaomi MiMo",
+        "xiaomiPlan": "Xiaomi MiMo Plan",
         "qwen": "Alibaba Qwen",
         "openrouter": "OpenRouter"
       }
@@ -897,6 +948,16 @@
     "confirmDelete": "Confirm Delete",
     "deleteMessage": "Are you sure you want to delete this session? This action cannot be undone.",
     "deleteSession": "Delete this session",
+    "selectMode": "Select",
+    "exitSelectMode": "Exit selection",
+    "selectedSessions": "{{count}} selected",
+    "selectAll": "Select all",
+    "clearSelection": "Clear",
+    "deleteSelected": "Delete selected",
+    "confirmDeleteSelected": "Confirm Delete",
+    "deleteSelectedMessage": "Are you sure you want to delete {{count}} selected sessions? This action cannot be undone.",
+    "selectSession": "Select session",
+    "selectSessionWithTitle": "Select {{title}}",
     "exportSession": "Export session",
     "exportSuccess": "Session exported",
     "exportFailed": "Export failed",
@@ -1006,6 +1067,12 @@
     "clickToCopy": "Click to copy",
     "switch": "Switch",
     "switchProvider": "Switch provider",
+    "runtimeProvider": {
+      "title": "Switch Current Provider",
+      "loading": "Loading providers...",
+      "empty": "No providers available",
+      "switched": "Switched to {{provider}}"
+    },
     "link": "Link"
   },
   "markdown": {
@@ -1213,7 +1280,6 @@
     "runCommand": "Run Command",
     "contextEngine": "Context Engine",
     "task": "Task",
-    "promptLabel": "Prompt",
     "readFile": "Read File",
     "editFile": "Edit File",
     "writeFile": "Write File",
@@ -1257,6 +1323,24 @@
     "inProgress": "In Progress {{completed}}/{{total}} tasks",
     "allCompleted": "All Completed {{completed}}/{{total}} tasks",
     "stopped": "Stopped"
+  },
+  "subagent": {
+    "process": {
+      "title": "Agent process",
+      "thought": "Thought",
+      "filesRead_one": "Read {{count}} file",
+      "filesRead_other": "Read {{count}} files",
+      "otherTools": "Other tools",
+      "result": "Result",
+      "showFullOutput": "Show full output",
+      "loading": "Loading Agent process…",
+      "unavailable": "Process log is unavailable until this session has an id.",
+      "reportGenerated": "Structured analysis report generated",
+      "unitMs": "ms",
+      "unitS": "s",
+      "unitTools": "tools",
+      "unitTokens": "tokens"
+    }
   },
   "statusPanel": {
     "todoTab": "Plan",
@@ -1427,19 +1511,48 @@
       }
     }
   },
+  "claudeEffort": {
+    "title": "Select effort level",
+    "low": {
+      "label": "Low",
+      "description": "Short, scoped, latency-sensitive tasks"
+    },
+    "medium": {
+      "label": "Medium",
+      "description": "Cost-sensitive work, trades off some intelligence"
+    },
+    "high": {
+      "label": "High",
+      "description": "Balanced token usage and intelligence"
+    },
+    "xhigh": {
+      "label": "XHigh",
+      "description": "Best results for most coding tasks (recommended)"
+    },
+    "max": {
+      "label": "Max",
+      "description": "Maximum reasoning for demanding tasks (session only)"
+    }
+  },
   "models": {
     "addModel": "Add Model",
+    "longContext": {
+      "label": "1M",
+      "shortLabel": "1M context",
+      "tooltipEnabled": "Toggle 1M context window on/off",
+      "tooltipDisabled": "1M context not available for Haiku"
+    },
     "claude": {
       "sonnet46": {
         "label": "Sonnet 4.6",
         "description": "Sonnet 4.6 · Use the default model"
       },
       "opus46": {
-        "label": "Opus 4.6",
-        "description": "Opus 4.6 · Latest and most capable"
+        "label": "Opus 4.7",
+        "description": "Opus 4.7 · Latest and most capable"
       },
       "opus46_1m": {
-        "label": "Opus (1M context)",
+        "label": "Opus 4.6",
         "description": "Opus 4.6 for long sessions"
       },
       "haiku45": {
@@ -1453,20 +1566,40 @@
         "description": "Frontier model for complex coding, research, and real-world work."
       },
       "gpt53codex": {
-        "label": "gpt-5.3-codex",
+        "label": "GPT-5.3-Codex",
         "description": "Latest frontier agentic coding model with enhanced capabilities."
+      },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "Latest frontier model with stronger capabilities."
       },
       "gpt54": {
         "label": "gpt-5.4",
         "description": "Strong model for everyday coding."
       },
+      "gpt52codex": {
+        "label": "GPT-5.2-Codex",
+        "description": "Frontier agentic coding model."
+      },
+      "gpt51codexMax": {
+        "label": "GPT-5.1-Codex-Max",
+        "description": "Codex-optimized flagship for deep and fast reasoning."
+      },
       "gpt54mini": {
         "label": "gpt-5.4-mini",
         "description": "Small, fast, and cost-efficient model for simpler coding tasks."
       },
+      "gpt53codexSpark": {
+        "label": "GPT-5.3-Codex-Spark",
+        "description": "Ultra-fast coding model."
+      },
       "gpt52": {
         "label": "gpt-5.2",
         "description": "Optimized for professional work and long-running agents."
+      },
+      "gpt51codexMini": {
+        "label": "GPT-5.1-Codex-Mini",
+        "description": "Optimized for Codex. Cheaper, faster, but less capable."
       }
     }
   },
@@ -1519,7 +1652,7 @@
       "label": "Claude Code"
     },
     "codex": {
-      "label": "Codex Cli"
+      "label": "Codex"
     },
     "gemini": {
       "label": "Gemini Cli"
@@ -1585,6 +1718,10 @@
       "description": "Deep reasoning for complex tasks"
     },
     "xhigh": {
+      "label": "XHigh",
+      "description": "Extra deep reasoning for demanding tasks"
+    },
+    "max": {
       "label": "Max",
       "description": "Maximum reasoning depth"
     }

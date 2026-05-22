@@ -227,6 +227,7 @@ class CodexHistoryIndexService {
         session.lastTimestamp = entry.lastTimestamp;
         session.firstTimestamp = entry.firstTimestamp;
         session.cwd = entry.cwd;
+        session.fileSize = entry.fileSize;
         return session;
     }
 
@@ -415,6 +416,7 @@ class CodexHistoryIndexService {
         session.lastTimestamp = liteInfo.lastModified;
         session.firstTimestamp = liteInfo.createdAt;
         session.cwd = liteInfo.cwd;
+        session.fileSize = liteInfo.fileSize;
         return session;
     }
 
@@ -449,6 +451,7 @@ class CodexHistoryIndexService {
             session.lastTimestamp = entry.lastTimestamp;
             session.firstTimestamp = entry.firstTimestamp;
             session.cwd = entry.cwd;
+            session.fileSize = entry.fileSize;
             sessions.add(session);
         }
         return deduplicateSessions(sessions);
@@ -473,6 +476,7 @@ class CodexHistoryIndexService {
             entry.lastTimestamp = session.lastTimestamp;
             entry.firstTimestamp = session.firstTimestamp;
             entry.cwd = session.cwd;
+            entry.fileSize = session.fileSize;
 
             FileMeta meta = sessionFiles.get(session.sessionId);
             if (meta != null && meta.path != null) {
@@ -530,6 +534,7 @@ class CodexHistoryIndexService {
         if ((merged.cwd == null || merged.cwd.isEmpty()) && fallback.cwd != null && !fallback.cwd.isEmpty()) {
             merged.cwd = fallback.cwd;
         }
+        merged.fileSize = Math.max(existing.fileSize, incoming.fileSize);
 
         return merged;
     }
@@ -542,6 +547,7 @@ class CodexHistoryIndexService {
         copy.lastTimestamp = session.lastTimestamp;
         copy.firstTimestamp = session.firstTimestamp;
         copy.cwd = session.cwd;
+        copy.fileSize = session.fileSize;
         return copy;
     }
 

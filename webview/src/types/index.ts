@@ -1,4 +1,4 @@
-export type ClaudeRole = 'user' | 'assistant' | 'error' | string;
+export type ClaudeRole = 'user' | 'assistant' | 'error' | 'task_notification' | 'notification' | string;
 
 export type ToolInput = Record<string, unknown>;
 
@@ -7,7 +7,8 @@ export type ClaudeContentBlock =
   | { type: 'thinking'; thinking?: string; text?: string }
   | { type: 'tool_use'; id?: string; name?: string; input?: ToolInput }
   | { type: 'image'; src?: string; mediaType?: string; alt?: string }
-  | { type: 'attachment'; fileName?: string; mediaType?: string };
+  | { type: 'attachment'; fileName?: string; mediaType?: string }
+  | { type: 'task_notification'; icon: string; summary: string; status: string };
 
 export interface ToolResultBlock {
   type: 'tool_result';
@@ -23,6 +24,11 @@ export interface ClaudeRawMessage {
   content?: string | ClaudeContentOrResultBlock[];
   message?: { content?: string | ClaudeContentOrResultBlock[] };
   type?: string;
+  /** Origin indicates message source - used to filter synthetic messages */
+  origin?: { kind: string };
+  isMeta?: boolean;
+  toolUseResult?: unknown;
+  isCompactSummary?: boolean;
   [key: string]: unknown;
 }
 
@@ -36,7 +42,11 @@ export interface ClaudeMessage {
   isOptimistic?: boolean;
   /** 前端根据一次完整 assistant 响应耗时补写的展示字段，后端快照当前不会直接返回。 */
   durationMs?: number;
-  /** Runtime-only: numeric turn identifier for streaming assistant isolation. */
+  /**
+   * 仅运行时使用的数值 turnId，用于隔离不同 streaming 回合的 assistant 消息。
+   * 前端会在 streaming 期间写入该字段；不同 `__turnId` 的消息不能互相合并。
+   * 从历史 JSONL 加载出来的消息通常不带该字段。
+   */
   __turnId?: number;
   [key: string]: unknown;
 }
@@ -70,4 +80,4 @@ export interface HistoryData {
 export type { FileChangeStatus, EditOperation, FileChangeSummary } from './fileChanges';
 
 // Subagent types
-export type { SubagentStatus, SubagentInfo } from './subagent';
+export type { SubagentStatus, SubagentInfo, SubagentHistoryResponse } from './subagent';

@@ -231,7 +231,7 @@ export const AVAILABLE_MODES: ModeInfo[] = [
  * Use isValidPermissionMode() for validation instead of inline checks.
  */
 export const VALID_PERMISSION_MODE_IDS: ReadonlySet<string> = new Set(
-  AVAILABLE_MODES.map((m) => m.id)
+  AVAILABLE_MODES.map((m) => m.id),
 );
 
 /**
@@ -248,6 +248,81 @@ export interface ModelInfo {
   id: string;
   label: string;
   description?: string;
+}
+
+/**
+ * 判断 Claude 模型是否支持 1M context。
+ * 当前规则沿用 upstream 约定：除 Haiku 外的 Claude 主模型默认支持。
+ *
+ * @param modelId 当前模型 ID，允许为空
+ * @return 支持时返回 true，否则返回 false
+ */
+export function modelSupports1MContext(modelId: string | undefined | null): boolean {
+  if (!modelId) {
+    return false;
+  }
+  return !modelId.replace(/\[1m\]$/i, '').toLowerCase().includes('haiku');
+}
+
+/**
+ * 判断模型 ID 是否已携带 `[1m]` 后缀。
+ *
+ * @param modelId 当前模型 ID
+ * @return 已携带后缀时返回 true
+ */
+export function has1MContextSuffix(modelId: string | undefined | null): boolean {
+  if (!modelId) {
+    return false;
+  }
+  return /\[1m\]$/i.test(modelId);
+}
+
+/**
+ * 根据长上下文开关为模型 ID 应用 `[1m]` 后缀。
+ * 如果模型本身不支持 1M context，或者开关关闭，则会返回去除后缀后的基础 ID。
+ *
+ * @param modelId 原始模型 ID
+ * @param enabled 是否启用 1M context
+ * @return 处理后的模型 ID
+ */
+export function apply1MContextSuffix(modelId: string, enabled: boolean): string {
+  if (!enabled || !modelSupports1MContext(modelId)) {
+    return modelId.replace(/\[1m\]$/i, '');
+  }
+  const baseId = modelId.replace(/\[1m\]$/i, '');
+  return `${baseId}[1m]`;
+}
+
+/**
+ * 去除模型 ID 上的 `[1m]` 后缀，供展示和持久化使用。
+ *
+ * @param modelId 原始模型 ID
+ * @return 去除后缀后的基础模型 ID
+ */
+export function strip1MContextSuffix(modelId: string | undefined | null): string {
+  if (!modelId) {
+    return '';
+  }
+  return modelId.replace(/\[1m\]$/i, '');
+}
+
+const LEGACY_CLAUDE_MODEL_ID_ALIASES: Record<string, string> = {
+  'claude-opus-4-6[1m]': 'claude-opus-4-6',
+};
+
+/**
+ * 规范化 Claude 模型 ID。
+ * 这里既会移除 `[1m]` 后缀，也会兼容旧版模型别名，避免历史会话和新 UI 列表不一致。
+ *
+ * @param modelId 原始模型 ID
+ * @return 规范化后的 Claude 模型 ID；为空时回退到默认 Sonnet 4.6
+ */
+export function normalizeClaudeModelId(modelId: string | undefined | null): string {
+  if (!modelId) {
+    return 'claude-sonnet-4-6';
+  }
+  const stripped = strip1MContextSuffix(modelId);
+  return LEGACY_CLAUDE_MODEL_ID_ALIASES[stripped] ?? stripped;
 }
 
 /**
@@ -270,33 +345,35 @@ export function createRuntimeModelInfo(modelId: string | null | undefined): Mode
 }
 
 /**
- * Claude model list
+ * Claude 模型列表。
+ * 列表只保留基础 ID，不直接带 `[1m]` 后缀；长上下文由运行时开关动态拼接。
  */
 export const CLAUDE_MODELS: ModelInfo[] = [
   {
     id: 'claude-sonnet-4-6',
     label: 'Sonnet 4.6',
-    description: 'Sonnet 4.6 · Use the default model',
+    description: 'Sonnet 4.6 路 Use the default model',
+  },
+  {
+    id: 'claude-opus-4-7',
+    label: 'Opus 4.7',
+    description: 'Opus 4.7 路 Latest and most capable',
   },
   {
     id: 'claude-opus-4-6',
     label: 'Opus 4.6',
-    description: 'Opus 4.6 · Latest and most capable',
-  },
-  {
-    id: 'claude-opus-4-6[1m]',
-    label: 'Opus (1M context)',
     description: 'Opus 4.6 for long sessions',
   },
   {
     id: 'claude-haiku-4-5',
     label: 'Haiku 4.5',
-    description: 'Haiku 4.5 · Fastest for quick answers',
+    description: 'Haiku 4.5 路 Fastest for quick answers',
   },
 ];
 
 /**
- * Codex model list
+ * Codex 模型列表。
+ * 这里保留当前主线已验证过的文案风格，同时补齐 upstream 新增模型，避免并轨后遗漏能力入口。
  */
 export const CODEX_MODELS: ModelInfo[] = [
   {
@@ -310,6 +387,16 @@ export const CODEX_MODELS: ModelInfo[] = [
     description: 'Strong model for everyday coding.',
   },
   {
+    id: 'gpt-5.2-codex',
+    label: 'gpt-5.2-codex',
+    description: 'Frontier agentic coding model.',
+  },
+  {
+    id: 'gpt-5.1-codex-max',
+    label: 'gpt-5.1-codex-max',
+    description: 'Codex-optimized flagship for deep and fast reasoning.',
+  },
+  {
     id: 'gpt-5.4-mini',
     label: 'gpt-5.4-mini',
     description: 'Small, fast, and cost-efficient model for simpler coding tasks.',
@@ -320,9 +407,19 @@ export const CODEX_MODELS: ModelInfo[] = [
     description: 'Coding-optimized model.',
   },
   {
+    id: 'gpt-5.3-codex-spark',
+    label: 'gpt-5.3-codex-spark',
+    description: 'Ultra-fast coding model.',
+  },
+  {
     id: 'gpt-5.2',
     label: 'gpt-5.2',
     description: 'Optimized for professional work and long-running agents.',
+  },
+  {
+    id: 'gpt-5.1-codex-mini',
+    label: 'gpt-5.1-codex-mini',
+    description: 'Optimized for Codex. Cheaper, faster, but less capable.',
   },
 ];
 
@@ -346,17 +443,47 @@ export interface ProviderInfo {
  */
 export const AVAILABLE_PROVIDERS: ProviderInfo[] = [
   { id: 'claude', label: 'Claude Code', icon: 'codicon-terminal', enabled: true },
-  { id: 'codex', label: 'Codex Cli', icon: 'codicon-terminal', enabled: true },
+  { id: 'codex', label: 'Codex', icon: 'codicon-terminal', enabled: true },
   { id: 'gemini', label: 'Gemini Cli', icon: 'codicon-terminal', enabled: false },
   { id: 'opencode', label: 'OpenCode', icon: 'codicon-terminal', enabled: false },
 ];
 
 /**
- * Codex Reasoning Effort (thinking depth)
- * Controls the depth of reasoning for Codex models
- * Valid values: low, medium, high, xhigh
+ * Claude models that support adaptive thinking with effort parameter.
+ * Based on: https://code.claude.com/docs/en/model-config#adjust-effort-level
  */
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export const EFFORT_SUPPORTED_CLAUDE_MODELS = new Set([
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-6[1m]',
+  'claude-sonnet-4-6',
+]);
+
+/**
+ * Claude models that additionally support the 'xhigh' effort level.
+ * Opus 4.7 is currently the only Claude Code model with xhigh support.
+ */
+export const XHIGH_EFFORT_CLAUDE_MODELS = new Set([
+  'claude-opus-4-7',
+]);
+
+/**
+ * Claude models that support the 'max' effort level.
+ */
+export const MAX_EFFORT_CLAUDE_MODELS = new Set([
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-6[1m]',
+  'claude-sonnet-4-6',
+]);
+
+/**
+ * Reasoning Effort (thinking depth)
+ * Controls the depth of reasoning for AI models
+ * Claude API values: low, medium, high, xhigh, max
+ * Codex API values: low, medium, high, xhigh
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
  * Reasoning level information
@@ -369,7 +496,7 @@ export interface ReasoningInfo {
 }
 
 /**
- * Available reasoning levels for Codex
+ * Available reasoning levels
  */
 export const REASONING_LEVELS: ReasoningInfo[] = [
   {
@@ -382,18 +509,24 @@ export const REASONING_LEVELS: ReasoningInfo[] = [
     id: 'medium',
     label: 'Medium',
     icon: 'codicon-circle-filled',
-    description: 'Balanced thinking (default)',
+    description: 'Balanced thinking with moderate token savings',
   },
   {
     id: 'high',
     label: 'High',
     icon: 'codicon-circle-large-filled',
-    description: 'Deep reasoning for complex tasks',
+    description: 'Deep reasoning for complex tasks (default)',
   },
   {
     id: 'xhigh',
-    label: 'Max',
+    label: 'XHigh',
     icon: 'codicon-flame',
+    description: 'Extra deep reasoning for demanding tasks',
+  },
+  {
+    id: 'max',
+    label: 'Max',
+    icon: 'codicon-rocket',
     description: 'Maximum reasoning depth',
   },
 ];
@@ -488,7 +621,6 @@ export interface ChatInputBoxProps {
   /** Remove code snippet callback */
   onRemoveCodeSnippet?: (id: string) => void;
 
-  // Event callbacks
   /** Submit message */
   onSubmit?: (content: string, attachments?: Attachment[]) => void;
   /** Stop generation */
@@ -505,9 +637,9 @@ export interface ChatInputBoxProps {
   onModelSelect?: (modelId: string) => void;
   /** Switch provider */
   onProviderSelect?: (providerId: string) => void;
-  /** Current reasoning effort (Codex only) */
+  /** Current reasoning effort */
   reasoningEffort?: ReasoningEffort;
-  /** Switch reasoning effort callback (Codex only) */
+  /** Switch reasoning effort callback */
   onReasoningChange?: (effort: ReasoningEffort) => void;
   /** Toggle thinking mode */
   onToggleThinking?: (enabled: boolean) => void;
@@ -560,6 +692,10 @@ export interface ChatInputBoxProps {
   autoOpenFileEnabled?: boolean;
   /** Toggle auto open file enabled */
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  /** Whether long context (1M) is enabled */
+  longContextEnabled?: boolean;
+  /** Toggle long context callback */
+  onLongContextChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -586,16 +722,20 @@ export interface ButtonAreaProps {
   permissionMode?: PermissionMode;
   /** Current provider */
   currentProvider?: string;
-  /** Current reasoning effort (Codex only) */
+  /** Current reasoning effort */
   reasoningEffort?: ReasoningEffort;
 
-  // Event callbacks
+  /** Submit callback */
   onSubmit?: () => void;
+  /** Stop callback */
   onStop?: () => void;
+  /** Mode select callback */
   onModeSelect?: (mode: PermissionMode) => void;
+  /** Model select callback */
   onModelSelect?: (modelId: string) => void;
+  /** Provider select callback */
   onProviderSelect?: (providerId: string) => void;
-  /** Switch reasoning effort callback (Codex only) */
+  /** Switch reasoning effort callback */
   onReasoningChange?: (effort: ReasoningEffort) => void;
   /** Enhance prompt callback */
   onEnhancePrompt?: () => void;
@@ -617,6 +757,10 @@ export interface ButtonAreaProps {
   onOpenAgentSettings?: () => void;
   /** Navigate to model management to add models */
   onAddModel?: () => void;
+  /** Whether long context (1M) is enabled */
+  longContextEnabled?: boolean;
+  /** Toggle long context callback */
+  onLongContextChange?: (enabled: boolean) => void;
 }
 
 /**

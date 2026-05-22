@@ -242,12 +242,14 @@ public class SessionHandler extends BaseMessageHandler {
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        // Codex 没有 Claude 那种稳定的 stream_end 语义，因此仍在 send 完成时补一个成功提示。
-                        // 如果已经启用了 task reminder dispatcher，则由 dispatcher 决定是否播声音，
-                        // 避免这里和 reminder 逻辑双重提示。
+                        var session = context.getSession();
                         ClaudeNotifier.showSuccess(
                             project,
-                            ClaudeCodeGuiBundle.message("task.send.completed"),
+                            ClaudeNotifier.buildTitleFromSession(session),
+                            ClaudeNotifier.buildPreviewFromSession(
+                                session,
+                                ClaudeCodeGuiBundle.message("task.send.completed")
+                            ),
                             taskReminderDispatcher == null
                         );
                     }
@@ -409,9 +411,14 @@ public class SessionHandler extends BaseMessageHandler {
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
+                        var session = context.getSession();
                         ClaudeNotifier.showSuccess(
                             project,
-                            ClaudeCodeGuiBundle.message("task.send.completed"),
+                            ClaudeNotifier.buildTitleFromSession(session),
+                            ClaudeNotifier.buildPreviewFromSession(
+                                session,
+                                ClaudeCodeGuiBundle.message("task.send.completed")
+                            ),
                             taskReminderDispatcher == null
                         );
                     }

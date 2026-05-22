@@ -1,11 +1,25 @@
-import type { TodoItem, FileChangeSummary, SubagentInfo } from '../../types';
-import type { ComposerUsageMode } from '../ChatInputBox/modeViewModel';
 import type { TFunction } from 'i18next';
+import type {
+  FileChangeSummary,
+  SubagentHistoryResponse,
+  SubagentInfo,
+  TodoItem,
+} from '../../types';
+import type { ComposerUsageMode } from '../ChatInputBox/modeViewModel';
 
 export type TabType = 'todo' | 'subagent' | 'files';
-export type TaskStripState = 'running' | 'waiting_confirm' | 'retrying' | 'recovered' | 'completed' | 'final_error';
-// 顶部 mode strip 和状态面板只展示当前产品层真正关心的任务状态，
-// 不直接暴露后端所有内部状态，避免 UI 文案和色彩体系被无限扩张。
+export type TaskStripState =
+  | 'running'
+  | 'waiting_confirm'
+  | 'retrying'
+  | 'recovered'
+  | 'completed'
+  | 'final_error';
+
+/**
+ * 顶部 mode strip 与 StatusPanel 共用的任务状态集合。
+ * 这里只保留产品层明确展示的状态，避免把底层内部状态无节制暴露到 UI。
+ */
 export const KNOWN_TASK_STATES: ReadonlySet<TaskStripState> = new Set([
   'running',
   'waiting_confirm',
@@ -24,8 +38,15 @@ const TASK_STATE_FALLBACK_LABELS: Record<TaskStripState, string> = {
   final_error: 'Needs attention',
 };
 
+/**
+ * 获取任务状态在 UI 中的展示文本。
+ * 顶部 strip 与 StatusPanel 都走同一份翻译入口，避免并轨后文案漂移。
+ *
+ * @param taskState 当前任务状态
+ * @param t i18n 翻译函数
+ * @return 本地化后的状态文案
+ */
 export function getTaskStateLabel(taskState: TaskStripState, t: TFunction): string {
-  // 使用统一翻译入口，确保顶部 strip、状态面板和后续其他入口看到同一套状态文案。
   return t(`chat.taskState.${taskState}`, {
     defaultValue: TASK_STATE_FALLBACK_LABELS[taskState],
   });
@@ -35,6 +56,8 @@ export interface StatusPanelProps {
   todos: TodoItem[];
   fileChanges: FileChangeSummary[];
   subagents: SubagentInfo[];
+  subagentHistories?: Record<string, SubagentHistoryResponse>;
+  currentSessionId?: string | null;
   /** Whether the panel is expanded */
   expanded?: boolean;
   /** Whether the conversation is currently streaming (active) */

@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Base SDK bridge class.
@@ -77,16 +79,16 @@ public abstract class BaseSDKBridge {
      * @param callback         Message callback
      * @param result           SDK result being built
      * @param assistantContent StringBuilder for accumulating assistant content
-     * @param hadSendError     Flag array indicating if send error occurred
-     * @param lastNodeError    Array to store the last Node.js error
+     * @param hadSendError     Flag indicating if send error occurred
+     * @param lastNodeError    Holder for the last Node.js error
      */
     protected abstract void processOutputLine(
             String line,
             MessageCallback callback,
             SDKResult result,
             StringBuilder assistantContent,
-            boolean[] hadSendError,
-            String[] lastNodeError
+            AtomicBoolean hadSendError,
+            AtomicReference<String> lastNodeError
     );
 
     // ============================================================================
@@ -173,21 +175,49 @@ public abstract class BaseSDKBridge {
      * Check if the environment is ready.
      */
     public boolean checkEnvironment() {
+        return checkEnvironmentDetails().isReady();
+    }
+
+    /**
+     * 检查当前 bridge 运行环境，并返回可区分的结构化结果。
+     * 该方法用于把“Node 不可用”“bridge 未提取完成”“入口脚本缺失”等问题拆开，
+     * 避免上层统一误报成 Node.js 缺失。
+     *
+     * @return 结构化环境检查结果
+     */
+    public EnvironmentCheckResult checkEnvironmentDetails() {
         try {
             String node = nodeDetector.findNodeExecutable();
+            if (node == null || node.trim().isEmpty()) {
+                return EnvironmentCheckResult.failed(
+                        EnvironmentCheckResult.FailureCode.NODE_NOT_FOUND,
+                        "Node.js executable path is empty",
+                        node,
+                        nodeDetector.getCachedNodeVersion(),
+                        null
+                );
+            }
+
             ProcessBuilder pb = new ProcessBuilder(node, "--version");
             envConfigurator.updateProcessEnvironment(pb, node);
             Process process = pb.start();
 
+            String version = null;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String version = reader.readLine();
+                version = reader.readLine();
                 LOG.debug("Node.js version: " + version);
             }
 
             int exitCode = process.waitFor();
             if (exitCode != 0) {
-                return false;
+                return EnvironmentCheckResult.failed(
+                        EnvironmentCheckResult.FailureCode.NODE_EXECUTION_FAILED,
+                        "Node.js process exited with code " + exitCode,
+                        node,
+                        version,
+                        null
+                );
             }
 
             // Check bridge directory
@@ -195,20 +225,38 @@ public abstract class BaseSDKBridge {
             if (bridgeDir == null) {
                 // Bridge extraction is in progress (EDT thread scenario)
                 LOG.info("Bridge directory not ready yet (extraction in progress)");
-                return false;
+                return EnvironmentCheckResult.failed(
+                        EnvironmentCheckResult.FailureCode.BRIDGE_NOT_READY,
+                        "Bridge directory not ready yet (extraction in progress)",
+                        node,
+                        version,
+                        null
+                );
             }
 
             File scriptFile = new File(bridgeDir, CHANNEL_SCRIPT);
             if (!scriptFile.exists()) {
-                LOG.error("channel-manager.js not found at: " + scriptFile.getAbsolutePath());
-                return false;
+                LOG.warn("channel-manager.js not found at: " + scriptFile.getAbsolutePath());
+                return EnvironmentCheckResult.failed(
+                        EnvironmentCheckResult.FailureCode.CHANNEL_SCRIPT_MISSING,
+                        "channel-manager.js not found at: " + scriptFile.getAbsolutePath(),
+                        node,
+                        version,
+                        scriptFile.getAbsolutePath()
+                );
             }
 
             LOG.info("Environment check passed for " + getProviderName());
-            return true;
+            return EnvironmentCheckResult.ready(node, version, scriptFile.getAbsolutePath());
         } catch (Exception e) {
             LOG.warn("Environment check failed: " + e.getMessage());
-            return false;
+            return EnvironmentCheckResult.failed(
+                    EnvironmentCheckResult.FailureCode.UNKNOWN,
+                    e.getMessage(),
+                    nodeDetector.getCachedNodePath(),
+                    nodeDetector.getCachedNodeVersion(),
+                    null
+            );
         }
     }
 
@@ -237,8 +285,8 @@ public abstract class BaseSDKBridge {
         return CompletableFuture.supplyAsync(() -> {
             SDKResult result = new SDKResult();
             StringBuilder assistantContent = new StringBuilder();
-            final boolean[] hadSendError = {false};
-            final String[] lastNodeError = {null};
+            AtomicBoolean hadSendError = new AtomicBoolean(false);
+            AtomicReference<String> lastNodeError = new AtomicReference<>(null);
 
             try {
                 File bridgeDir = getDirectoryResolver().findSdkDir();
@@ -304,7 +352,7 @@ public abstract class BaseSDKBridge {
                                     || line.startsWith("[STARTUP_ERROR]")
                                     || line.startsWith("[ERROR]")) {
                                 LOG.warn("[Node.js ERROR] " + line);
-                                lastNodeError[0] = line;
+                                lastNodeError.set(line);
                             }
 
                             // Delegate to subclass for provider-specific processing
@@ -324,14 +372,15 @@ public abstract class BaseSDKBridge {
                         result.success = false;
                         result.error = "User interrupted";
                         callback.onComplete(result);
-                    } else if (!hadSendError[0]) {
+                    } else if (!hadSendError.get()) {
                         result.success = exitCode == 0;
                         if (result.success) {
                             callback.onComplete(result);
                         } else {
                             String errorMsg = getProviderName() + " process exited with code: " + exitCode;
-                            if (lastNodeError[0] != null && !lastNodeError[0].isEmpty()) {
-                                errorMsg = errorMsg + "\n\nDetails: " + lastNodeError[0];
+                            String nodeErr = lastNodeError.get();
+                            if (nodeErr != null && !nodeErr.isEmpty()) {
+                                errorMsg = errorMsg + "\n\nDetails: " + nodeErr;
                             }
                             result.error = errorMsg;
                             callback.onError(errorMsg);

@@ -1,7 +1,26 @@
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
 
-export type SettingsTab = 'basic' | 'providers' | 'dependencies' | 'usage' | 'permissions' | 'remote' | 'commit' | 'mcp' | 'agents' | 'prompts' | 'skills' | 'other' | 'community';
+/**
+ * 设置页一级导航枚举。
+ * 并轨后同时保留主线的远程协作页签和 upstream 的 Prompt Enhancer 页签，
+ * 避免任一能力在设置页入口上被静默丢失。
+ */
+export type SettingsTab =
+  | 'basic'
+  | 'providers'
+  | 'dependencies'
+  | 'usage'
+  | 'permissions'
+  | 'remote'
+  | 'promptEnhancer'
+  | 'commit'
+  | 'mcp'
+  | 'agents'
+  | 'prompts'
+  | 'skills'
+  | 'other'
+  | 'community';
 
 interface SidebarItem {
   key: SettingsTab;
@@ -16,6 +35,8 @@ const sidebarItems: SidebarItem[] = [
   { key: 'usage', icon: 'codicon-graph', labelKey: 'settings.usage' },
   { key: 'mcp', icon: 'codicon-server', labelKey: 'settings.mcp' },
   { key: 'permissions', icon: 'codicon-shield', labelKey: 'settings.permissions' },
+  { key: 'remote', icon: 'codicon-device-mobile', labelKey: 'settings.remoteCollab.title' },
+  { key: 'promptEnhancer', icon: 'codicon-sparkle', labelKey: 'settings.promptEnhancer.title' },
   { key: 'remote', icon: 'codicon-device-mobile', labelKey: 'settings.remoteCollab.title' },
   { key: 'commit', icon: 'codicon-git-commit', labelKey: 'settings.commit.title' },
   { key: 'agents', icon: 'codicon-robot', labelKey: 'settings.agents' },

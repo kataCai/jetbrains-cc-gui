@@ -79,7 +79,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onModeSelect,
       onModelSelect,
       onProviderSelect,
-      reasoningEffort = 'medium',
+      reasoningEffort = 'high',
       onReasoningChange,
       activeFile,
       selectedLines,
@@ -106,6 +106,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onRemoveFromQueue,
       autoOpenFileEnabled,
       onAutoOpenFileEnabledChange,
+      longContextEnabled = true,
+      onLongContextChange,
     }: ChatInputBoxProps,
     ref: React.ForwardedRef<ChatInputBoxHandle>
   ) => {
@@ -407,7 +409,6 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
     } = usePromptEnhancer({
       editableRef,
       getTextContent,
-      selectedModel,
       setHasContent,
       onInput,
     });
@@ -703,6 +704,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           onOpenAgentSettings={onOpenAgentSettings}
           onAddModel={onOpenModelSettings}
           onClearAgent={() => onAgentSelect?.(null)}
+          longContextEnabled={longContextEnabled}
+          onLongContextChange={onLongContextChange}
           fileCompletion={fileCompletion}
           commandCompletion={commandCompletion}
           agentCompletion={agentCompletion}

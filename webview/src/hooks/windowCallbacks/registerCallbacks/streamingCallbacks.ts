@@ -5,23 +5,18 @@
  * onStreamStart, onContentDelta, onThinkingDelta, onStreamEnd, onPermissionDenied.
  */
 
+import { startTransition } from 'react';
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { ClaudeRawMessage } from '../../../types';
 import { sendBridgeEvent } from '../../../utils/bridge';
 import { THROTTLE_INTERVAL } from '../../useStreamingMessages';
 import { parseSequence } from '../parseSequence';
+import { getStreamEndHandlingMode } from '../messageSync';
 
 /**
- * Timeout (ms) for detecting a stalled stream.  If no content/thinking delta
- * arrives for this duration while isStreamingRef is still true, the frontend
- * auto-recovers by forcing the stream-end cleanup.  This guards against the
- * backend onStreamEnd signal being silently dropped by JCEF.
- *
- * Set to 60s to avoid false positives during long tool execution phases
- * (e.g., command execution, file operations) where no content deltas arrive
- * but the backend is still actively processing.  The backend heartbeat
- * mechanism in StreamMessageCoalescer keeps __lastStreamActivityAt bumped
- * via periodic updateMessages re-pushes.
+ * 检测 streaming 卡死的超时时间。
+ * 如果在该时长内既没有 delta，也没有 streaming heartbeat/updateMessages，
+ * 则认为后端的 onStreamEnd 可能丢失，前端主动触发一次恢复性收口。
  */
 const STREAM_STALL_TIMEOUT_MS = 60_000;
 const STREAM_STALL_CHECK_INTERVAL_MS = 5_000;
@@ -35,14 +30,10 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     setIsThinking,
     setExpandedThinking,
     streamingContentRef,
+    streamingThinkingRef,
     isStreamingRef,
     useBackendStreamingRenderRef,
     autoExpandedThinkingKeysRef,
-    streamingTextSegmentsRef,
-    activeTextSegmentIndexRef,
-    streamingThinkingSegmentsRef,
-    activeThinkingSegmentIndexRef,
-    seenToolUseCountRef,
     streamingMessageIndexRef,
     streamingTurnIdRef,
     turnIdCounterRef,
@@ -54,15 +45,6 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     patchAssistantForStreaming,
   } = options;
 
-  // ── Stream stall watchdog ──
-  // Tracks the last time we received any streaming activity (delta or
-  // updateMessages during streaming).  A periodic check auto-recovers
-  // if the backend's onStreamEnd signal was silently lost.
-  // Exposed on window so messageCallbacks can also bump this on updateMessages.
-  //
-  // The interval handle is stored on `window` so that if registerStreamingCallbacks
-  // is called again (e.g., HMR, parent re-render), the previous interval is
-  // cleared first — preventing multiple watchdogs from running simultaneously.
   if (window.__stallWatchdogInterval != null) {
     clearInterval(window.__stallWatchdogInterval);
     window.__stallWatchdogInterval = null;
@@ -90,7 +72,6 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
           `[StreamWatchdog] Stream stalled for ${elapsed}ms — forcing stream-end recovery`,
         );
         clearStallWatchdog();
-        // Trigger the same cleanup as onStreamEnd
         if (typeof window.onStreamEnd === 'function') {
           window.onStreamEnd();
         }
@@ -100,8 +81,9 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
   window.onStreamStart = () => {
     if (window.__sessionTransitioning) return;
-    // 新 turn 开始前，先清理上一轮残留的延迟 updateMessages 状态，
-    // 避免旧 snapshot 在新一轮 streaming 中误回放。
+
+    // 新 turn 开始前先清理上一轮残留的延迟 updateMessages，
+    // 避免旧 snapshot 在新一轮 streaming 中被误回放。
     if (typeof window.__cancelPendingUpdateMessages === 'function') {
       window.__cancelPendingUpdateMessages();
     }
@@ -110,28 +92,28 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     window.__lastStreamEndedAt = undefined;
     window.__streamEndProcessedTurnId = undefined;
     window.__turnStartedAt = Date.now();
+
     streamingContentRef.current = '';
+    streamingThinkingRef.current = '';
     isStreamingRef.current = true;
     startStallWatchdog();
     useBackendStreamingRenderRef.current = false;
     autoExpandedThinkingKeysRef.current.clear();
     setStreamingActive(true);
-    streamingTextSegmentsRef.current = [];
-    activeTextSegmentIndexRef.current = -1;
-    streamingThinkingSegmentsRef.current = [];
-    activeThinkingSegmentIndexRef.current = -1;
-    seenToolUseCountRef.current = 0;
 
-    // FIX: Always reset streamingMessageIndexRef regardless of backend streaming mode
     streamingMessageIndexRef.current = -1;
     turnIdCounterRef.current += 1;
     streamingTurnIdRef.current = turnIdCounterRef.current;
     setMessages((prev) => {
       const last = prev[prev.length - 1];
-      if (last?.type === 'assistant' && last?.isStreaming) {
+      if (last?.type === 'assistant') {
         streamingMessageIndexRef.current = prev.length - 1;
         const updated = [...prev];
-        updated[prev.length - 1] = { ...updated[prev.length - 1], __turnId: streamingTurnIdRef.current };
+        updated[prev.length - 1] = {
+          ...updated[prev.length - 1],
+          isStreaming: true,
+          __turnId: streamingTurnIdRef.current,
+        };
         return updated;
       }
       streamingMessageIndexRef.current = prev.length;
@@ -148,121 +130,86 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     });
   };
 
+  /**
+   * 生成基于 rAF 的 streaming 更新调度器。
+   * 该调度器只负责触发 patch，不自己持有文本内容；
+   * 真正的 streaming 文本来源仍然读取 hook 中的 ref。
+   *
+   * @param timeoutRef 当前调度器的 rAF handle 引用
+   * @param lastUpdateRef 最近一次实际刷新的时间戳
+   * @return 可复用的调度函数
+   */
+  const createStreamingRafScheduler = (
+    timeoutRef: React.MutableRefObject<number | null>,
+    lastUpdateRef: React.MutableRefObject<number>,
+  ) => {
+    const scheduleRaf = (): void => {
+      if (timeoutRef.current != null) return;
+      timeoutRef.current = requestAnimationFrame(() => {
+        timeoutRef.current = null;
+        const now = Date.now();
+        const elapsed = now - lastUpdateRef.current;
+        if (elapsed < THROTTLE_INTERVAL) {
+          scheduleRaf();
+          return;
+        }
+        lastUpdateRef.current = now;
+        startTransition(() => {
+          setMessages((prev) => {
+            const newMessages = [...prev];
+            let idx: number;
+            if (useBackendStreamingRenderRef.current) {
+              idx = streamingMessageIndexRef.current;
+              if (idx < 0) return prev;
+            } else {
+              idx = getOrCreateStreamingAssistantIndex(newMessages);
+            }
+            if (idx >= 0 && newMessages[idx]?.type === 'assistant') {
+              newMessages[idx] = patchAssistantForStreaming({
+                ...newMessages[idx],
+                isStreaming: true,
+              });
+            }
+            return newMessages;
+          });
+        });
+      });
+    };
+    return scheduleRaf;
+  };
+
+  const scheduleContentRaf = createStreamingRafScheduler(contentUpdateTimeoutRef, lastContentUpdateRef);
+  const scheduleThinkingRaf = createStreamingRafScheduler(thinkingUpdateTimeoutRef, lastThinkingUpdateRef);
+
   window.onContentDelta = (delta: string) => {
     if (window.__sessionTransitioning) return;
     if (!isStreamingRef.current) return;
     window.__lastStreamActivityAt = Date.now();
     streamingContentRef.current += delta;
-    activeThinkingSegmentIndexRef.current = -1;
-
-    if (activeTextSegmentIndexRef.current < 0) {
-      activeTextSegmentIndexRef.current = streamingTextSegmentsRef.current.length;
-      streamingTextSegmentsRef.current.push('');
-    }
-    streamingTextSegmentsRef.current[activeTextSegmentIndexRef.current] += delta;
-
-    const now = Date.now();
-    const timeSinceLastUpdate = now - lastContentUpdateRef.current;
-
-    const updateMessages = () => {
-      const currentContent = streamingContentRef.current;
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        let idx: number;
-        if (useBackendStreamingRenderRef.current) {
-          idx = streamingMessageIndexRef.current;
-          // Index is still -1: backend hasn't created the assistant via updateMessages yet
-          if (idx < 0) return prev;
-        } else {
-          idx = getOrCreateStreamingAssistantIndex(newMessages);
-        }
-
-        if (idx >= 0 && newMessages[idx]?.type === 'assistant') {
-          newMessages[idx] = patchAssistantForStreaming({
-            ...newMessages[idx],
-            content: currentContent,
-            isStreaming: true,
-          });
-        }
-        return newMessages;
-      });
-    };
-
-    if (timeSinceLastUpdate >= THROTTLE_INTERVAL) {
-      lastContentUpdateRef.current = now;
-      updateMessages();
-    } else {
-      if (!contentUpdateTimeoutRef.current) {
-        const remainingTime = THROTTLE_INTERVAL - timeSinceLastUpdate;
-        contentUpdateTimeoutRef.current = setTimeout(() => {
-          contentUpdateTimeoutRef.current = null;
-          lastContentUpdateRef.current = Date.now();
-          updateMessages();
-        }, remainingTime);
-      }
-    }
+    scheduleContentRaf();
   };
 
   window.onThinkingDelta = (delta: string) => {
     if (window.__sessionTransitioning) return;
     if (!isStreamingRef.current) return;
     window.__lastStreamActivityAt = Date.now();
-    activeTextSegmentIndexRef.current = -1;
-
-    let forceUpdate = false;
-    if (activeThinkingSegmentIndexRef.current < 0) {
-      activeThinkingSegmentIndexRef.current = streamingThinkingSegmentsRef.current.length;
-      streamingThinkingSegmentsRef.current.push('');
-      forceUpdate = true;
-    }
-    streamingThinkingSegmentsRef.current[activeThinkingSegmentIndexRef.current] += delta;
-
-    const now = Date.now();
-    const timeSinceLastUpdate = now - lastThinkingUpdateRef.current;
-
-    const updateMessages = () => {
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        let idx: number;
-        if (useBackendStreamingRenderRef.current) {
-          idx = streamingMessageIndexRef.current;
-          if (idx < 0) return prev;
-        } else {
-          idx = getOrCreateStreamingAssistantIndex(newMessages);
-        }
-
-        if (idx >= 0 && newMessages[idx]?.type === 'assistant') {
-          newMessages[idx] = patchAssistantForStreaming({
-            ...newMessages[idx],
-            isStreaming: true,
-          });
-        }
-        return newMessages;
-      });
-    };
-
-    if (forceUpdate || timeSinceLastUpdate >= THROTTLE_INTERVAL) {
-      lastThinkingUpdateRef.current = now;
-      updateMessages();
-    } else {
-      if (!thinkingUpdateTimeoutRef.current) {
-        const remainingTime = THROTTLE_INTERVAL - timeSinceLastUpdate;
-        thinkingUpdateTimeoutRef.current = setTimeout(() => {
-          thinkingUpdateTimeoutRef.current = null;
-          lastThinkingUpdateRef.current = Date.now();
-          updateMessages();
-        }, remainingTime);
-      }
-    }
+    streamingThinkingRef.current += delta;
+    scheduleThinkingRaf();
   };
 
   window.onStreamEnd = (sequence?: string | number) => {
     if (window.__sessionTransitioning) return;
+
     const currentTurnId = streamingTurnIdRef.current;
+    const handlingMode = getStreamEndHandlingMode(
+      options.currentProviderRef.current,
+      isStreamingRef.current,
+      currentTurnId,
+    );
     if (currentTurnId > 0 && window.__streamEndProcessedTurnId === currentTurnId) {
       return;
     }
-    if (!isStreamingRef.current && currentTurnId <= 0) {
+    if (handlingMode === 'skip') {
       return;
     }
 
@@ -271,8 +218,19 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     if (parsedSequence != null && parsedSequence >= 0) {
       window.__minAcceptedUpdateSequence = Math.max(window.__minAcceptedUpdateSequence ?? 0, parsedSequence);
     }
-    // Notify backend about stream completion for tab status indicator
     sendBridgeEvent('tab_status_changed', JSON.stringify({ status: 'completed' }));
+
+    if (handlingMode === 'minimal') {
+      if (typeof window.__cancelPendingUpdateMessages === 'function') {
+        window.__cancelPendingUpdateMessages();
+      }
+      setStreamingActive(false);
+      setLoading(false);
+      setLoadingStartTime(null);
+      setIsThinking(false);
+      window.__streamEndProcessedTurnId = currentTurnId > 0 ? currentTurnId : undefined;
+      return;
+    }
 
     let backendSnapshotContent: string | undefined;
     let backendSnapshotRaw: ClaudeRawMessage | string | undefined;
@@ -280,20 +238,15 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       try {
         const parsed = JSON.parse(window.__pendingUpdateJson) as Array<Record<string, unknown>>;
         for (let i = parsed.length - 1; i >= 0; i -= 1) {
-          const entry = parsed[i];
-          if (entry?.type !== 'assistant') {
-            continue;
-          }
-          const entryContent: unknown = entry.content;
-          const content = typeof entryContent === 'string' ? entryContent : '';
+          if (parsed[i]?.type !== 'assistant') continue;
+          const rawContent = parsed[i].content;
+          const content = typeof rawContent === 'string' ? rawContent : '';
           if (content) {
             backendSnapshotContent = content;
-          }
-          const raw: unknown = entry.raw;
-          if (typeof raw === 'string') {
-            backendSnapshotRaw = raw;
-          } else if (raw && typeof raw === 'object') {
-            backendSnapshotRaw = raw as ClaudeRawMessage;
+            const rawVal = parsed[i].raw;
+            if (rawVal != null && (typeof rawVal === 'object' || typeof rawVal === 'string')) {
+              backendSnapshotRaw = rawVal as ClaudeRawMessage | string;
+            }
           }
           break;
         }
@@ -302,78 +255,92 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       }
     }
 
-    // FIX: Cancel any pending coalesced updateMessages rAF.  If onStreamEnd
-    // fires between the rAF scheduling and execution, the stale snapshot
-    // would be processed in the non-streaming path after refs are cleared,
-    // overwriting the final state with an outdated message structure.
     if (typeof window.__cancelPendingUpdateMessages === 'function') {
       window.__cancelPendingUpdateMessages();
     }
 
-    // Clear pending throttle timeouts — their content is already in streamingContentRef
-    if (contentUpdateTimeoutRef.current) {
-      clearTimeout(contentUpdateTimeoutRef.current);
+    if (contentUpdateTimeoutRef.current != null) {
+      cancelAnimationFrame(contentUpdateTimeoutRef.current);
       contentUpdateTimeoutRef.current = null;
     }
-    if (thinkingUpdateTimeoutRef.current) {
-      clearTimeout(thinkingUpdateTimeoutRef.current);
+    if (thinkingUpdateTimeoutRef.current != null) {
+      cancelAnimationFrame(thinkingUpdateTimeoutRef.current);
       thinkingUpdateTimeoutRef.current = null;
     }
 
-    // Snapshot keys that need collapsing BEFORE they are cleared inside the updater.
     const keysToCollapse = new Set(autoExpandedThinkingKeysRef.current);
     const turnStartedAt = window.__turnStartedAt;
     window.__turnStartedAt = undefined;
     const endedStreamingTurnId = streamingTurnIdRef.current;
+    const endedStreamingMessageIndex = streamingMessageIndexRef.current;
+    const endedStreamingContent =
+      backendSnapshotContent && backendSnapshotContent.length > streamingContentRef.current.length
+        ? backendSnapshotContent
+        : streamingContentRef.current;
+    const endedBackendRaw = backendSnapshotRaw;
 
-    // Flush final content AND clear streaming refs inside the same updater.
-    // This ensures any previously queued setMessages updater (e.g. from
-    // updateMessages) still reads valid refs when it executes, because React
-    // processes updaters in enqueue order.
+    type TextBlock = { type: 'text'; text: string };
+    const hasTextBlocks = (value: unknown): value is { message: { content: TextBlock[] } } => {
+      if (!value || typeof value !== 'object') return false;
+      const msg = (value as { message?: unknown }).message;
+      if (!msg || typeof msg !== 'object') return false;
+      const content = (msg as { content?: unknown }).content;
+      return Array.isArray(content);
+    };
+    const getTextLenFromRaw = (raw: unknown): number => {
+      let parsedRaw: unknown = raw;
+      if (typeof raw === 'string') {
+        try {
+          parsedRaw = JSON.parse(raw);
+        } catch (error) {
+          console.warn('[Frontend] Failed to parse raw JSON for length comparison:', error);
+          return 0;
+        }
+      }
+      if (!hasTextBlocks(parsedRaw)) return 0;
+      return parsedRaw.message.content
+        .filter((b): b is TextBlock => b?.type === 'text' && typeof b.text === 'string')
+        .reduce((sum, b) => sum + b.text.length, 0);
+    };
+
+    // 在进入 updater 之前先清空 refs，避免 deferred updateMessages 与旧 streaming refs 竞态。
+    isStreamingRef.current = false;
+    useBackendStreamingRenderRef.current = false;
+    streamingMessageIndexRef.current = -1;
+    streamingTurnIdRef.current = -1;
+    streamingContentRef.current = '';
+    streamingThinkingRef.current = '';
+    autoExpandedThinkingKeysRef.current.clear();
+
+    window.__lastStreamEndedTurnId = endedStreamingTurnId > 0 ? endedStreamingTurnId : undefined;
+    window.__lastStreamEndedAt = Date.now();
+
     setMessages((prev) => {
       let newMessages = prev;
-      const idx = streamingMessageIndexRef.current;
+      const idx = endedStreamingMessageIndex;
       if (prev.length > 0 && idx >= 0 && idx < prev.length && prev[idx]?.type === 'assistant') {
-        const finalContent =
-          backendSnapshotContent && backendSnapshotContent.length > streamingContentRef.current.length
-            ? backendSnapshotContent
-            : streamingContentRef.current;
         newMessages = [...prev];
+        const finalContent = endedStreamingContent || newMessages[idx].content || '';
         const durationMs =
           typeof turnStartedAt === 'number' && turnStartedAt > 0
             ? Date.now() - turnStartedAt
             : undefined;
-        const finalizedRaw = backendSnapshotRaw;
+        let finalRaw = newMessages[idx].raw;
+        if (endedBackendRaw != null && getTextLenFromRaw(endedBackendRaw) >= getTextLenFromRaw(finalRaw)) {
+          finalRaw = endedBackendRaw;
+        }
         newMessages[idx] = {
           ...newMessages[idx],
-          content: finalContent || newMessages[idx].content,
-          ...(finalizedRaw !== undefined ? { raw: finalizedRaw } : {}),
+          content: finalContent,
+          raw: finalRaw,
           isStreaming: false,
           __turnId: endedStreamingTurnId,
           ...(durationMs != null ? { durationMs } : {}),
         };
       }
-
-      // Clear all streaming refs AFTER flushing content, inside the updater
-      isStreamingRef.current = false;
-      useBackendStreamingRenderRef.current = false;
-      streamingMessageIndexRef.current = -1;
-      streamingTurnIdRef.current = -1;
-      streamingContentRef.current = '';
-      streamingTextSegmentsRef.current = [];
-      activeTextSegmentIndexRef.current = -1;
-      streamingThinkingSegmentsRef.current = [];
-      activeThinkingSegmentIndexRef.current = -1;
-      seenToolUseCountRef.current = 0;
-      autoExpandedThinkingKeysRef.current.clear();
-
       return newMessages;
     });
 
-    window.__lastStreamEndedTurnId = endedStreamingTurnId > 0 ? endedStreamingTurnId : undefined;
-    window.__lastStreamEndedAt = Date.now();
-
-    // Collapse auto-expanded thinking blocks using the pre-clear snapshot
     if (setExpandedThinking && keysToCollapse.size > 0) {
       setExpandedThinking((prev) => {
         const next = { ...prev };
@@ -384,30 +351,19 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       });
     }
 
-    // React state (not ref) — React batches this with setMessages automatically
     setStreamingActive(false);
-
-    // FIX: onStreamEnd is the authoritative signal that streaming has ended.
-    // Reset loading state here to prevent race conditions where showLoading("false")
-    // arrives before onStreamEnd and gets ignored by the isStreamingRef guard,
-    // while the flush callback's showLoading("false") may be delayed or lost
-    // (e.g., due to slow message serialization or multi-hop async chains).
     setLoading(false);
     setLoadingStartTime(null);
     setIsThinking(false);
-
     window.__streamEndProcessedTurnId = endedStreamingTurnId > 0 ? endedStreamingTurnId : undefined;
   };
 
-  // Streaming heartbeat — lightweight signal from backend during tool execution
-  // phases where no content deltas arrive.  Keeps the stall watchdog alive.
   window.onStreamingHeartbeat = () => {
     if (isStreamingRef.current && window.__lastStreamActivityAt !== undefined) {
       window.__lastStreamActivityAt = Date.now();
     }
   };
 
-  // Permission denied callback — marks incomplete tool calls as "interrupted"
   window.onPermissionDenied = () => {
     if (!window.__deniedToolIds) {
       window.__deniedToolIds = new Set<string>();

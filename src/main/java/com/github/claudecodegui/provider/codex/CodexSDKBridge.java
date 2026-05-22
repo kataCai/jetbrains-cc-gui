@@ -4,11 +4,13 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
+import com.github.claudecodegui.handler.history.HistoryMessageInjector;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.dependency.DependencyManager;
 import com.github.claudecodegui.provider.common.BaseSDKBridge;
+import com.github.claudecodegui.provider.common.EnvironmentCheckResult;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.util.PlatformUtils;
@@ -16,12 +18,14 @@ import com.github.claudecodegui.util.PlatformUtils;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
-import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Codex SDK bridge.
@@ -45,9 +49,16 @@ public class CodexSDKBridge extends BaseSDKBridge {
     private static final String ENV_CODEX_CI = "CODEX_CI";
     private static final String ENV_CODEX_SANDBOX_NETWORK_DISABLED = "CODEX_SANDBOX_NETWORK_DISABLED";
     private static final long MCP_TOOLS_TIMEOUT_MS = 65_000;
+    private final CodexHistoryReader historyReader;
 
     public CodexSDKBridge() {
         super(CodexSDKBridge.class);
+        this.historyReader = new CodexHistoryReader();
+    }
+
+    CodexSDKBridge(Path sessionsDir) {
+        super(CodexSDKBridge.class);
+        this.historyReader = new CodexHistoryReader(sessionsDir, gson);
     }
 
     // ============================================================================
@@ -70,15 +81,27 @@ public class CodexSDKBridge extends BaseSDKBridge {
             MessageCallback callback,
             SDKResult result,
             StringBuilder assistantContent,
-            boolean[] hadSendError,
-            String[] lastNodeError
+            AtomicBoolean hadSendError,
+            AtomicReference<String> lastNodeError
     ) {
         if (line.contains("[DEBUG]")) {
             LOG.debug("[Codex] " + line);
         }
 
+        // Node 侧有一部分启动/协议级错误只会输出普通 JSON：
+        // {"success":false,"error":"..."}
+        // 如果这里不识别，Java 侧最终只会看到“process exited with code: 1”，
+        // 用户拿不到真实原因，也无法判断是认证、权限、工作目录还是 bridge 资源问题。
+        if (tryHandlePlainJsonErrorLine(line, callback, result, hadSendError)) {
+            return;
+        }
+
         if (line.startsWith("[MESSAGE_START]")) {
             callback.onMessage("message_start", "");
+        } else if (line.startsWith("[STREAM_START]")) {
+            callback.onMessage("stream_start", "");
+        } else if (line.startsWith("[STREAM_END]")) {
+            callback.onMessage("stream_end", "");
         } else if (line.startsWith("[MESSAGE_END]")) {
             callback.onMessage("message_end", "");
         } else if (line.startsWith("[THREAD_ID]")) {
@@ -122,9 +145,12 @@ public class CodexSDKBridge extends BaseSDKBridge {
             } catch (Exception ignored) {
             }
         } else if (line.startsWith("[CONTENT_DELTA]")) {
-            String delta = line.substring("[CONTENT_DELTA]".length()).trim();
+            String delta = decodeJsonStringPayload(line.substring("[CONTENT_DELTA]".length()));
             assistantContent.append(delta);
             callback.onMessage("content_delta", delta);
+        } else if (line.startsWith("[THINKING_DELTA]")) {
+            String delta = decodeJsonStringPayload(line.substring("[THINKING_DELTA]".length()));
+            callback.onMessage("thinking_delta", delta);
         } else if (line.startsWith("[CONTENT]")) {
             String content = line.substring("[CONTENT]".length()).trim();
             // Avoid duplicate
@@ -171,10 +197,100 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 }
             } catch (Exception ignored) {
             }
-            hadSendError[0] = true;
+            hadSendError.set(true);
             result.success = false;
             result.error = errorMessage;
             callback.onError(errorMessage);
+        }
+    }
+
+    /**
+     * 识别未带 `[SEND_ERROR]` 前缀的普通 JSON 失败输出。
+     * 这类输出通常来自 channel-manager 的外围异常处理或更早期的启动失败，
+     * 如果不提前消费，Java 侧最终只会退化成一个泛化的退出码错误。
+     *
+     * @param line 当前输出行
+     * @param callback 消息回调
+     * @param result 当前结果对象
+     * @param hadSendError 是否已标记发送阶段失败
+     * @return true 表示该行已经被识别并消费
+     */
+    private boolean tryHandlePlainJsonErrorLine(
+            String line,
+            MessageCallback callback,
+            SDKResult result,
+            AtomicBoolean hadSendError
+    ) {
+        if (line == null) {
+            return false;
+        }
+        String trimmed = line.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+            return false;
+        }
+
+        try {
+            JsonObject payload = gson.fromJson(trimmed, JsonObject.class);
+            if (payload == null || !payload.has("success") || payload.get("success").isJsonNull()) {
+                return false;
+            }
+            if (payload.get("success").getAsBoolean()) {
+                return false;
+            }
+
+            String errorMessage = payload.has("error") && !payload.get("error").isJsonNull()
+                    ? payload.get("error").getAsString()
+                    : "Codex request failed";
+            hadSendError.set(true);
+            result.success = false;
+            result.error = errorMessage;
+            callback.onError(errorMessage);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 将结构化环境检查结果转换成可直接展示给用户的错误信息。
+     * 这里用于 Codex 发送前预检，避免 bridge 资源缺失时继续拉起 Node 进程，
+     * 最终只剩一个无上下文的退出码。
+     *
+     * @param environmentResult 环境检查结果
+     * @return 用户可理解的错误文案
+     */
+    private String buildEnvironmentFailureMessage(EnvironmentCheckResult environmentResult) {
+        if (environmentResult == null) {
+            return "Codex environment check failed";
+        }
+        String detail = environmentResult.getDetailMessage();
+        return switch (environmentResult.getFailureCode()) {
+            case NODE_NOT_FOUND ->
+                    "Codex 启动失败：未检测到可用的 Node.js 路径。"
+                            + (detail != null && !detail.isEmpty() ? "\n\nDetail: " + detail : "");
+            case NODE_EXECUTION_FAILED ->
+                    "Codex 启动失败：Node.js 可执行文件校验失败。"
+                            + (detail != null && !detail.isEmpty() ? "\n\nDetail: " + detail : "");
+            case BRIDGE_NOT_READY ->
+                    "Codex 启动失败：AI Bridge 尚未准备完成，请稍后重试。"
+                            + (detail != null && !detail.isEmpty() ? "\n\nDetail: " + detail : "");
+            case CHANNEL_SCRIPT_MISSING ->
+                    "Codex 启动失败：AI Bridge 入口脚本缺失，请重新构建或重新部署插件资源。"
+                            + (detail != null && !detail.isEmpty() ? "\n\nDetail: " + detail : "");
+            case UNKNOWN ->
+                    "Codex 启动失败：环境检查出现未知错误。"
+                            + (detail != null && !detail.isEmpty() ? "\n\nDetail: " + detail : "");
+        };
+    }
+
+    private String decodeJsonStringPayload(String rawPayload) {
+        String jsonStr = rawPayload.startsWith(" ") ? rawPayload.substring(1) : rawPayload;
+        try {
+            String decoded = gson.fromJson(jsonStr, String.class);
+            return decoded != null ? decoded : "";
+        } catch (Exception e) {
+            LOG.warn("[CodexSDKBridge] Failed to decode JSON string payload, falling back to raw: " + e.getMessage());
+            return jsonStr;
         }
     }
 
@@ -228,10 +344,10 @@ public class CodexSDKBridge extends BaseSDKBridge {
             }
 
             File[] platformDirs = vendorDir.listFiles();
-            if (platformDirs == null) return;
+            if (platformDirs == null) { return; }
 
             for (File platformDir : platformDirs) {
-                if (!platformDir.isDirectory()) continue;
+                if (!platformDir.isDirectory()) { continue; }
 
                 File codexDir = new File(platformDir, "codex");
                 File codexBinary = new File(codexDir, "codex");
@@ -277,8 +393,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
         return CompletableFuture.supplyAsync(() -> {
             SDKResult result = new SDKResult();
             StringBuilder assistantContent = new StringBuilder();
-            final String[] lastNodeError = {null};
-            final boolean[] hadSendError = {false};
+            AtomicReference<String> lastNodeError = new AtomicReference<>(null);
+            AtomicBoolean hadSendError = new AtomicBoolean(false);
             final List<File> tempImageFiles = new ArrayList<>();  // Track temp images for cleanup
 
             try {
@@ -290,6 +406,15 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 }
                 if (CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE.equals(accessMode)) {
                     String error = ClaudeCodeGuiBundle.message("error.codexLocalAccessNotAuthorized");
+                    result.success = false;
+                    result.error = error;
+                    callback.onError(error);
+                    return result;
+                }
+
+                EnvironmentCheckResult environmentResult = checkEnvironmentDetails();
+                if (!environmentResult.isReady()) {
+                    String error = buildEnvironmentFailureMessage(environmentResult);
                     result.success = false;
                     result.error = error;
                     callback.onError(error);
@@ -479,7 +604,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
                                     || line.startsWith("[UNHANDLED_REJECTION]")
                                     || line.startsWith("[COMMAND_ERROR]")) {
                                 LOG.warn("[Node.js ERROR] " + line);
-                                lastNodeError[0] = line;
+                                lastNodeError.set(line);
                             }
                             processOutputLine(line, callback, result, assistantContent, hadSendError, lastNodeError);
                         }
@@ -499,14 +624,15 @@ public class CodexSDKBridge extends BaseSDKBridge {
                         result.recoveryCategory = "user_interrupted";
                         result.recoveryAction = "mark_cancelled";
                         callback.onComplete(result);
-                    } else if (!hadSendError[0]) {
+                    } else if (!hadSendError.get()) {
                         result.success = exitCode == 0;
                         if (result.success) {
                             callback.onComplete(result);
                         } else {
                             String errorMsg = "Codex process exited with code: " + exitCode;
-                            if (lastNodeError[0] != null && !lastNodeError[0].isEmpty()) {
-                                errorMsg = errorMsg + " | Last error: " + lastNodeError[0];
+                            String nodeErr = lastNodeError.get();
+                            if (nodeErr != null && !nodeErr.isEmpty()) {
+                                errorMsg = errorMsg + " | Last error: " + nodeErr;
                             }
                             result.error = errorMsg;
                             callback.onError(errorMsg);
@@ -531,203 +657,32 @@ public class CodexSDKBridge extends BaseSDKBridge {
     }
 
     /**
-     * 获取会话历史消息。
-     * Codex SDK 本身不提供历史消息查询能力，因此这里回退到本地 ~/.codex/sessions 历史文件，
-     * 并把原始记录标准化为现有会话恢复链路可识别的 user/assistant 消息结构。
+     * 获取 Codex 持久化会话历史消息。
+     * Codex SDK 自身不提供统一的历史查询接口，因此这里仍然从本地会话文件读取，
+     * 再复用统一的 HistoryMessageInjector 转换链路，把历史记录收敛成当前前端和会话恢复都能识别的结构。
+     * 这里保留本类构造阶段注入的 historyReader，避免测试替换 sessions 目录时又退回默认本地目录。
+     *
+     * @param sessionId Codex 线程/会话标识
+     * @param cwd 当前工作目录，当前实现未直接使用，但保留签名与其他 provider 对齐
+     * @return 已转换为前端批量注入格式的历史消息列表；读取失败时返回空列表
      */
     public List<JsonObject> getSessionMessages(String sessionId, String cwd) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             LOG.info("[CodexHistoryRestore] Skip loading history because sessionId is empty");
-            return new ArrayList<>();
+            return List.of();
         }
 
         try {
-            String json = createHistoryReader().getSessionMessagesAsJson(sessionId);
-            Type listType = new com.google.gson.reflect.TypeToken<List<CodexHistoryReader.CodexMessage>>() {
-            }.getType();
-            List<CodexHistoryReader.CodexMessage> rawMessages = gson.fromJson(json, listType);
-            return normalizeHistoryMessages(rawMessages);
+            String rawMessages = this.historyReader.getSessionMessagesAsJson(sessionId);
+            JsonArray historyItems = gson.fromJson(rawMessages, JsonArray.class);
+            if (historyItems == null) {
+                return List.of();
+            }
+            return HistoryMessageInjector.convertCodexMessagesToFrontendBatch(historyItems);
         } catch (Exception e) {
-            LOG.warn("[CodexHistoryRestore] Failed to load session messages from local history: " + e.getMessage(), e);
-            return new ArrayList<>();
+            LOG.warn("[CodexHistoryRestore] Failed to load Codex session history: " + e.getMessage(), e);
+            return List.of();
         }
-    }
-
-    /**
-     * 创建 Codex 历史读取器。
-     * 抽成独立方法是为了让测试能够替换本地历史目录，而不改生产逻辑分支。
-     *
-     * @return 历史读取器实例
-     */
-    protected CodexHistoryReader createHistoryReader() {
-        return new CodexHistoryReader();
-    }
-
-    /**
-     * 把 Codex 原始历史记录转换为现有 MessageParser 可识别的统一消息格式。
-     * 这里只恢复用户和助手的可见文本消息，其他事件维持跳过，避免把元信息误渲染到聊天区。
-     *
-     * @param rawMessages 原始 Codex 历史记录
-     * @return 标准化后的消息列表
-     */
-    private List<JsonObject> normalizeHistoryMessages(List<CodexHistoryReader.CodexMessage> rawMessages) {
-        List<JsonObject> normalizedMessages = new ArrayList<>();
-        if (rawMessages == null || rawMessages.isEmpty()) {
-            return normalizedMessages;
-        }
-
-        for (CodexHistoryReader.CodexMessage rawMessage : rawMessages) {
-            JsonObject normalized = normalizeHistoryMessage(rawMessage);
-            if (normalized != null) {
-                normalizedMessages.add(normalized);
-            }
-        }
-        LOG.info("[CodexHistoryRestore] Normalized " + normalizedMessages.size() + " visible messages from local history");
-        return normalizedMessages;
-    }
-
-    /**
-     * 标准化单条历史记录。
-     *
-     * @param rawMessage 原始 Codex 记录
-     * @return 标准消息；无法映射时返回 null
-     */
-    private JsonObject normalizeHistoryMessage(CodexHistoryReader.CodexMessage rawMessage) {
-        if (rawMessage == null || rawMessage.payload == null || rawMessage.type == null) {
-            return null;
-        }
-
-        if ("event_msg".equals(rawMessage.type)) {
-            return normalizeEventMessage(rawMessage.payload);
-        }
-        if ("response_item".equals(rawMessage.type)) {
-            return normalizeResponseItem(rawMessage.payload);
-        }
-        return null;
-    }
-
-    /**
-     * 标准化 event_msg 记录。
-     *
-     * @param payload Codex event payload
-     * @return 标准消息；当前仅处理 user_message
-     */
-    private JsonObject normalizeEventMessage(JsonObject payload) {
-        if (!payload.has("type") || payload.get("type").isJsonNull()) {
-            return null;
-        }
-        String payloadType = payload.get("type").getAsString();
-        if (!"user_message".equals(payloadType)) {
-            return null;
-        }
-
-        String text = payload.has("message") && !payload.get("message").isJsonNull()
-                ? payload.get("message").getAsString()
-                : "";
-        return buildNormalizedMessage("user", text);
-    }
-
-    /**
-     * 标准化 response_item 记录。
-     *
-     * @param payload Codex response item payload
-     * @return 标准消息；当前仅处理 message 类型
-     */
-    private JsonObject normalizeResponseItem(JsonObject payload) {
-        if (!payload.has("type") || payload.get("type").isJsonNull()) {
-            return null;
-        }
-        String payloadType = payload.get("type").getAsString();
-        if (!"message".equals(payloadType)) {
-            return null;
-        }
-
-        String role = payload.has("role") && !payload.get("role").isJsonNull()
-                ? payload.get("role").getAsString()
-                : "assistant";
-        String normalizedType = "user".equals(role) ? "user" : "assistant";
-        String text = extractCodexMessageText(payload);
-        return buildNormalizedMessage(normalizedType, text);
-    }
-
-    /**
-     * 从 Codex message payload 中提取可见文本。
-     *
-     * @param payload Codex message payload
-     * @return 组合后的文本内容
-     */
-    private String extractCodexMessageText(JsonObject payload) {
-        if (!payload.has("content") || payload.get("content").isJsonNull()) {
-            return "";
-        }
-        JsonElement content = payload.get("content");
-        if (content.isJsonPrimitive()) {
-            return content.getAsString();
-        }
-        if (!content.isJsonArray()) {
-            return "";
-        }
-
-        StringBuilder textBuilder = new StringBuilder();
-        JsonArray contentArray = content.getAsJsonArray();
-        for (JsonElement element : contentArray) {
-            if (!element.isJsonObject()) {
-                continue;
-            }
-            JsonObject block = element.getAsJsonObject();
-            String blockText = extractCodexContentBlockText(block);
-            if (blockText == null || blockText.trim().isEmpty()) {
-                continue;
-            }
-            if (textBuilder.length() > 0) {
-                textBuilder.append("\n");
-            }
-            textBuilder.append(blockText);
-        }
-        return textBuilder.toString();
-    }
-
-    /**
-     * 提取单个 Codex 内容块中的可见文本。
-     *
-     * @param block 内容块
-     * @return 可见文本；不可展示时返回空串
-     */
-    private String extractCodexContentBlockText(JsonObject block) {
-        if (block == null || !block.has("type") || block.get("type").isJsonNull()) {
-            return "";
-        }
-
-        String blockType = block.get("type").getAsString();
-        if (("output_text".equals(blockType) || "text".equals(blockType))
-                && block.has("text")
-                && !block.get("text").isJsonNull()) {
-            return block.get("text").getAsString();
-        }
-        return "";
-    }
-
-    /**
-     * 构建统一消息结构。
-     *
-     * @param type 标准消息类型，仅允许 user/assistant
-     * @param text 文本内容
-     * @return 统一消息对象
-     */
-    private JsonObject buildNormalizedMessage(String type, String text) {
-        JsonObject messageWrapper = new JsonObject();
-        messageWrapper.addProperty("type", type);
-
-        JsonObject message = new JsonObject();
-        JsonArray contentArray = new JsonArray();
-        JsonObject textBlock = new JsonObject();
-        textBlock.addProperty("type", "text");
-        textBlock.addProperty("text", text != null ? text : "");
-        contentArray.add(textBlock);
-        message.add("content", contentArray);
-
-        messageWrapper.add("message", message);
-        return messageWrapper;
     }
 
     /**
@@ -780,33 +735,33 @@ public class CodexSDKBridge extends BaseSDKBridge {
                     stdin.flush();
                 }
 
-                final boolean[] found = {false};
-                final boolean[] readerDone = {false};
-                final String[] toolsJson = {null};
+                AtomicBoolean found = new AtomicBoolean(false);
+                AtomicBoolean readerDone = new AtomicBoolean(false);
+                AtomicReference<String> toolsJson = new AtomicReference<>(null);
                 final StringBuilder output = new StringBuilder();
 
                 Thread readerThread = new Thread(() -> {
                     try (BufferedReader reader = new BufferedReader(
                             new InputStreamReader(finalProcess.getInputStream(), StandardCharsets.UTF_8))) {
                         String line;
-                        while (!found[0] && (line = reader.readLine()) != null) {
+                        while (!found.get() && (line = reader.readLine()) != null) {
                             output.append(line).append("\n");
                             if (line.startsWith("[MCP_SERVER_TOOLS]")) {
-                                toolsJson[0] = line.substring("[MCP_SERVER_TOOLS]".length()).trim();
-                                found[0] = true;
+                                toolsJson.set(line.substring("[MCP_SERVER_TOOLS]".length()).trim());
+                                found.set(true);
                                 break;
                             }
                         }
                     } catch (Exception e) {
                         LOG.debug("[CodexMcpTools] Reader thread exception: " + e.getMessage());
                     } finally {
-                        readerDone[0] = true;
+                        readerDone.set(true);
                     }
                 });
                 readerThread.start();
 
                 long deadline = System.currentTimeMillis() + MCP_TOOLS_TIMEOUT_MS;
-                while (!found[0] && !readerDone[0] && System.currentTimeMillis() < deadline) {
+                while (!found.get() && !readerDone.get() && System.currentTimeMillis() < deadline) {
                     Thread.sleep(100);
                 }
 
@@ -815,9 +770,10 @@ public class CodexSDKBridge extends BaseSDKBridge {
                     PlatformUtils.terminateProcess(process);
                 }
 
-                if (found[0] && toolsJson[0] != null && !toolsJson[0].isEmpty()) {
+                String capturedTools = toolsJson.get();
+                if (found.get() && capturedTools != null && !capturedTools.isEmpty()) {
                     try {
-                        JsonObject result = gson.fromJson(toolsJson[0], JsonObject.class);
+                        JsonObject result = gson.fromJson(capturedTools, JsonObject.class);
                         LOG.info("[CodexMcpTools] Got tools for " + serverId + " in " + elapsed + "ms");
                         return result;
                     } catch (Exception e) {
@@ -918,7 +874,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
         }
 
         for (ClaudeSession.Attachment attachment : attachments) {
-            if (attachment == null) continue;
+            if (attachment == null) { continue; }
 
             String type = attachment.mediaType;
             String data = attachment.data;
@@ -991,7 +947,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
      * Get file extension from MIME type.
      */
     private String getImageExtension(String mimeType) {
-        if (mimeType == null) return ".png";
+        if (mimeType == null) { return ".png"; }
 
         switch (mimeType.toLowerCase()) {
             case "image/jpeg":
@@ -1012,11 +968,11 @@ public class CodexSDKBridge extends BaseSDKBridge {
     }
 
     private String extractAssistantText(JsonObject msg) {
-        if (msg == null) return "";
-        if (!msg.has("message") || !msg.get("message").isJsonObject()) return "";
+        if (msg == null) { return ""; }
+        if (!msg.has("message") || !msg.get("message").isJsonObject()) { return ""; }
 
         JsonObject message = msg.getAsJsonObject("message");
-        if (!message.has("content") || message.get("content").isJsonNull()) return "";
+        if (!message.has("content") || message.get("content").isJsonNull()) { return ""; }
 
         JsonElement contentEl = message.get("content");
         if (contentEl.isJsonPrimitive()) {
@@ -1029,12 +985,12 @@ public class CodexSDKBridge extends BaseSDKBridge {
         JsonArray arr = contentEl.getAsJsonArray();
         StringBuilder sb = new StringBuilder();
         for (JsonElement el : arr) {
-            if (!el.isJsonObject()) continue;
+            if (!el.isJsonObject()) { continue; }
             JsonObject block = el.getAsJsonObject();
-            if (!block.has("type") || block.get("type").isJsonNull()) continue;
+            if (!block.has("type") || block.get("type").isJsonNull()) { continue; }
             String type = block.get("type").getAsString();
             if ("text".equals(type) && block.has("text") && !block.get("text").isJsonNull()) {
-                if (sb.length() > 0) sb.append("\n");
+                if (sb.length() > 0) { sb.append("\n"); }
                 sb.append(block.get("text").getAsString());
             }
         }

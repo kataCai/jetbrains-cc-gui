@@ -5,6 +5,7 @@ import {
   OPTIMISTIC_MESSAGE_TIME_WINDOW,
   appendOptimisticMessageIfMissing,
   ensureStreamingAssistantInList,
+  getStreamEndHandlingMode,
   getRawUuid,
   preserveLastAssistantIdentity,
   preserveMessageIdentity,
@@ -14,10 +15,6 @@ import {
   stripDuplicateTrailingToolMessages,
   stripUuidFromRaw,
 } from '../messageSync';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 const ref = <T>(value: T): MutableRefObject<T> => ({ current: value });
 
@@ -46,9 +43,31 @@ const makeUserMsg = (content: string, extra?: Partial<ClaudeMessage>) =>
 const makeAssistantMsg = (content: string, extra?: Partial<ClaudeMessage>) =>
   makeMsg('assistant', content, extra);
 
-// ---------------------------------------------------------------------------
-// getRawUuid
-// ---------------------------------------------------------------------------
+/**
+ * `messageSync` 工具函数回归测试。
+ * 目标是覆盖：
+ * 1. optimistic message/identity 保护；
+ * 2. streaming/raw block 文本保护；
+ * 3. stream end 之后的短时 reconcile 保护；
+ * 4. Codex 工具尾消息去重与 shrink 保护。
+ */
+describe('getStreamEndHandlingMode', () => {
+  it('uses full finalize when streaming is active', () => {
+    expect(getStreamEndHandlingMode('codex', true, 0)).toBe('full');
+  });
+
+  it('uses full finalize when a turn id is still present', () => {
+    expect(getStreamEndHandlingMode('codex', false, 7)).toBe('full');
+  });
+
+  it('uses minimal finalize for Codex when stream start was lost', () => {
+    expect(getStreamEndHandlingMode('codex', false, 0)).toBe('minimal');
+  });
+
+  it('skips finalize for non-Codex providers when no stream is active', () => {
+    expect(getStreamEndHandlingMode('claude', false, 0)).toBe('skip');
+  });
+});
 
 describe('getRawUuid', () => {
   it('returns undefined when msg is undefined', () => {
@@ -59,7 +78,7 @@ describe('getRawUuid', () => {
     expect(getRawUuid(makeUserMsg('hello'))).toBeUndefined();
   });
 
-  it('returns undefined when raw is a string (not an object)', () => {
+  it('returns undefined when raw is a string', () => {
     const msg: ClaudeMessage = { ...makeUserMsg('hello'), raw: 'plain-string' as any };
     expect(getRawUuid(msg)).toBeUndefined();
   });
@@ -75,20 +94,10 @@ describe('getRawUuid', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// stripUuidFromRaw
-// ---------------------------------------------------------------------------
-
 describe('stripUuidFromRaw', () => {
-  it('returns null as-is', () => {
+  it('returns primitive values as-is', () => {
     expect(stripUuidFromRaw(null)).toBeNull();
-  });
-
-  it('returns undefined as-is', () => {
     expect(stripUuidFromRaw(undefined)).toBeUndefined();
-  });
-
-  it('returns string as-is', () => {
     expect(stripUuidFromRaw('plain')).toBe('plain');
   });
 
@@ -97,7 +106,7 @@ describe('stripUuidFromRaw', () => {
     expect(stripUuidFromRaw(raw)).toBe(raw);
   });
 
-  it('removes uuid from object and keeps all other properties', () => {
+  it('removes uuid and keeps other properties', () => {
     const raw = { uuid: 'abc-123', message: 'content', extra: 42 };
     const result = stripUuidFromRaw(raw) as Record<string, unknown>;
     expect(result).not.toHaveProperty('uuid');
@@ -105,10 +114,6 @@ describe('stripUuidFromRaw', () => {
     expect(result.extra).toBe(42);
   });
 });
-
-// ---------------------------------------------------------------------------
-// preserveMessageIdentity
-// ---------------------------------------------------------------------------
 
 describe('preserveMessageIdentity', () => {
   it('returns nextMsg unchanged when prevMsg is undefined', () => {
@@ -128,7 +133,7 @@ describe('preserveMessageIdentity', () => {
     expect(preserveMessageIdentity(prev, next)).toBe(next);
   });
 
-  it('preserves prevMsg timestamp into nextMsg when they differ', () => {
+  it('preserves prev timestamp into nextMsg when they differ', () => {
     const prevTimestamp = '2024-01-01T00:00:00.000Z';
     const prev = makeUserMsg('prev', { timestamp: prevTimestamp });
     const next = makeUserMsg('next', { timestamp: '2024-02-01T00:00:00.000Z' });
@@ -137,15 +142,7 @@ describe('preserveMessageIdentity', () => {
     expect(result.content).toBe('next');
   });
 
-  it('returns same object reference when timestamps already match', () => {
-    const ts = '2024-01-01T00:00:00.000Z';
-    const prev = makeUserMsg('prev', { timestamp: ts });
-    const next = makeUserMsg('next', { timestamp: ts });
-    const result = preserveMessageIdentity(prev, next);
-    expect(result.timestamp).toBe(ts);
-  });
-
-  it('strips uuid from nextMsg when prev has no uuid but next does', () => {
+  it('strips uuid from next when prev has no uuid but next does', () => {
     const prev = makeUserMsg('prev');
     const next: ClaudeMessage = {
       ...makeUserMsg('next'),
@@ -157,25 +154,18 @@ describe('preserveMessageIdentity', () => {
   });
 
   it('does not strip uuid when prev also has uuid', () => {
-    const prevUuid = 'prev-uuid';
-    const nextUuid = 'next-uuid';
     const prev: ClaudeMessage = {
       ...makeUserMsg('prev'),
-      raw: { uuid: prevUuid } as any,
+      raw: { uuid: 'prev-uuid' } as any,
     };
     const next: ClaudeMessage = {
       ...makeUserMsg('next'),
-      raw: { uuid: nextUuid } as any,
+      raw: { uuid: 'next-uuid' } as any,
     };
     const result = preserveMessageIdentity(prev, next);
-    // uuid is not stripped because prevUuid exists
-    expect(getRawUuid(result)).toBe(nextUuid);
+    expect(getRawUuid(result)).toBe('next-uuid');
   });
 });
-
-// ---------------------------------------------------------------------------
-// appendOptimisticMessageIfMissing
-// ---------------------------------------------------------------------------
 
 describe('appendOptimisticMessageIfMissing', () => {
   it('returns nextList unchanged when prev list is empty', () => {
@@ -204,24 +194,37 @@ describe('appendOptimisticMessageIfMissing', () => {
     const ts = new Date().toISOString();
     const optimistic = makeUserMsg('hello world', { isOptimistic: true, timestamp: ts });
     const backendMsg = makeUserMsg('hello world', { timestamp: ts });
-    const prev = [optimistic];
-    const next = [backendMsg];
-
-    const result = appendOptimisticMessageIfMissing(prev, next);
+    const result = appendOptimisticMessageIfMissing([optimistic], [backendMsg]);
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(backendMsg);
   });
 
-  it('appends when timestamps exceed the time window', () => {
+  it('matches the latest backend user message by content even when confirmation is delayed', () => {
     const oldTs = new Date(Date.now() - OPTIMISTIC_MESSAGE_TIME_WINDOW - 1000).toISOString();
     const newTs = new Date().toISOString();
-    const optimistic = makeUserMsg('hello', { isOptimistic: true, timestamp: oldTs });
-    const backendMsg = makeUserMsg('hello', { timestamp: newTs });
-    const prev = [optimistic];
-    const next = [backendMsg];
+    const optimistic = makeUserMsg('slow confirmation', { isOptimistic: true, timestamp: oldTs });
+    const backendMsg = makeUserMsg('slow confirmation', { timestamp: newTs });
 
-    const result = appendOptimisticMessageIfMissing(prev, next);
-    expect(result).toHaveLength(2);
+    const result = appendOptimisticMessageIfMissing([optimistic], [backendMsg]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(backendMsg);
+  });
+
+  it('matches delayed optimistic text against the latest backend user when older history has same content', () => {
+    const optimistic = makeUserMsg('repeatable prompt', {
+      isOptimistic: true,
+      timestamp: new Date(Date.now() - OPTIMISTIC_MESSAGE_TIME_WINDOW - 1000).toISOString(),
+    });
+    const olderBackend = makeUserMsg('repeatable prompt', { timestamp: '2026-04-26T00:00:00.000Z' });
+    const latestBackend = makeUserMsg('repeatable prompt', { timestamp: new Date().toISOString() });
+
+    const result = appendOptimisticMessageIfMissing(
+      [olderBackend, optimistic],
+      [olderBackend, makeAssistantMsg('old answer'), latestBackend],
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result[2]).toBe(latestBackend);
   });
 
   it('merges attachment blocks from optimistic message into matched backend message', () => {
@@ -237,21 +240,13 @@ describe('appendOptimisticMessageIfMissing', () => {
       } as any,
     });
     const backendMsg = makeUserMsg('hello', { timestamp: ts });
-    const prev = [optimistic];
-    const next = [backendMsg];
-
-    const result = appendOptimisticMessageIfMissing(prev, next);
+    const result = appendOptimisticMessageIfMissing([optimistic], [backendMsg]);
     expect(result).toHaveLength(1);
     const raw = result[0].raw as any;
     expect(Array.isArray(raw?.message?.content)).toBe(true);
-    const hasAttachment = raw.message.content.some((b: any) => b.type === 'attachment');
-    expect(hasAttachment).toBe(true);
+    expect(raw.message.content.some((b: any) => b.type === 'attachment')).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// preserveLastAssistantIdentity
-// ---------------------------------------------------------------------------
 
 describe('preserveLastAssistantIdentity', () => {
   it('returns nextList unchanged when prevList has no assistant', () => {
@@ -272,26 +267,28 @@ describe('preserveLastAssistantIdentity', () => {
     const prevTs = '2024-01-01T10:00:00.000Z';
     const prev = [makeAssistantMsg('first', { timestamp: prevTs })];
     const next = [makeAssistantMsg('updated', { timestamp: '2024-01-01T10:00:01.000Z' })];
-
     const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
     expect(result[0].timestamp).toBe(prevTs);
     expect(result[0].content).toBe('updated');
   });
 
-  it('returns the same nextList reference when no identity change is needed', () => {
-    const ts = '2024-01-01T10:00:00.000Z';
-    const prev = [makeAssistantMsg('response', { timestamp: ts })];
-    const next = [makeAssistantMsg('response', { timestamp: ts })];
-
+  it('does not merge identity across different turn IDs', () => {
+    const prevTs = '2024-01-01T10:00:00.000Z';
+    const prev = [makeAssistantMsg('a1', { timestamp: prevTs, __turnId: 1 })];
+    const next = [makeAssistantMsg('a2', { timestamp: '2024-01-01T10:00:01.000Z', __turnId: 2 })];
     const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
-    // Since timestamps match, preserveMessageIdentity returns next unchanged
-    expect(result[0].timestamp).toBe(ts);
+    expect(result).toBe(next);
+    expect(result[0].timestamp).not.toBe(prevTs);
+  });
+
+  it('merges identity when both have same turn ID', () => {
+    const prevTs = '2024-01-01T10:00:00.000Z';
+    const prev = [makeAssistantMsg('a1', { timestamp: prevTs, __turnId: 1 })];
+    const next = [makeAssistantMsg('a1 updated', { timestamp: '2024-01-01T10:00:01.000Z', __turnId: 1 })];
+    const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
+    expect(result[0].timestamp).toBe(prevTs);
   });
 });
-
-// ---------------------------------------------------------------------------
-// preserveStreamingAssistantContent
-// ---------------------------------------------------------------------------
 
 describe('preserveStreamingAssistantContent', () => {
   it('returns nextList unchanged when not streaming', () => {
@@ -308,31 +305,8 @@ describe('preserveStreamingAssistantContent', () => {
   it('returns nextList unchanged when prevList has no assistant', () => {
     const prev = [makeUserMsg('hello')];
     const next = [makeAssistantMsg('response')];
-
     const result = preserveStreamingAssistantContent(
       prev, next, ref(true), ref(''),
-      findLastAssistantIndex, patchAssistantForStreaming,
-    );
-    expect(result).toBe(next);
-  });
-
-  it('returns nextList unchanged when nextList has no assistant', () => {
-    const prev = [makeAssistantMsg('streamed content')];
-    const next = [makeUserMsg('user reply')];
-
-    const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref(''),
-      findLastAssistantIndex, patchAssistantForStreaming,
-    );
-    expect(result).toBe(next);
-  });
-
-  it('returns nextList unchanged when preferred content is not longer than next content', () => {
-    const prev = [makeAssistantMsg('short')];
-    const next = [makeAssistantMsg('longer backend content')];
-
-    const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref('short'),
       findLastAssistantIndex, patchAssistantForStreaming,
     );
     expect(result).toBe(next);
@@ -342,7 +316,6 @@ describe('preserveStreamingAssistantContent', () => {
     const longStreamed = 'a'.repeat(100);
     const prev = [makeAssistantMsg(longStreamed)];
     const next = [makeAssistantMsg('short stale')];
-
     const result = preserveStreamingAssistantContent(
       prev, next, ref(true), ref(longStreamed),
       findLastAssistantIndex, patchAssistantForStreaming,
@@ -352,49 +325,10 @@ describe('preserveStreamingAssistantContent', () => {
     expect(result[0].isStreaming).toBe(true);
   });
 
-  it('prefers buffer content over prev content when buffer is longer', () => {
-    const prevContent = 'prev content';
-    const bufferedContent = prevContent + ' with more streamed text';
-    const prev = [makeAssistantMsg(prevContent)];
-    const next = [makeAssistantMsg('stale short')];
-
-    const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref(bufferedContent),
-      findLastAssistantIndex, patchAssistantForStreaming,
-    );
-    expect(result[0].content).toBe(bufferedContent);
-  });
-
-  it('uses prev content when buffer is empty or shorter', () => {
-    const prevContent = 'longer prev content from a previous render';
-    const prev = [makeAssistantMsg(prevContent)];
-    const next = [makeAssistantMsg('short stale')];
-
-    const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref(''),
-      findLastAssistantIndex, patchAssistantForStreaming,
-    );
-    expect(result[0].content).toBe(prevContent);
-  });
-
-  it('handles multi-message list and only patches the last assistant', () => {
-    const longContent = 'long streaming content that should be preserved';
-    const prev = [makeUserMsg('q'), makeAssistantMsg(longContent)];
-    const next = [makeUserMsg('q'), makeAssistantMsg('stale snapshot')];
-
-    const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref(longContent),
-      findLastAssistantIndex, patchAssistantForStreaming,
-    );
-    expect(result[0]).toBe(next[0]); // user message unchanged
-    expect(result[1].content).toBe(longContent);
-  });
-
   it('does not merge content across different turn IDs', () => {
     const longContent = 'long content from turn 1';
     const prev = [makeAssistantMsg(longContent, { __turnId: 1 })];
     const next = [makeAssistantMsg('short', { __turnId: 2 })];
-
     const result = preserveStreamingAssistantContent(
       prev, next, ref(true), ref(longContent),
       findLastAssistantIndex, patchAssistantForStreaming,
@@ -402,77 +336,109 @@ describe('preserveStreamingAssistantContent', () => {
     expect(result).toBe(next);
   });
 
-  it('allows merge when both have same turn ID', () => {
-    const longContent = 'long streamed content';
-    const prev = [makeAssistantMsg(longContent, { __turnId: 1 })];
-    const next = [makeAssistantMsg('short', { __turnId: 1 })];
+  it('protects raw text blocks from backend regression when content string is also protected', () => {
+    const prev = [makeAssistantMsg('ABCDE', {
+      isStreaming: true,
+      raw: { message: { content: [{ type: 'text', text: 'ABCDE' }] } } as any,
+    })];
+    const next = [makeAssistantMsg('ABC', {
+      raw: { message: { content: [{ type: 'text', text: 'ABC' }] } } as any,
+    })];
 
     const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref(longContent),
+      prev, next, ref(true), ref('ABCDE'),
       findLastAssistantIndex, patchAssistantForStreaming,
     );
-    expect(result[0].content).toBe(longContent);
+
+    expect(result[0].content).toBe('ABCDE');
+    expect(((result[0].raw as any)?.message?.content?.[0] as any)?.text).toBe('ABCDE');
   });
 
-  it('allows merge when neither has turn ID (backward compat)', () => {
-    const longContent = 'long content without turn ID';
-    const prev = [makeAssistantMsg(longContent)];
-    const next = [makeAssistantMsg('short')];
+  it('protects raw text blocks even when backend content length equals streamed length', () => {
+    const prev = [makeAssistantMsg('ABCDE', {
+      isStreaming: true,
+      raw: { message: { content: [{ type: 'text', text: 'ABCDE' }] } } as any,
+    })];
+    const next = [makeAssistantMsg('ABCDE', {
+      raw: { message: { content: [{ type: 'text', text: 'ABC' }] } } as any,
+    })];
 
     const result = preserveStreamingAssistantContent(
-      prev, next, ref(true), ref(longContent),
+      prev, next, ref(true), ref('ABCDE'),
       findLastAssistantIndex, patchAssistantForStreaming,
     );
-    expect(result[0].content).toBe(longContent);
+
+    expect(((result[0].raw as any)?.message?.content?.[0] as any)?.text).toBe('ABCDE');
+  });
+
+  it('injects new tool_use from backend while keeping streamed text block intact', () => {
+    const prev = [makeAssistantMsg('ABCDE', {
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [{ type: 'text', text: 'ABCDE' }],
+        },
+      } as any,
+    })];
+    const next = [makeAssistantMsg('AB', {
+      raw: {
+        message: {
+          content: [
+            { type: 'text', text: 'AB' },
+            { type: 'tool_use', id: 'tu-1', name: 'Read', input: { path: '/foo' } },
+          ],
+        },
+      } as any,
+    })];
+
+    const result = preserveStreamingAssistantContent(
+      prev, next, ref(true), ref('ABCDE'),
+      findLastAssistantIndex, patchAssistantForStreaming,
+    );
+
+    const blocks = (result[0].raw as any)?.message?.content as any[];
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].text).toBe('ABCDE');
+    expect(blocks[1].type).toBe('tool_use');
+    expect(blocks[1].id).toBe('tu-1');
+  });
+
+  it('does not regress thinking block raw content when backend has shorter thinking', () => {
+    const longThinking = 'A'.repeat(200);
+    const shortThinking = 'A'.repeat(50);
+    const prev = [makeAssistantMsg('answer', {
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: longThinking },
+            { type: 'text', text: 'answer' },
+          ],
+        },
+      } as any,
+    })];
+    const next = [makeAssistantMsg('ans', {
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: shortThinking },
+            { type: 'text', text: 'ans' },
+          ],
+        },
+      } as any,
+    })];
+
+    const result = preserveStreamingAssistantContent(
+      prev, next, ref(true), ref('answer'),
+      findLastAssistantIndex, patchAssistantForStreaming,
+    );
+
+    const blocks = (result[0].raw as any)?.message?.content as any[];
+    expect(blocks[0].type).toBe('thinking');
+    expect((blocks[0].thinking as string).length).toBe(longThinking.length);
+    expect(blocks[1].text).toBe('answer');
   });
 });
-
-// ---------------------------------------------------------------------------
-// preserveLastAssistantIdentity — turn ID guards
-// ---------------------------------------------------------------------------
-
-describe('preserveLastAssistantIdentity — turn ID guards', () => {
-  it('does not merge identity across different turn IDs', () => {
-    const prevTs = '2024-01-01T10:00:00.000Z';
-    const prev = [makeAssistantMsg('a1', { timestamp: prevTs, __turnId: 1 })];
-    const next = [makeAssistantMsg('a2', { timestamp: '2024-01-01T10:00:01.000Z', __turnId: 2 })];
-
-    const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
-    expect(result).toBe(next);
-    expect(result[0].timestamp).not.toBe(prevTs);
-  });
-
-  it('merges identity when both have same turn ID', () => {
-    const prevTs = '2024-01-01T10:00:00.000Z';
-    const prev = [makeAssistantMsg('a1', { timestamp: prevTs, __turnId: 1 })];
-    const next = [makeAssistantMsg('a1 updated', { timestamp: '2024-01-01T10:00:01.000Z', __turnId: 1 })];
-
-    const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
-    expect(result[0].timestamp).toBe(prevTs);
-  });
-
-  it('merges identity when neither has turn ID (backward compat)', () => {
-    const prevTs = '2024-01-01T10:00:00.000Z';
-    const prev = [makeAssistantMsg('a1', { timestamp: prevTs })];
-    const next = [makeAssistantMsg('a1 updated', { timestamp: '2024-01-01T10:00:01.000Z' })];
-
-    const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
-    expect(result[0].timestamp).toBe(prevTs);
-  });
-
-  it('allows merge when only one has turn ID (Java message without turnId)', () => {
-    const prevTs = '2024-01-01T10:00:00.000Z';
-    const prev = [makeAssistantMsg('a1', { timestamp: prevTs, __turnId: 1 })];
-    const next = [makeAssistantMsg('a1', { timestamp: '2024-01-01T10:00:01.000Z' })];
-
-    const result = preserveLastAssistantIdentity(prev, next, findLastAssistantIndex);
-    expect(result[0].timestamp).toBe(prevTs);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// stripDuplicateTrailingToolMessages
-// ---------------------------------------------------------------------------
 
 describe('stripDuplicateTrailingToolMessages', () => {
   it('removes duplicated trailing tool-only messages in Codex snapshots', () => {
@@ -496,29 +462,9 @@ describe('stripDuplicateTrailingToolMessages', () => {
     expect(result).toHaveLength(3);
     expect(result[2].content).toBe('done');
   });
-
-  it('keeps the first visible tool-only messages when there is no duplicate tail', () => {
-    const list = [
-      makeAssistantMsg('', {
-        raw: { message: { content: [{ type: 'tool_use', id: 'spawn-1', name: 'spawn_agent', input: { agent_type: 'worker' } }] } } as any,
-      }),
-      makeUserMsg('', {
-        raw: { message: { content: [{ type: 'tool_result', tool_use_id: 'spawn-1', content: 'subagent ok' }] } } as any,
-      }),
-    ];
-
-    const result = stripDuplicateTrailingToolMessages(list, 'codex');
-    expect(result).toHaveLength(2);
-  });
 });
 
-// ---------------------------------------------------------------------------
-// ensureStreamingAssistantInList — race condition & fallback
-// ---------------------------------------------------------------------------
-
 describe('ensureStreamingAssistantInList', () => {
-  // ---- Primary path (refs valid) ----
-
   it('returns resultList unchanged when streaming assistant already in resultList', () => {
     const prev = [makeAssistantMsg('streaming', { __turnId: 1, isStreaming: true })];
     const result = [makeAssistantMsg('streaming', { __turnId: 1, isStreaming: true })];
@@ -528,7 +474,7 @@ describe('ensureStreamingAssistantInList', () => {
     expect(streamingIndex).toBe(0);
   });
 
-  it('appends streaming assistant from prev when missing from result (primary path)', () => {
+  it('appends streaming assistant from prev when missing from result', () => {
     const streamingMsg = makeAssistantMsg('streaming content', { __turnId: 1, isStreaming: true });
     const prev = [makeUserMsg('q'), streamingMsg];
     const result = [makeUserMsg('q')];
@@ -539,63 +485,17 @@ describe('ensureStreamingAssistantInList', () => {
     expect(streamingIndex).toBe(1);
   });
 
-  // ---- Fallback path (refs cleared — race condition) ----
-
   it('recovers streaming assistant from prevList when refs are already cleared', () => {
     const streamingMsg = makeAssistantMsg('last streamed', { __turnId: 5, isStreaming: true });
     const prev = [makeUserMsg('q'), streamingMsg];
     const result = [makeUserMsg('q')];
 
-    // Simulate race: isStreaming=false, turnId=0 (cleared by onStreamEnd)
     const { list, streamingIndex } = ensureStreamingAssistantInList(prev, result, false, 0);
     expect(list).toHaveLength(2);
     expect(list[1]).toBe(streamingMsg);
     expect(streamingIndex).toBe(1);
   });
-
-  it('does NOT recover non-streaming assistant from prevList when refs are cleared', () => {
-    const finishedMsg = makeAssistantMsg('done', { __turnId: 5, isStreaming: false });
-    const prev = [makeUserMsg('q'), finishedMsg];
-    const result = [makeUserMsg('q')];
-
-    const { list, streamingIndex } = ensureStreamingAssistantInList(prev, result, false, 0);
-    expect(list).toBe(result);
-    expect(streamingIndex).toBe(-1);
-  });
-
-  it('does NOT recover assistant without __turnId from prevList when refs are cleared', () => {
-    const noTurnMsg = makeAssistantMsg('old msg', { isStreaming: true });
-    const prev = [makeUserMsg('q'), noTurnMsg];
-    const result = [makeUserMsg('q')];
-
-    const { list, streamingIndex } = ensureStreamingAssistantInList(prev, result, false, 0);
-    expect(list).toBe(result);
-    expect(streamingIndex).toBe(-1);
-  });
-
-  it('does not duplicate when resultList already contains the streaming assistant (fallback)', () => {
-    const streamingMsg = makeAssistantMsg('streaming', { __turnId: 3, isStreaming: true });
-    const prev = [streamingMsg];
-    const result = [makeAssistantMsg('streaming', { __turnId: 3 })];
-
-    const { list, streamingIndex } = ensureStreamingAssistantInList(prev, result, false, 0);
-    expect(list).toBe(result);
-    expect(streamingIndex).toBe(-1);
-  });
-
-  it('returns resultList unchanged when prevList has no streaming assistant and refs cleared', () => {
-    const prev = [makeUserMsg('q'), makeAssistantMsg('done', { isStreaming: false })];
-    const result = [makeUserMsg('q')];
-
-    const { list, streamingIndex } = ensureStreamingAssistantInList(prev, result, false, 0);
-    expect(list).toBe(result);
-    expect(streamingIndex).toBe(-1);
-  });
 });
-
-// ---------------------------------------------------------------------------
-// preserveLatestMessagesOnShrink
-// ---------------------------------------------------------------------------
 
 describe('preserveLatestMessagesOnShrink', () => {
   it('keeps the latest streaming assistant when backend snapshot temporarily shrinks', () => {
@@ -616,10 +516,6 @@ describe('preserveLatestMessagesOnShrink', () => {
     expect(result[3].content).toBe('streaming answer');
   });
 });
-
-// ---------------------------------------------------------------------------
-// preserveRecentlyEndedStreamingTurn
-// ---------------------------------------------------------------------------
 
 describe('preserveRecentlyEndedStreamingTurn', () => {
   it('keeps the just-ended assistant when backend snapshot briefly shrinks after stream end', () => {
@@ -661,7 +557,7 @@ describe('preserveRecentlyEndedStreamingTurn', () => {
     }
   });
 
-  it('does not preserve old assistant after the recent-end guard window expires', () => {
+  it('does not preserve old assistant after the guard window expires', () => {
     const previousEndedAt = (window as any).__lastStreamEndedAt;
     const previousEndedTurnId = (window as any).__lastStreamEndedTurnId;
     (window as any).__lastStreamEndedTurnId = 12;

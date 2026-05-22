@@ -79,6 +79,11 @@ interface Window {
   historyLoadComplete?: () => void;
 
   /**
+   * Subagent sidechain history callback.
+   */
+  onSubagentHistoryLoaded?: (json: string) => void;
+
+  /**
    * Add user message to chat (used for external Quick Fix feature)
    * Immediately shows the user's message in the chat UI before AI response
    */
@@ -93,6 +98,15 @@ interface Window {
    * Add toast notification (called from backend)
    */
   addToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+
+  /**
+   * Toast deferred until a session transition finishes, because backend
+   * clearMessages resets transient UI state during new-session creation.
+   */
+  __pendingSessionTransitionToast?: {
+    message: string;
+    type?: 'success' | 'error' | 'warning' | 'info';
+  };
 
   /**
    * Usage statistics update callback
@@ -266,9 +280,19 @@ interface Window {
   updateCommitGenerationEnabled?: (json: string) => void;
 
   /**
+   * Update AI session title generation enabled state
+   */
+  updateAiTitleGenerationEnabled?: (json: string) => void;
+
+  /**
    * Update status bar widget enabled state
    */
   updateStatusBarWidgetEnabled?: (json: string) => void;
+
+  /**
+   * Update task completion notification enabled state
+   */
+  updateTaskCompletionNotificationEnabled?: (json: string) => void;
 
   /**
    * Update current Claude config
@@ -294,6 +318,11 @@ interface Window {
    * Update working directory configuration
    */
   updateWorkingDirectory?: (json: string) => void;
+
+  /**
+   * Update linkify/navigation capabilities used by Markdown rendering.
+   */
+  updateLinkifyCapabilities?: (json: string) => void;
 
   /**
    * Show success message
@@ -397,6 +426,16 @@ interface Window {
   };
 
   /**
+   * Apply effective plugin UI font configuration (called from Java backend)
+   */
+  applyUiFontConfig?: (config: import('./types/uiFontConfig').UiFontConfig | string) => void;
+
+  /**
+   * Pending effective UI font config before applyUiFontConfig is registered
+   */
+  __pendingUiFontConfig?: import('./types/uiFontConfig').UiFontConfig;
+
+  /**
    * Apply IDEA language configuration (called from Java backend)
    * @param config Language configuration object containing language code and IDEA locale
    */
@@ -419,14 +458,31 @@ interface Window {
   updateEnhancedPrompt?: (result: string) => void;
 
   /**
-   * Update session title (called when session title changes)
+   * Update prompt enhancer settings config from backend
    */
-  updateSessionTitle?: (title: string) => void;
+  updatePromptEnhancerConfig?: (json: string) => void;
+
+  /**
+   * Update commit AI settings config from backend
+   */
+  updateCommitAiConfig?: (json: string) => void;
+
+  /**
+   * Update session title (called when AI generates a title).
+   * @param sessionId - The session ID the title belongs to
+   * @param title - The generated title text
+   */
+  updateSessionTitle?: (sessionId: string, title: string) => void;
 
   /**
    * Editor font config received callback - receives IDEA editor font configuration
    */
   onEditorFontConfigReceived?: (json: string) => void;
+
+  /**
+   * Effective UI font config received callback
+   */
+  onUiFontConfigReceived?: (json: string) => void;
 
   /**
    * IDE theme received callback - receives IDE theme configuration
@@ -597,27 +653,31 @@ interface Window {
   __lastStreamActivityAt?: number;
 
   /**
-   * The __turnId of the most recently ended streaming turn.
-   * Used by downstream message reconciliation to distinguish a just-finished
-   * streaming assistant from normal history messages.
+   * 最近一次完成 stream end 收口的 turnId。
+   * 用于在消息重建阶段识别“刚刚结束的 streaming assistant”，
+   * 避免其被误判成普通历史消息并参与错误合并。
+   * 正常会在新 turn 开始时清理。
    */
   __lastStreamEndedTurnId?: number;
 
   /**
-   * Timestamp when the most recent streaming turn ended.
-   * Used together with __lastStreamEndedTurnId for short-lived guard windows.
+   * 最近一次 streaming turn 结束的时间戳。
+   * 与 `__lastStreamEndedTurnId` 一起形成一个短时保护窗口，
+   * 用于避免 stream end 之后 backend 短暂回退快照覆盖最终文本。
    */
   __lastStreamEndedAt?: number;
 
   /**
-   * Turn ID for which onStreamEnd has already been processed.
-   * Used as an idempotency guard when the same stream end signal arrives twice.
+   * 已经执行过 onStreamEnd 收口逻辑的 turnId。
+   * 用作幂等保护：当同一轮 stream end 被主路径和兜底路径重复投递时，
+   * 第二次到达应当直接忽略。
+   * 会在新 turn 的 onStreamStart 中清理。
    */
   __streamEndProcessedTurnId?: number;
 
   /**
-   * Timestamp when the current streaming turn started.
-   * Used for duration and turn lifecycle bookkeeping.
+   * 当前 streaming turn 的启动时间。
+   * 用于在 stream end 或 loading 结束时补写 assistant 的 `durationMs`。
    */
   __turnStartedAt?: number;
 
@@ -777,6 +837,11 @@ interface Window {
   __pendingLoadingState?: boolean;
 
   /**
+   * Pending mode payload before setMode is registered.
+   */
+  __pendingModeReceived?: string;
+
+  /**
    * Execute context action from IDEA shortcut (copy/cut/send)
    */
   execContextAction?: (action: string) => void;
@@ -785,4 +850,37 @@ interface Window {
    * Clipboard read callback for paste from IDEA shortcut
    */
   onClipboardRead?: (text: string) => void;
+
+  // ============================================================================
+  // Theme initialization (Java pre-injects before React boots)
+  // ============================================================================
+
+  /**
+   * Initial IDE theme injected by Java into the HTML before React boots.
+   * Used by useThemeInit to avoid a flash of incorrect theme.
+   */
+  __INITIAL_IDE_THEME__?: 'light' | 'dark';
+
+  // ============================================================================
+  // Provider settings panel callbacks (registered by ProviderList)
+  // ============================================================================
+
+  /**
+   * CLI login account info callback. Java pushes the logged-in account email
+   * after a successful CLI login to update the settings panel.
+   */
+  updateCliLoginAccountInfo?: (email: string) => void;
+
+  /**
+   * Provider import preview result callback. Java pushes a JSON string or
+   * parsed payload describing the providers detected during import preview.
+   */
+  import_preview_result?: (dataOrStr: string | { providers?: unknown }) => void;
+
+  /**
+   * Backend notification callback (variadic for backward compatibility).
+   * Modern callers pass (type, title, message); legacy callers pass a single
+   * JSON string or object with shape { type, title, message }.
+   */
+  backend_notification?: (...args: unknown[]) => void;
 }

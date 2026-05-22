@@ -104,7 +104,7 @@ export const ButtonArea = ({
   codexUsesCustomBaseUrl = false,
   permissionMode = 'bypassPermissions',
   currentProvider = 'claude',
-  reasoningEffort = 'medium',
+  reasoningEffort = 'high',
   onSubmit,
   onStop,
   onModeSelect,
@@ -120,6 +120,8 @@ export const ButtonArea = ({
   onAgentSelect,
   onOpenAgentSettings,
   onAddModel,
+  longContextEnabled = true,
+  onLongContextChange,
 }: ButtonAreaProps) => {
   const { t } = useTranslation();
   // const fileInputRef = useRef<HTMLInputElement>(null);
@@ -170,7 +172,7 @@ export const ButtonArea = ({
   const applyModelMapping = useCallback((model: ModelInfo, mapping: { main?: string; haiku?: string; sonnet?: string; opus?: string }): ModelInfo => {
     const modelKeyMap: Record<string, keyof typeof mapping> = {
       'claude-sonnet-4-6': 'sonnet',
-      'claude-opus-4-6': 'opus',
+      'claude-opus-4-7': 'opus',
       'claude-haiku-4-5': 'haiku',
     };
 
@@ -282,7 +284,7 @@ export const ButtonArea = ({
   }, [onProviderSelect]);
 
   /**
-   * Handle reasoning depth selection (Codex only)
+   * Handle reasoning depth selection
    */
   const handleReasoningChange = useCallback((effort: ReasoningEffort) => {
     onReasoningChange?.(effort);
@@ -308,6 +310,7 @@ export const ButtonArea = ({
           selectedAgent={selectedAgent}
           onAgentSelect={onAgentSelect}
           onOpenAgentSettings={onOpenAgentSettings}
+          currentProvider={currentProvider}
         />
         <ProviderSelect
           value={currentProvider}
@@ -343,9 +346,16 @@ export const ButtonArea = ({
           defaultCodexModelFromConfig={currentProvider === 'codex' ? defaultCodexModelFromConfig : null}
           codexBaseUrl={currentProvider === 'codex' ? codexBaseUrl : null}
           codexUsesCustomBaseUrl={currentProvider === 'codex' ? codexUsesCustomBaseUrl : false}
+          longContextEnabled={currentProvider === 'claude' ? longContextEnabled : false}
+          onLongContextChange={currentProvider === 'claude' ? onLongContextChange : undefined}
         />
         {currentProvider === 'codex' && (
-          <ReasoningSelect value={reasoningEffort} onChange={handleReasoningChange} />
+          <ReasoningSelect
+            value={reasoningEffort}
+            onChange={handleReasoningChange}
+            selectedModel={selectedModel}
+            currentProvider={currentProvider}
+          />
         )}
       </div>
 

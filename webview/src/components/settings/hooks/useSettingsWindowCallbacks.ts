@@ -3,19 +3,29 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
 import type { AgentConfig } from '../../../types/agent';
+import type { ImportPreviewResult } from '../../../types/import';
 import type { PromptConfig } from '../../../types/prompt';
+import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
+import type { PromptEnhancerConfig } from '../../../types/promptEnhancer';
 import type { TaskReminderConfig } from '../../../types/taskReminder';
+import {
+  mergeLegacySoundConfig,
+  normalizeTaskReminderConfig,
+} from '../../../types/taskReminder';
+import type { UiFontConfig } from './useSettingsBasicActions';
 import type {
   RemoteCollabConfig,
   RemoteCollabDebugSnapshot,
   RemoteCollabProviderOperationResult,
 } from './useRemoteCollabSettings';
-import {
-  mergeLegacySoundConfig,
-  normalizeTaskReminderConfig,
-} from '../../../types/taskReminder';
 import type { AlertType } from '../../AlertDialog';
 import type { ToastMessage } from '../../Toast';
+import {
+  subscribeActiveCodexProvider,
+  subscribeActiveProvider,
+  subscribeCodexProviderList,
+  subscribeProviderList,
+} from '../../../utils/runtimeProviderCapabilities';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -24,7 +34,6 @@ const sendToJava = (message: string) => {
 };
 
 export interface SettingsWindowCallbacksDeps {
-  // State setters
   setNodePath: (path: string) => void;
   setNodeVersion: (version: string | null) => void;
   setMinNodeVersion: (version: number) => void;
@@ -33,7 +42,10 @@ export interface SettingsWindowCallbacksDeps {
   setSavingWorkingDirectory: (saving: boolean) => void;
   setCommitPrompt: (prompt: string) => void;
   setSavingCommitPrompt: (saving: boolean) => void;
+  setCommitAiConfig: (config: CommitAiConfig) => void;
+  setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
   setEditorFontConfig: (config: { fontFamily: string; fontSize: number; lineSpacing: number } | undefined) => void;
+  setUiFontConfig: (config: UiFontConfig | undefined) => void;
   setIdeTheme: (theme: 'light' | 'dark' | null) => void;
   setLocalStreamingEnabled: (enabled: boolean) => void;
   setCodexSandboxMode?: (mode: 'workspace-write' | 'danger-full-access') => void;
@@ -41,10 +53,10 @@ export interface SettingsWindowCallbacksDeps {
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
-  // AI feature toggle setters
   setCommitGenerationEnabled?: (enabled: boolean) => void;
+  setAiTitleGenerationEnabled?: (enabled: boolean) => void;
   setStatusBarWidgetEnabled?: (enabled: boolean) => void;
-  // Canonical task reminder setter
+  setTaskCompletionNotificationEnabled?: (enabled: boolean) => void;
   setTaskReminderConfig?: (
     config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
   ) => void;
@@ -54,54 +66,52 @@ export interface SettingsWindowCallbacksDeps {
   setRemoteCollabDebugSnapshot?: (snapshot: RemoteCollabDebugSnapshot) => void;
   setRemoteCollabProviderOperationResult?: (result: RemoteCollabProviderOperationResult) => void;
 
-  // Hook functions
   updateProviders: (providers: ProviderConfig[]) => void;
   updateActiveProvider: (provider: ProviderConfig) => void;
   loadProviders: () => void;
   loadCodexProviders: () => void;
   loadAgents: () => void;
   updateAgents: (agents: AgentConfig[]) => void;
-  handleAgentOperationResult: (result: any) => void;
-  handleAgentImportPreviewResult: (previewData: any) => void;
-  handleAgentImportResult: (result: any) => void;
+  handleAgentOperationResult: (result: { success: boolean; operation?: string; error?: string }) => void;
+  handleAgentImportPreviewResult: (previewData: ImportPreviewResult<AgentConfig>) => void;
+  handleAgentImportResult: (
+    result: { success: boolean; imported: number; updated: number; skipped: number; error?: string }
+  ) => void;
   updateCodexProviders: (providers: CodexProviderConfig[]) => void;
   updateActiveCodexProvider: (provider: CodexProviderConfig) => void;
-  updateCurrentCodexConfig: (config: any) => void;
+  updateCurrentCodexConfig: (config: unknown) => void;
   cleanupAgentsTimeout: () => void;
 
-  // Prompt-related handlers (optional - now handled by PromptSection component)
   loadPrompts?: () => void;
   updatePrompts?: (prompts: PromptConfig[]) => void;
-  handlePromptOperationResult?: (result: any) => void;
-  handlePromptImportPreviewResult?: (previewData: any) => void;
-  handlePromptImportResult?: (result: any) => void;
+  handlePromptOperationResult?: (result: unknown) => void;
+  handlePromptImportPreviewResult?: (previewData: unknown) => void;
+  handlePromptImportResult?: (result: unknown) => void;
   cleanupPromptsTimeout?: () => void;
 
-  // Callbacks
   showAlert: (type: AlertType, title: string, message: string) => void;
   addToast: (message: string, type?: ToastMessage['type']) => void;
-
-  // Props
   onStreamingEnabledChangeProp?: (enabled: boolean) => void;
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
 }
 
 /**
- * Registers window callbacks for Java bridge communication in settings view.
- * Handles provider, agent, prompt, config, and theme callbacks.
+ * 注册设置页的 Java bridge 回调。
+ * 并轨阶段这里必须同时保留两类协议：
+ * 1. upstream 的 runtime provider registry、UI 字体、Commit AI、Prompt Enhancer、AI title 等新能力；
+ * 2. 当前主线的 canonical taskReminder、remoteCollab 与 legacy sound 兼容桥接。
+ *
+ * @param deps 设置页各状态 setter 与业务回调
  */
 export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
   const { t } = useTranslation();
-
-  // Use ref to avoid stale closures - callbacks always read latest deps
   const depsRef = useRef(deps);
   depsRef.current = deps;
 
   useEffect(() => {
     const d = () => depsRef.current;
 
-    // Provider callbacks
-    window.updateProviders = (jsonStr: string) => {
+    const unsubscribeProviders = subscribeProviderList((jsonStr: string) => {
       try {
         const providersList: ProviderConfig[] = JSON.parse(jsonStr);
         d().updateProviders(providersList);
@@ -109,9 +119,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         console.error('[SettingsView] Failed to parse providers:', error);
         d().setLoading(false);
       }
-    };
+    });
 
-    window.updateActiveProvider = (jsonStr: string) => {
+    const unsubscribeActiveProvider = subscribeActiveProvider((jsonStr: string) => {
       try {
         const activeProvider: ProviderConfig = JSON.parse(jsonStr);
         if (activeProvider) {
@@ -120,7 +130,28 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       } catch (error) {
         console.error('[SettingsView] Failed to parse active provider:', error);
       }
-    };
+    });
+
+    const unsubscribeCodexProviders = subscribeCodexProviderList((jsonStr: string) => {
+      try {
+        const providersList: CodexProviderConfig[] = JSON.parse(jsonStr);
+        d().updateCodexProviders(providersList);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex providers:', error);
+        d().setCodexLoading(false);
+      }
+    });
+
+    const unsubscribeActiveCodexProvider = subscribeActiveCodexProvider((jsonStr: string) => {
+      try {
+        const activeProvider: CodexProviderConfig = JSON.parse(jsonStr);
+        if (activeProvider) {
+          d().updateActiveCodexProvider(activeProvider);
+        }
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse active Codex provider:', error);
+      }
+    });
 
     window.showError = (message: string) => {
       d().showAlert('error', t('toast.operationFailed'), message);
@@ -154,9 +185,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       try {
         const data = JSON.parse(jsonStr);
         d().setWorkingDirectory(data.customWorkingDir || '');
-        d().setSavingWorkingDirectory(false);
       } catch (error) {
         console.error('[SettingsView] Failed to parse working directory:', error);
+      } finally {
         d().setSavingWorkingDirectory(false);
       }
     };
@@ -168,20 +199,27 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     };
 
     window.showSuccessI18n = (i18nKey: string) => {
-      const message = t(i18nKey);
-      d().addToast(message, 'success');
+      d().addToast(t(i18nKey), 'success');
     };
 
     window.onEditorFontConfigReceived = (jsonStr: string) => {
       try {
-        const config = JSON.parse(jsonStr);
-        d().setEditorFontConfig(config);
+        d().setEditorFontConfig(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse editor font config:', error);
       }
     };
 
-    // IDE theme callback
+    window.onUiFontConfigReceived = (jsonStr: string) => {
+      try {
+        const config = JSON.parse(jsonStr);
+        d().setUiFontConfig(config);
+        window.applyUiFontConfig?.(config);
+      } catch {
+        // Silently ignore malformed UI font config from backend.
+      }
+    };
+
     const previousOnIdeThemeReceived = window.onIdeThemeReceived;
     window.onIdeThemeReceived = (jsonStr: string) => {
       try {
@@ -194,7 +232,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Streaming configuration callback
     const previousUpdateStreamingEnabled = window.updateStreamingEnabled;
     if (!d().onStreamingEnabledChangeProp) {
       window.updateStreamingEnabled = (jsonStr: string) => {
@@ -207,7 +244,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       };
     }
 
-    // Codex sandbox mode callback
     window.updateCodexSandboxMode = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -220,7 +256,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Send shortcut configuration callback
     const previousUpdateSendShortcut = window.updateSendShortcut;
     if (!d().onSendShortcutChangeProp) {
       window.updateSendShortcut = (jsonStr: string) => {
@@ -233,23 +268,37 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       };
     }
 
-    // Commit AI prompt callback
     window.updateCommitPrompt = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
         d().setCommitPrompt(data.commitPrompt || '');
-        d().setSavingCommitPrompt(false);
         if (data.saved) {
           d().addToast(t('toast.saveSuccess'), 'success');
         }
       } catch (error) {
         console.error('[SettingsView] Failed to parse commit prompt:', error);
-        d().setSavingCommitPrompt(false);
         d().addToast(t('toast.saveFailed'), 'error');
+      } finally {
+        d().setSavingCommitPrompt(false);
       }
     };
 
-    // AI commit generation config callback
+    window.updateCommitAiConfig = (jsonStr: string) => {
+      try {
+        d().setCommitAiConfig(JSON.parse(jsonStr));
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse commit AI config:', error);
+      }
+    };
+
+    window.updatePromptEnhancerConfig = (jsonStr: string) => {
+      try {
+        d().setPromptEnhancerConfig(JSON.parse(jsonStr));
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse prompt enhancer config:', error);
+      }
+    };
+
     window.updateCommitGenerationEnabled = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -259,7 +308,15 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Status bar widget config callback
+    window.updateAiTitleGenerationEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setAiTitleGenerationEnabled?.(data.aiTitleGenerationEnabled ?? true);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse AI title generation config:', error);
+      }
+    };
+
     window.updateStatusBarWidgetEnabled = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -269,24 +326,27 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Canonical task reminder config callback
-    window.updateTaskReminderConfig = (jsonStr: string) => {
+    window.updateTaskCompletionNotificationEnabled = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
-        // 新协议优先：收到完整 taskReminder 结构时，直接整体替换为规范化后的结果。
-        d().setTaskReminderConfig?.(normalizeTaskReminderConfig(data));
+        d().setTaskCompletionNotificationEnabled?.(data.taskCompletionNotificationEnabled ?? false);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse task completion notification config:', error);
+      }
+    };
+
+    window.updateTaskReminderConfig = (jsonStr: string) => {
+      try {
+        d().setTaskReminderConfig?.(normalizeTaskReminderConfig(JSON.parse(jsonStr)));
       } catch (error) {
         console.error('[SettingsView] Failed to parse task reminder config:', error);
       }
     };
 
-    // Legacy sound notification config callback (compatibility bridge).
-    // This only merges into taskReminderConfig.sound and must not touch popup/balloon.
     window.updateSoundNotificationConfig = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
-        // 老协议仍可能从 Java 某些路径回推，这里只把数据桥接进 sound 子树，
-        // 避免把已经迁移完成的 popup / balloon 配置又覆盖回旧模型。
+        // 当前主线以 canonical taskReminder 为准，这里只把 legacy sound 桥接进 sound 子树。
         d().setTaskReminderConfig?.((prev) => mergeLegacySoundConfig(prev, data));
       } catch (error) {
         console.error('[SettingsView] Failed to parse sound notification config:', error);
@@ -295,38 +355,28 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.updateRemoteCollabConfig = (jsonStr: string) => {
       try {
-        const data = JSON.parse(jsonStr);
-        d().setRemoteCollabConfig?.(data);
+        d().setRemoteCollabConfig?.(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse remote collab config:', error);
       }
     };
 
-    /**
-     * 调试快照用于 Remote Collab 调试面板的只读展示，因此桥接层只负责透传 JSON。
-     */
     window.updateRemoteCollabDebugSnapshot = (jsonStr: string) => {
       try {
-        const data = JSON.parse(jsonStr);
-        d().setRemoteCollabDebugSnapshot?.(data);
+        d().setRemoteCollabDebugSnapshot?.(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse remote collab debug snapshot:', error);
       }
     };
 
-    /**
-     * 记录最近一次 provider 测试/动作结果，便于设置页调试面板展示执行反馈。
-     */
     window.updateRemoteCollabProviderOperationResult = (jsonStr: string) => {
       try {
-        const data = JSON.parse(jsonStr);
-        d().setRemoteCollabProviderOperationResult?.(data);
+        d().setRemoteCollabProviderOperationResult?.(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse remote collab provider operation result:', error);
       }
     };
 
-    // Agent callbacks
     const previousUpdateAgents = window.updateAgents;
     window.updateAgents = (jsonStr: string) => {
       try {
@@ -340,8 +390,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.agentOperationResult = (jsonStr: string) => {
       try {
-        const result = JSON.parse(jsonStr);
-        d().handleAgentOperationResult(result);
+        d().handleAgentOperationResult(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse agent operation result:', error);
       }
@@ -362,14 +411,12 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.agentImportResult = (jsonStr: string) => {
       try {
-        const result = JSON.parse(jsonStr);
-        d().handleAgentImportResult(result);
+        d().handleAgentImportResult(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse agent import result:', error);
       }
     };
 
-    // Prompt library callbacks (legacy support - now primarily handled by PromptSection)
     const previousUpdatePrompts = window.updatePrompts;
     window.updatePrompts = (jsonStr: string) => {
       try {
@@ -383,8 +430,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.promptOperationResult = (jsonStr: string) => {
       try {
-        const result = JSON.parse(jsonStr);
-        d().handlePromptOperationResult?.(result);
+        d().handlePromptOperationResult?.(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse prompt operation result:', error);
       }
@@ -405,70 +451,50 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.promptImportResult = (jsonStr: string) => {
       try {
-        const result = JSON.parse(jsonStr);
-        d().handlePromptImportResult?.(result);
+        d().handlePromptImportResult?.(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse prompt import result:', error);
       }
     };
 
-    // Codex provider callbacks
-    window.updateCodexProviders = (jsonStr: string) => {
-      try {
-        const providersList: CodexProviderConfig[] = JSON.parse(jsonStr);
-        d().updateCodexProviders(providersList);
-      } catch (error) {
-        console.error('[SettingsView] Failed to parse Codex providers:', error);
-        d().setCodexLoading(false);
-      }
-    };
-
-    window.updateActiveCodexProvider = (jsonStr: string) => {
-      try {
-        const activeProvider: CodexProviderConfig = JSON.parse(jsonStr);
-        if (activeProvider) {
-          d().updateActiveCodexProvider(activeProvider);
-        }
-      } catch (error) {
-        console.error('[SettingsView] Failed to parse active Codex provider:', error);
-      }
-    };
-
     window.updateCurrentCodexConfig = (jsonStr: string) => {
       try {
-        const config = JSON.parse(jsonStr);
-        d().updateCurrentCodexConfig(config);
+        d().updateCurrentCodexConfig(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse Codex config:', error);
         d().setCodexConfigLoading(false);
       }
     };
 
-    // Initial data loading
     d().loadProviders();
     d().loadCodexProviders();
     d().loadAgents();
-    // Note: loadPrompts is now handled by PromptSection component
     d().loadPrompts?.();
     sendToJava('get_node_path:');
     sendToJava('get_working_directory:');
     sendToJava('get_editor_font_config:');
+    sendToJava('get_ui_font_config:');
     sendToJava('get_streaming_enabled:');
     sendToJava('get_codex_sandbox_mode:');
     sendToJava('get_commit_prompt:');
-    // 设置页初始化时优先拉取 canonical taskReminder 配置；
-    // 如有必要，Java 侧会再兼容性地下发 legacy sound config。
     sendToJava('get_task_reminder_config:');
     sendToJava('get_remote_collab_config:');
+    sendToJava('get_commit_ai_config:');
+    sendToJava('get_prompt_enhancer_config:');
+    sendToJava('get_sound_notification_config:');
     sendToJava('get_commit_generation_enabled:');
+    sendToJava('get_ai_title_generation_enabled:');
     sendToJava('get_status_bar_widget_enabled:');
+    sendToJava('get_task_completion_notification_enabled:');
 
     return () => {
       d().cleanupAgentsTimeout();
       d().cleanupPromptsTimeout?.();
+      unsubscribeProviders();
+      unsubscribeActiveProvider();
+      unsubscribeCodexProviders();
+      unsubscribeActiveCodexProvider();
 
-      window.updateProviders = undefined;
-      window.updateActiveProvider = undefined;
       window.showError = undefined;
       window.showSwitchSuccess = undefined;
       window.updateNodePath = undefined;
@@ -476,6 +502,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.showSuccess = undefined;
       window.showSuccessI18n = undefined;
       window.onEditorFontConfigReceived = undefined;
+      window.onUiFontConfigReceived = undefined;
       window.onIdeThemeReceived = previousOnIdeThemeReceived;
       if (!d().onStreamingEnabledChangeProp) {
         window.updateStreamingEnabled = previousUpdateStreamingEnabled;
@@ -485,13 +512,17 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         window.updateSendShortcut = previousUpdateSendShortcut;
       }
       window.updateCommitPrompt = undefined;
+      window.updateCommitAiConfig = undefined;
+      window.updatePromptEnhancerConfig = undefined;
       window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;
       window.updateRemoteCollabConfig = undefined;
       window.updateRemoteCollabDebugSnapshot = undefined;
       window.updateRemoteCollabProviderOperationResult = undefined;
       window.updateCommitGenerationEnabled = undefined;
+      window.updateAiTitleGenerationEnabled = undefined;
       window.updateStatusBarWidgetEnabled = undefined;
+      window.updateTaskCompletionNotificationEnabled = undefined;
       window.updateAgents = previousUpdateAgents;
       window.agentOperationResult = undefined;
       window.agentImportPreviewResult = undefined;
@@ -500,10 +531,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.promptOperationResult = undefined;
       window.promptImportPreviewResult = undefined;
       window.promptImportResult = undefined;
-      window.updateCodexProviders = undefined;
-      window.updateActiveCodexProvider = undefined;
       window.updateCurrentCodexConfig = undefined;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 }

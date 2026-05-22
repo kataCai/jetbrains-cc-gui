@@ -1,40 +1,39 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import PlanApprovalDialog from './PlanApprovalDialog';
+import PlanApprovalDialog, { type PlanApprovalRequest } from './PlanApprovalDialog';
+import { resetLinkifyCapabilities, setLinkifyCapabilities } from '../utils/linkifyCapabilities';
+
+vi.mock('../hooks/useDialogResize', () => ({
+  useDialogResize: () => ({
+    isResizing: false,
+    dialogSize: { width: 840, height: 620 },
+    handleMouseDown: vi.fn(),
+  }),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, fallback?: any, values?: Record<string, unknown>) => {
+    t: (_key: string, fallback?: unknown, values?: Record<string, unknown>) => {
       if (typeof fallback === 'string') {
         return fallback;
       }
-      if (typeof fallback === 'object' && fallback !== null && typeof fallback.defaultValue === 'string') {
-        return fallback.defaultValue;
+      if (typeof fallback === 'object' && fallback !== null && typeof (fallback as { defaultValue?: unknown }).defaultValue === 'string') {
+        return (fallback as { defaultValue: string }).defaultValue;
       }
       if (typeof values?.seconds === 'number') {
         return `timeout in ${values.seconds}s`;
       }
       return _key;
     },
-  }),
-}));
-
-vi.mock('./MarkdownBlock', () => ({
-  default: ({ content }: { content: string }) => <div data-testid="plan-content">{content}</div>,
-}));
-
-vi.mock('../hooks/useDialogResize', () => ({
-  useDialogResize: () => ({
-    dialogRef: { current: null },
-    dialogHeight: null,
-    setDialogHeight: vi.fn(),
-    handleResizeStart: vi.fn(),
+    i18n: { language: 'en' },
   }),
 }));
 
 describe('PlanApprovalDialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetLinkifyCapabilities();
+    setLinkifyCapabilities({ classNavigationEnabled: true });
   });
 
   afterEach(() => {
@@ -42,7 +41,6 @@ describe('PlanApprovalDialog', () => {
   });
 
   it('returns selected execution mode when user approves', () => {
-    // 用户主动改选执行模式后，批准回调必须带上最新 target mode。
     const onApprove = vi.fn();
     const onReject = vi.fn();
 
@@ -52,7 +50,7 @@ describe('PlanApprovalDialog', () => {
         request={{ requestId: 'req-1', toolName: 'plan', plan: '## plan' }}
         onApprove={onApprove}
         onReject={onReject}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'acceptEdits' }));
@@ -63,7 +61,6 @@ describe('PlanApprovalDialog', () => {
   });
 
   it('uses default mode when approving without changing selection', () => {
-    // 不改选时应走默认执行模式，避免回调里出现 undefined。
     const onApprove = vi.fn();
 
     render(
@@ -72,7 +69,7 @@ describe('PlanApprovalDialog', () => {
         request={{ requestId: 'req-default', toolName: 'plan', plan: '## plan' }}
         onApprove={onApprove}
         onReject={vi.fn()}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '批准并执行' }));
@@ -80,7 +77,6 @@ describe('PlanApprovalDialog', () => {
   });
 
   it('rejects immediately when user clicks reject', () => {
-    // 点拒绝时只应触发 reject，不应误触 approve。
     const onApprove = vi.fn();
     const onReject = vi.fn();
 
@@ -90,7 +86,7 @@ describe('PlanApprovalDialog', () => {
         request={{ requestId: 'req-2', toolName: 'plan', plan: 'demo' }}
         onApprove={onApprove}
         onReject={onReject}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
@@ -99,7 +95,6 @@ describe('PlanApprovalDialog', () => {
   });
 
   it('approves when pressing Enter', () => {
-    // Enter 是批准快捷键，便于快速确认。
     const onApprove = vi.fn();
     const onReject = vi.fn();
 
@@ -109,7 +104,7 @@ describe('PlanApprovalDialog', () => {
         request={{ requestId: 'req-enter', toolName: 'plan', plan: 'demo' }}
         onApprove={onApprove}
         onReject={onReject}
-      />
+      />,
     );
 
     fireEvent.keyDown(window, { key: 'Enter' });
@@ -118,7 +113,6 @@ describe('PlanApprovalDialog', () => {
   });
 
   it('rejects when pressing Escape', () => {
-    // Escape 是拒绝/关闭快捷键，需和按钮行为保持一致。
     const onApprove = vi.fn();
     const onReject = vi.fn();
 
@@ -128,7 +122,7 @@ describe('PlanApprovalDialog', () => {
         request={{ requestId: 'req-escape', toolName: 'plan', plan: 'demo' }}
         onApprove={onApprove}
         onReject={onReject}
-      />
+      />,
     );
 
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -137,7 +131,6 @@ describe('PlanApprovalDialog', () => {
   });
 
   it('auto-rejects when countdown reaches timeout', () => {
-    // 倒计时结束后必须自动拒绝，避免审批请求无限挂起。
     const onReject = vi.fn();
 
     render(
@@ -146,7 +139,7 @@ describe('PlanApprovalDialog', () => {
         request={{ requestId: 'req-timeout', toolName: 'plan', plan: 'demo' }}
         onApprove={vi.fn()}
         onReject={onReject}
-      />
+      />,
     );
 
     act(() => {
@@ -155,5 +148,36 @@ describe('PlanApprovalDialog', () => {
 
     expect(onReject).toHaveBeenCalledTimes(1);
     expect(onReject).toHaveBeenCalledWith('req-timeout');
+  });
+
+  it('reuses MarkdownBlock linkify inside the dialog content', () => {
+    const request: PlanApprovalRequest = {
+      requestId: 'req-linkify',
+      toolName: 'plan',
+      plan: [
+        'Review src/components/App.tsx',
+        '',
+        'Check com.github.claudecodegui.handler.file.OpenFileHandler',
+        '',
+        'Reference https://example.com/docs',
+      ].join('\n'),
+    };
+
+    render(
+      <PlanApprovalDialog
+        isOpen
+        request={request}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'src/components/App.tsx' })).toBeTruthy();
+    expect(
+      screen.getByRole('link', {
+        name: 'com.github.claudecodegui.handler.file.OpenFileHandler',
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'https://example.com/docs' })).toBeTruthy();
   });
 });

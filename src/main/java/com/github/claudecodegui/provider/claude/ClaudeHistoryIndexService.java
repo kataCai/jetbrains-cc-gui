@@ -443,6 +443,7 @@ class ClaudeHistoryIndexService {
         session.messageCount = liteInfo.messageCount;
         session.lastTimestamp = liteInfo.lastModified;
         session.firstTimestamp = liteInfo.createdAt;
+        session.fileSize = liteInfo.fileSize;
         return session;
     }
 
@@ -488,6 +489,7 @@ class ClaudeHistoryIndexService {
         session.messageCount = entry.messageCount;
         session.lastTimestamp = entry.lastTimestamp;
         session.firstTimestamp = entry.firstTimestamp;
+        session.fileSize = entry.fileSize;
         return session;
     }
 
@@ -518,6 +520,7 @@ class ClaudeHistoryIndexService {
             entry.messageCount = session.messageCount;
             entry.lastTimestamp = session.lastTimestamp;
             entry.firstTimestamp = session.firstTimestamp;
+            entry.fileSize = session.fileSize;
             // Claude: session files live flat under projectDir with the sessionId as basename.
             entry.fileRelativePath = session.sessionId != null ? session.sessionId + ".jsonl" : null;
             Long mtime = session.sessionId != null ? sessionMtimes.get(session.sessionId) : null;

@@ -2,73 +2,66 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HistoryView from './components/history/HistoryView';
 import SettingsView from './components/settings';
-import type { SettingsTab } from './components/settings/SettingsSidebar';
 import { sendBridgeEvent } from './utils/bridge';
-import { ChatInputBox } from './components/ChatInputBox';
 import { preloadSlashCommands, forceRefreshPrompts } from './components/ChatInputBox/providers';
 import {
   useScrollBehavior,
-  useDialogManagement,
   useSessionManagement,
   useStreamingMessages,
   useWindowCallbacks,
   useRewindHandlers,
   useHistoryLoader,
-  useFileChanges,
-  useSubagents,
   useMessageQueue,
   useThemeInit,
   useContextActions,
   useMessageProcessing,
   useMessageSender,
-  useFileChangesManagement,
   useModelProviderState,
+  useChatComputations,
 } from './hooks';
-import type { ContextInfo, ViewMode } from './hooks';
-import { formatTime } from './utils/helpers';
-import { extractMarkdownContent } from './utils/copyUtils';
-import { applyDiffTheme, getStoredDiffTheme } from './utils/diffTheme';
-import { extractTodosFromToolUse } from './utils/todoToolNormalization';
 import {
-  finalizeSubagentsForSettledTurn,
-  finalizeTodosForSettledTurn,
-  sliceLatestConversationTurn,
-} from './utils/turnScope';
+  NEW_SESSION_COMMANDS,
+  PLAN_COMMANDS,
+  RESUME_COMMANDS,
+} from './hooks/useMessageSender';
+import { applyDiffTheme, getStoredDiffTheme } from './utils/diffTheme';
 import type { Attachment, ChatInputBoxHandle } from './components/ChatInputBox/types';
-import { StatusPanel, StatusPanelErrorBoundary } from './components/StatusPanel';
-import { KNOWN_TASK_STATES, type TaskStripState } from './components/StatusPanel/types';
-import { ToastContainer, type ToastMessage } from './components/Toast';
-import { ScrollControl } from './components/ScrollControl';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatModeStrip } from './components/ChatModeStrip';
-import { WelcomeScreen } from './components/WelcomeScreen';
-import { MessageList } from './components/MessageList';
-import { MessageAnchorRail } from './components/MessageAnchorRail';
-import { FILE_MODIFY_TOOL_NAMES, isToolName } from './utils/toolConstants';
-import type { RewindableMessage } from './components/RewindSelectDialog';
 import { AppDialogs } from './components/AppDialogs';
 import TaskReminderDialog, { type TaskReminderDialogRequest } from './components/TaskReminderDialog';
-import { APP_VERSION } from './version/version';
+import { ToastContainer } from './components/Toast';
+import { ChatScreen } from './components/ChatScreen';
+import {
+  KNOWN_TASK_STATES,
+  type TaskStripState,
+} from './components/StatusPanel/types';
+import { useSubagentContextValues } from './contexts/SubagentContext';
+import { useMessages } from './contexts/MessagesContext';
+import { useSession } from './contexts/SessionContext';
+import { useUIState } from './contexts/UIStateContext';
+import { useDialogs } from './contexts/DialogContext';
 import { getComposerUsageMode } from './components/ChatInputBox/modeViewModel';
-import type {
-  ClaudeMessage,
-  HistoryData,
-  ToolResultBlock,
-} from './types';
+import type { ToolResultBlock } from './types';
 
-const DEFAULT_STATUS = 'ready';
-
-// 任务提醒弹窗目前只承接“必须用户关注”的两类状态。
-// 其余状态通过 mode strip / status panel / toast 等较轻量的方式呈现。
+/**
+ * 仅允许弹出强提醒对话框的任务状态。
+ * 其它状态继续通过顶部 mode strip、StatusPanel 和 toast 展示，避免打断用户操作流。
+ */
 const isTaskReminderState = (state: unknown): state is TaskReminderDialogRequest['state'] => (
   state === 'waiting_confirm' || state === 'final_error'
 );
 
+/**
+ * 解析后端推送的任务提醒弹窗负载。
+ * 这里只接收当前前端明确支持的字段，避免历史脏数据或不完整 JSON 污染状态树。
+ *
+ * @param json 后端传入的 JSON 字符串
+ * @return 合法时返回标准化后的提醒请求；非法时返回 null
+ */
 const parseTaskReminderDialogPayload = (json: string): TaskReminderDialogRequest | null => {
   try {
     const parsed = JSON.parse(json) as Record<string, unknown>;
-    // 这里做一次严格收口，避免后端过早发送、历史遗留字段或非法 JSON
-    // 直接污染 React 状态树，导致弹窗打开却没有完整上下文。
     if (!isTaskReminderState(parsed.state) || typeof parsed.message !== 'string') {
       return null;
     }
@@ -86,55 +79,83 @@ const parseTaskReminderDialogPayload = (json: string): TaskReminderDialogRequest
 const App = () => {
   const { t } = useTranslation();
 
-  // ── Dialog management ──
   const {
-    permissionDialogOpen, currentPermissionRequest, openPermissionDialog,
-    handlePermissionApprove, handlePermissionApproveAlways, handlePermissionSkip,
-    askUserQuestionDialogOpen, currentAskUserQuestionRequest, openAskUserQuestionDialog,
-    handleAskUserQuestionSubmit, handleAskUserQuestionCancel,
-    planApprovalDialogOpen, currentPlanApprovalRequest, openPlanApprovalDialog,
-    handlePlanApprovalApprove, handlePlanApprovalReject,
-    rewindDialogOpen, setRewindDialogOpen, currentRewindRequest, setCurrentRewindRequest,
-    isRewinding, setIsRewinding, rewindSelectDialogOpen, setRewindSelectDialogOpen,
-  } = useDialogManagement({ t });
+    openPermissionDialog,
+    openAskUserQuestionDialog,
+    openPlanApprovalDialog,
+    setRewindDialogOpen,
+    setCurrentRewindRequest,
+    isRewinding,
+    setIsRewinding,
+    setRewindSelectDialogOpen,
+  } = useDialogs();
 
-  // ── Core state (shared across multiple hooks) ──
-  const [messages, setMessages] = useState<ClaudeMessage[]>([]);
-  const [status, setStatus] = useState(DEFAULT_STATUS);
-  const [loading, setLoading] = useState(false);
-  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
-  const [isThinking, setIsThinking] = useState(false);
-  const [streamingActive, setStreamingActive] = useState(false);
-  const [currentView, setCurrentView] = useState<ViewMode>('chat');
-  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
-  const [historyData, setHistoryData] = useState<HistoryData | null>(null);
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const [addModelDialogOpen, setAddModelDialogOpen] = useState(false);
-  const [taskReminderRequest, setTaskReminderRequest] = useState<TaskReminderDialogRequest | null>(null);
+  const {
+    messages,
+    setMessages,
+    subagentHistories,
+    setSubagentHistories,
+    status,
+    setStatus,
+    loading,
+    setLoading,
+    setLoadingStartTime,
+    setIsThinking,
+    streamingActive,
+    setStreamingActive,
+  } = useMessages();
+
+  const {
+    currentSessionId,
+    setCurrentSessionId,
+    customSessionTitle,
+    setCustomSessionTitle,
+  } = useSession();
+
+  const {
+    currentView,
+    setCurrentView,
+    settingsInitialTab,
+    setSettingsInitialTab,
+    toasts,
+    addToast,
+    dismissToast,
+    clearToasts,
+    setContextInfo,
+  } = useUIState();
+
   const isFirstMountRef = useRef(true);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [customSessionTitle, setCustomSessionTitle] = useState<string | null>(null);
   const chatInputRef = useRef<ChatInputBoxHandle>(null);
-  const [draftInput, setDraftInput] = useState('');
-
-  // StatusPanel collapse state
   const userCollapsedRef = useRef(false);
   const [, forceStatusUpdate] = useState(0);
+  const [taskReminderRequest, setTaskReminderRequest] = useState<TaskReminderDialogRequest | null>(null);
+  const [historyData, setHistoryData] = useState<null | Parameters<typeof HistoryView>[0]['historyData']>(null);
 
-  // Changelog dialog state (show once per version update)
-  const LAST_SEEN_VERSION_KEY = 'lastSeenChangelogVersion';
-  const [showChangelogDialog, setShowChangelogDialog] = useState(() => {
-    const lastSeen = localStorage.getItem(LAST_SEEN_VERSION_KEY);
-    return lastSeen !== APP_VERSION;
-  });
-  const handleCloseChangelog = useCallback(() => {
-    localStorage.setItem(LAST_SEEN_VERSION_KEY, APP_VERSION);
-    setShowChangelogDialog(false);
+  const currentSessionIdRef = useRef(currentSessionId);
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  const customSessionTitleRef = useRef(customSessionTitle);
+  useEffect(() => {
+    customSessionTitleRef.current = customSessionTitle;
+  }, [customSessionTitle]);
+
+  const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [anchorCollapsedCount, setAnchorCollapsedCount] = useState(0);
+  const handleMessageNodeRef = useCallback((id: string, node: HTMLDivElement | null) => {
+    if (node) {
+      messageNodeMapRef.current.set(id, node);
+    } else {
+      messageNodeMapRef.current.delete(id);
+    }
   }, []);
 
   const handleShowTaskReminderDialog = useCallback((json: string) => {
     const payload = parseTaskReminderDialogPayload(json);
-    if (!payload) return;
+    if (!payload) {
+      return;
+    }
     setTaskReminderRequest(payload);
   }, []);
 
@@ -152,26 +173,22 @@ const App = () => {
       }),
     );
     setTaskReminderRequest(null);
-  }, []);
+  }, [setCurrentView]);
 
   const handleTaskReminderRetry = useCallback(() => {
     setCurrentView('chat');
-    // reminder 的 retry 直接复用现有 restart_session 语义，
-    // 避免前后端再额外开一条“从提醒弹窗发起重试”的专用协议。
     sendBridgeEvent('restart_session');
     setTaskReminderRequest(null);
-  }, []);
+  }, [setCurrentView]);
 
   useEffect(() => {
     window.showTaskReminderDialog = handleShowTaskReminderDialog;
     if (
-      Array.isArray(window.__pendingTaskReminderDialogRequests) &&
-      window.__pendingTaskReminderDialogRequests.length > 0
+      Array.isArray(window.__pendingTaskReminderDialogRequests)
+      && window.__pendingTaskReminderDialogRequests.length > 0
     ) {
       const pending = window.__pendingTaskReminderDialogRequests.slice();
       window.__pendingTaskReminderDialogRequests = [];
-      // React 回调注册之前，Java 侧可能已经把提醒请求暂存在 window 上。
-      // 这里统一回放，确保初始化期的提醒不会被悄悄丢掉。
       pending.forEach((json) => handleShowTaskReminderDialog(json));
     }
 
@@ -182,374 +199,415 @@ const App = () => {
     };
   }, [handleShowTaskReminderDialog]);
 
-  // Context state (active file and selection)
-  const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
-
-  // Refs for stale closure prevention
-  const currentSessionIdRef = useRef(currentSessionId);
-  useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
-  const customSessionTitleRef = useRef(customSessionTitle);
-  useEffect(() => { customSessionTitleRef.current = customSessionTitle; }, [customSessionTitle]);
-
-  // Message anchor node registry for anchor rail navigation
-  const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  const [anchorCollapsedCount, setAnchorCollapsedCount] = useState(0);
-  const handleMessageNodeRef = useCallback((id: string, node: HTMLDivElement | null) => {
-    if (node) { messageNodeMapRef.current.set(id, node); }
-    else { messageNodeMapRef.current.delete(id); }
-  }, []);
-
-  // ── Theme & context actions ──
   useThemeInit();
   useContextActions();
 
-  // Apply diff theme on app startup so diff styles work before opening Settings.
   useEffect(() => {
     const ideTheme = window.__INITIAL_IDE_THEME__ ?? null;
     applyDiffTheme(getStoredDiffTheme(), ideTheme);
   }, []);
 
-  // ── Scroll behavior ──
   const {
-    messagesContainerRef, messagesEndRef, inputAreaRef,
-    isUserAtBottomRef, userPausedRef,
+    messagesContainerRef,
+    messagesEndRef,
+    inputAreaRef,
+    isUserAtBottomRef,
+    userPausedRef,
   } = useScrollBehavior({ currentView, messages, loading, streamingActive });
 
-  // ── Streaming messages ──
   const {
-    streamingContentRef, isStreamingRef, useBackendStreamingRenderRef,
-    streamingMessageIndexRef, streamingTextSegmentsRef, activeTextSegmentIndexRef,
-    streamingThinkingSegmentsRef, activeThinkingSegmentIndexRef,
-    seenToolUseCountRef, contentUpdateTimeoutRef, thinkingUpdateTimeoutRef,
-    lastContentUpdateRef, lastThinkingUpdateRef, autoExpandedThinkingKeysRef,
-    streamingTurnIdRef, turnIdCounterRef,
-    findLastAssistantIndex, extractRawBlocks,
-    getOrCreateStreamingAssistantIndex, patchAssistantForStreaming,
+    streamingContentRef,
+    streamingThinkingRef,
+    isStreamingRef,
+    useBackendStreamingRenderRef,
+    streamingMessageIndexRef,
+    contentUpdateTimeoutRef,
+    thinkingUpdateTimeoutRef,
+    lastContentUpdateRef,
+    lastThinkingUpdateRef,
+    autoExpandedThinkingKeysRef,
+    streamingTurnIdRef,
+    turnIdCounterRef,
+    findLastAssistantIndex,
+    extractRawBlocks,
+    getOrCreateStreamingAssistantIndex,
+    patchAssistantForStreaming,
   } = useStreamingMessages();
 
-  // ── Toast helpers ──
-  const addToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
-    if (message === DEFAULT_STATUS || !message) return;
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    setToasts((prev) => [...prev, { id, message, type }]);
-  }, []);
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  }, []);
-  const clearToasts = useCallback(() => { setToasts([]); }, []);
-
-  // ── Model/Provider state ──
   const {
-    currentProvider, selectedModel, permissionMode,
-    defaultCodexModelFromConfig,
-    codexBaseUrl, codexUsesCustomBaseUrl,
-    selectedAgent, sdkStatusLoaded, currentSdkInstalled,
+    currentProvider,
+    selectedModel,
+    permissionMode,
+    selectedAgent,
+    sdkStatusLoaded,
+    currentSdkInstalled,
     currentProviderRef,
     shouldAdoptCodexDefaultModelRef,
-    activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
-    reasoningEffort, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
-    usagePercentage, usageUsedTokens, usageMaxTokens,
+    activeProviderConfig,
+    claudeSettingsAlwaysThinkingEnabled,
+    reasoningEffort,
+    streamingEnabledSetting,
+    sendShortcut,
+    autoOpenFileEnabled,
+    longContextEnabled,
+    usagePercentage,
+    usageUsedTokens,
+    usageMaxTokens,
     setPermissionMode,
-    setClaudePermissionMode, setCodexPermissionMode,
-    setSelectedClaudeModel, setSelectedCodexModel,
+    setClaudePermissionMode,
+    setCodexPermissionMode,
+    setSelectedClaudeModel,
+    setSelectedCodexModel,
     setDefaultCodexModelFromConfig,
-    setCodexBaseUrl, setCodexUsesCustomBaseUrl,
+    setCodexBaseUrl,
+    setCodexUsesCustomBaseUrl,
     setReasoningEffort,
-    setProviderConfigVersion, setActiveProviderConfig,
-    setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
-    setSendShortcut, setAutoOpenFileEnabled,
-    setSdkStatus, setSdkStatusLoaded, setSelectedAgent,
-    setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
+    setProviderConfigVersion,
+    setActiveProviderConfig,
+    setClaudeSettingsAlwaysThinkingEnabled,
+    setStreamingEnabledSetting,
+    setSendShortcut,
+    setAutoOpenFileEnabled,
+    setSdkStatus,
+    setSdkStatusLoaded,
+    setSelectedAgent,
+    setUsagePercentage,
+    setUsageUsedTokens,
+    setUsageMaxTokens,
     syncActiveProviderModelMapping,
-    handleModeSelect, handleModelSelect, handleProviderSelect,
-    handleReasoningChange, handleAgentSelect, handleToggleThinking,
-    handleStreamingEnabledChange, handleSendShortcutChange,
+    handleModeSelect,
+    handleModelSelect,
+    handleProviderSelect,
+    handleReasoningChange,
+    handleAgentSelect,
+    handleToggleThinking,
+    handleStreamingEnabledChange,
+    handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleLongContextChange,
   } = useModelProviderState({ addToast, t });
 
-  // ── Global drag event interception ──
   useEffect(() => {
-    const prevent = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); };
-    document.addEventListener('dragover', prevent);
-    document.addEventListener('drop', prevent);
-    document.addEventListener('dragenter', prevent);
+    const preventExternalDrop = (e: DragEvent) => {
+      const types = Array.from(e.dataTransfer?.types ?? []);
+      const isExternalDrop = types.includes('Files') || types.includes('text/uri-list');
+      if (!isExternalDrop) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    document.addEventListener('dragover', preventExternalDrop);
+    document.addEventListener('drop', preventExternalDrop);
+    document.addEventListener('dragenter', preventExternalDrop);
+
     return () => {
-      document.removeEventListener('dragover', prevent);
-      document.removeEventListener('drop', prevent);
-      document.removeEventListener('dragenter', prevent);
+      document.removeEventListener('dragover', preventExternalDrop);
+      document.removeEventListener('drop', preventExternalDrop);
+      document.removeEventListener('dragenter', preventExternalDrop);
     };
   }, []);
 
-  // ── Slash command preloading ──
   useEffect(() => {
     preloadSlashCommands();
     forceRefreshPrompts();
-    const retryTimer = setTimeout(() => { forceRefreshPrompts(); }, 1000);
+    const retryTimer = setTimeout(() => {
+      forceRefreshPrompts();
+    }, 1000);
     return () => clearTimeout(retryTimer);
   }, []);
 
   useEffect(() => {
-    if (isFirstMountRef.current) { isFirstMountRef.current = false; return; }
-    if (currentView === 'chat') { forceRefreshPrompts(); }
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false;
+      return;
+    }
+    if (currentView === 'chat') {
+      forceRefreshPrompts();
+    }
   }, [currentView]);
 
-  // ── Session management ──
   const {
-    showNewSessionConfirm, showInterruptConfirm,
+    showNewSessionConfirm,
+    showInterruptConfirm,
     suppressNextStatusToastRef,
-    createNewSession, forceCreateNewSession,
-    handleConfirmNewSession, handleCancelNewSession,
-    handleConfirmInterrupt, handleCancelInterrupt,
-    loadHistorySession, deleteHistorySession, exportHistorySession,
-    toggleFavoriteSession, updateHistoryTitle, syncCurrentTabTitle,
+    createNewSession,
+    forceCreateNewSession,
+    handleConfirmNewSession,
+    handleCancelNewSession,
+    handleConfirmInterrupt,
+    handleCancelInterrupt,
+    loadHistorySession,
+    deleteHistorySession,
+    deleteHistorySessions,
+    exportHistorySession,
+    toggleFavoriteSession,
+    updateHistoryTitle,
+    syncCurrentTabTitle,
   } = useSessionManagement({
-    messages, loading, historyData, currentSessionId,
-    setHistoryData, setMessages, setCurrentView, setCurrentSessionId,
-    setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
-    setStatus, setLoading, setIsThinking, setStreamingActive,
-    clearToasts, addToast, t,
+    messages,
+    loading,
+    historyData: null,
+    currentSessionId,
+    setHistoryData,
+    setMessages,
+    setCurrentView,
+    setCurrentSessionId,
+    setCustomSessionTitle,
+    setUsagePercentage,
+    setUsageUsedTokens,
+    setUsageMaxTokens,
+    setStatus,
+    setLoading,
+    setIsThinking,
+    setStreamingActive,
+    clearToasts,
+    addToast,
+    t,
   });
 
   useHistoryLoader({ currentView, currentProvider });
 
-  // ── Window callbacks (bridge communication) ──
   useWindowCallbacks({
-    t, addToast, clearToasts,
-    setMessages, setStatus, setLoading, setLoadingStartTime,
-    setIsThinking, setStreamingActive, setHistoryData,
-    setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
-    setPermissionMode, setClaudePermissionMode, setCodexPermissionMode,
-    setSelectedClaudeModel, setSelectedCodexModel,
+    t,
+    addToast,
+    clearToasts,
+    setMessages,
+    setStatus,
+    setLoading,
+    setLoadingStartTime,
+    setIsThinking,
+    setStreamingActive,
+    setHistoryData,
+    setCurrentSessionId,
+    setCustomSessionTitle,
+    setUsagePercentage,
+    setUsageUsedTokens,
+    setUsageMaxTokens,
+    setPermissionMode,
+    setClaudePermissionMode,
+    setCodexPermissionMode,
+    setSelectedClaudeModel,
+    setSelectedCodexModel,
     setDefaultCodexModelFromConfig,
-    setCodexBaseUrl, setCodexUsesCustomBaseUrl,
+    setCodexBaseUrl,
+    setCodexUsesCustomBaseUrl,
     setReasoningEffort,
-    setProviderConfigVersion, setActiveProviderConfig,
-    setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
-    setSendShortcut, setAutoOpenFileEnabled,
-    setSdkStatus, setSdkStatusLoaded,
-    setIsRewinding, setRewindDialogOpen, setCurrentRewindRequest,
-    setContextInfo, setSelectedAgent,
-    currentProviderRef, shouldAdoptCodexDefaultModelRef, messagesContainerRef, isUserAtBottomRef, userPausedRef,
+    setProviderConfigVersion,
+    setActiveProviderConfig,
+    setClaudeSettingsAlwaysThinkingEnabled,
+    setStreamingEnabledSetting,
+    setSendShortcut,
+    setAutoOpenFileEnabled,
+    setSdkStatus,
+    setSdkStatusLoaded,
+    setIsRewinding,
+    setRewindDialogOpen,
+    setCurrentRewindRequest,
+    setContextInfo,
+    setSelectedAgent,
+    setSubagentHistories,
+    currentProviderRef,
+    shouldAdoptCodexDefaultModelRef,
+    messagesContainerRef,
+    isUserAtBottomRef,
+    userPausedRef,
     suppressNextStatusToastRef,
-    streamingContentRef, isStreamingRef, useBackendStreamingRenderRef,
+    streamingContentRef,
+    streamingThinkingRef,
+    isStreamingRef,
+    useBackendStreamingRenderRef,
     autoExpandedThinkingKeysRef,
-    streamingTextSegmentsRef, activeTextSegmentIndexRef,
-    streamingThinkingSegmentsRef, activeThinkingSegmentIndexRef,
-    seenToolUseCountRef, streamingMessageIndexRef,
-    streamingTurnIdRef, turnIdCounterRef,
-    lastContentUpdateRef, contentUpdateTimeoutRef,
-    lastThinkingUpdateRef, thinkingUpdateTimeoutRef,
-    findLastAssistantIndex, extractRawBlocks,
-    getOrCreateStreamingAssistantIndex, patchAssistantForStreaming,
+    streamingMessageIndexRef,
+    streamingTurnIdRef,
+    turnIdCounterRef,
+    lastContentUpdateRef,
+    contentUpdateTimeoutRef,
+    lastThinkingUpdateRef,
+    thinkingUpdateTimeoutRef,
+    findLastAssistantIndex,
+    extractRawBlocks,
+    getOrCreateStreamingAssistantIndex,
+    patchAssistantForStreaming,
     syncActiveProviderModelMapping,
-    openPermissionDialog, openAskUserQuestionDialog, openPlanApprovalDialog,
-    customSessionTitleRef, currentSessionIdRef, updateHistoryTitle,
+    openPermissionDialog,
+    openAskUserQuestionDialog,
+    openPlanApprovalDialog,
+    customSessionTitleRef,
+    currentSessionIdRef,
+    updateHistoryTitle,
   });
 
-  // ── Message processing ──
   const {
-    getMessageText, getContentBlocks,
-    mergedMessages, sentAttachmentsRef,
+    getMessageText,
+    getContentBlocks,
+    mergedMessages,
+    sentAttachmentsRef,
   } = useMessageProcessing({ messages, currentSessionId, t });
 
-  // Find tool result (stable ref to avoid re-renders)
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-  const findToolResult = useCallback((toolUseId?: string, messageIndex?: number): ToolResultBlock | null => {
-    if (!toolUseId || typeof messageIndex !== 'number') return null;
-    const currentMessages = messagesRef.current;
-    for (let i = 0; i < currentMessages.length; i += 1) {
-      const candidate = currentMessages[i];
-      const raw = candidate.raw;
-      if (!raw || typeof raw === 'string') continue;
-      const content = raw.content ?? raw.message?.content;
-      if (!Array.isArray(content)) continue;
-      const resultBlock = content.find(
-        (block): block is ToolResultBlock =>
-          Boolean(block) && block.type === 'tool_result' && block.tool_use_id === toolUseId,
-      );
-      if (resultBlock) return resultBlock;
-    }
-    return null;
-  }, []);
-
-  // ── Message sender ──
-  // Wrap handleProviderSelect to also clear messages and input (like creating a new session)
   const wrappedHandleProviderSelect = useCallback((providerId: string) => {
     setMessages([]);
     chatInputRef.current?.clear();
     handleProviderSelect(providerId);
-  }, [handleProviderSelect]);
+  }, [handleProviderSelect, setMessages]);
 
   const {
     handleSubmit: hookHandleSubmit,
     executeMessage,
     interruptSession,
   } = useMessageSender({
-    t, addToast,
-    currentProvider, permissionMode, selectedAgent,
-    sdkStatusLoaded, currentSdkInstalled,
-    sentAttachmentsRef, chatInputRef, messagesContainerRef,
-    isUserAtBottomRef, userPausedRef, isStreamingRef,
-    setMessages, setLoading, setLoadingStartTime, setStreamingActive,
-    setSettingsInitialTab, setCurrentView,
+    t,
+    addToast,
+    currentProvider,
+    permissionMode,
+    selectedAgent,
+    sdkStatusLoaded,
+    currentSdkInstalled,
+    sentAttachmentsRef,
+    chatInputRef,
+    messagesContainerRef,
+    isUserAtBottomRef,
+    userPausedRef,
+    isStreamingRef,
+    setMessages,
+    setLoading,
+    setLoadingStartTime,
+    setStreamingActive,
+    setSettingsInitialTab,
+    setCurrentView,
     forceCreateNewSession,
+    handleModeSelect,
   });
 
-  // ── Message queue ──
   const {
     queue: messageQueue,
     enqueue: enqueueMessage,
     dequeue: dequeueMessage,
   } = useMessageQueue({ isLoading: loading, onExecute: executeMessage });
 
-  // handleSubmit with queue support (new session commands bypass loading check)
   const handleSubmit = useCallback((content: string, attachments?: Attachment[]) => {
     const text = content.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-    if (!text && !hasAttachments) return;
-    // New session commands work even while loading
+    if (!text && !hasAttachments) {
+      return;
+    }
+
     if (text.startsWith('/')) {
       const command = text.split(/\s+/)[0].toLowerCase();
-      if (['/new', '/clear', '/reset'].includes(command)) {
+      if (NEW_SESSION_COMMANDS.has(command)) {
         forceCreateNewSession();
         return;
       }
+      if (RESUME_COMMANDS.has(command)) {
+        setCurrentView('history');
+        return;
+      }
+      if (PLAN_COMMANDS.has(command)) {
+        if (currentProvider === 'codex') {
+          addToast(
+            t('chat.planModeNotAvailableForCodex', {
+              defaultValue: 'Plan mode is not available for Codex provider',
+            }),
+            'warning',
+          );
+        } else {
+          handleModeSelect('plan');
+          addToast(
+            t('chat.planModeEnabled', {
+              defaultValue: 'Plan mode enabled',
+            }),
+            'info',
+          );
+        }
+        return;
+      }
     }
-    // If loading, add to queue
+
     if (loading) {
       enqueueMessage(content, attachments);
       return;
     }
+
     hookHandleSubmit(content, attachments);
-  }, [loading, enqueueMessage, hookHandleSubmit, forceCreateNewSession]);
+  }, [
+    addToast,
+    currentProvider,
+    enqueueMessage,
+    forceCreateNewSession,
+    handleModeSelect,
+    hookHandleSubmit,
+    loading,
+    setCurrentView,
+    t,
+  ]);
 
-  // ── File changes management ──
   const {
-    processedFiles, baseMessageIndex,
-    handleUndoFile, handleDiscardAll: handleDiscardAllRaw, handleKeepAll,
-  } = useFileChangesManagement({
-    currentSessionId, currentSessionIdRef, messages,
-    getContentBlocks, findToolResult,
+    findToolResult,
+    getToolResultRaw,
+    fileChangeMgmt,
+    filteredFileChanges,
+    subagents,
+    globalTodos,
+    rewindableMessages,
+    sessionTitle,
+  } = useChatComputations({
+    t,
+    messages,
+    mergedMessages,
+    customSessionTitle,
+    streamingActive,
+    currentProvider,
+    currentSessionId,
+    currentSessionIdRef,
+    getMessageText,
+    getContentBlocks,
   });
 
-  const fileChanges = useFileChanges({
-    messages, getContentBlocks, findToolResult,
-    startFromIndex: baseMessageIndex,
-  });
-
-  const filteredFileChanges = useMemo(() => {
-    if (processedFiles.length === 0) return fileChanges;
-    return fileChanges.filter(fc => !processedFiles.includes(fc.filePath));
-  }, [fileChanges, processedFiles]);
-
+  const { handleUndoFile, handleDiscardAll: handleDiscardAllRaw, handleKeepAll } = fileChangeMgmt;
   const onDiscardAll = useCallback(() => {
     handleDiscardAllRaw(filteredFileChanges);
-  }, [handleDiscardAllRaw, filteredFileChanges]);
+  }, [filteredFileChanges, handleDiscardAllRaw]);
 
-  const latestTurnMessages = useMemo(() => sliceLatestConversationTurn(messages), [messages]);
-
-  // ── Subagents ──
-  const latestTurnSubagents = useSubagents({ messages: latestTurnMessages, getContentBlocks, findToolResult });
-  const subagents = useMemo(
-    () => finalizeSubagentsForSettledTurn(latestTurnSubagents, streamingActive),
-    [latestTurnSubagents, streamingActive],
+  const { subagentHistoryCtxValue, sessionIdCtxValue } = useSubagentContextValues(
+    subagentHistories,
+    currentSessionId,
   );
 
-  // ── Rewind handlers ──
+  const handleNavigateToProviderSettings = useCallback(() => {
+    setSettingsInitialTab('providers');
+    setCurrentView('settings');
+  }, [setCurrentView, setSettingsInitialTab]);
+
   const {
-    handleRewindConfirm, handleRewindCancel,
-    handleOpenRewindSelectDialog, handleRewindSelect, handleRewindSelectCancel,
+    handleRewindConfirm,
+    handleRewindCancel,
+    handleOpenRewindSelectDialog,
+    handleRewindSelect,
+    handleRewindSelectCancel,
   } = useRewindHandlers({
-    t, addToast, currentSessionId, mergedMessages, getMessageText,
-    setCurrentRewindRequest, setRewindDialogOpen, setRewindSelectDialogOpen,
-    setIsRewinding, isRewinding,
+    t,
+    addToast,
+    currentSessionId,
+    mergedMessages,
+    getMessageText,
+    setCurrentRewindRequest,
+    setRewindDialogOpen,
+    setRewindSelectDialogOpen,
+    setIsRewinding,
+    isRewinding,
   });
-
-  // ── Computed values ──
-
-  // Extract todos from the latest turn only so the status panel reflects the
-  // current/most-recent task, instead of accumulating historical plans forever.
-  const globalTodos = useMemo(() => {
-    let latestTodos: ReturnType<typeof extractTodosFromToolUse> = null;
-    for (let i = latestTurnMessages.length - 1; i >= 0; i--) {
-      const msg = latestTurnMessages[i];
-      if (msg.type !== 'assistant') continue;
-      const blocks = getContentBlocks(msg);
-      for (let j = blocks.length - 1; j >= 0; j--) {
-        const todos = extractTodosFromToolUse(blocks[j]);
-        if (todos && todos.length > 0) {
-          latestTodos = todos;
-          break;
-        }
-      }
-      if (latestTodos) {
-        break;
-      }
-    }
-    return finalizeTodosForSettledTurn(latestTodos ?? [], streamingActive);
-  }, [latestTurnMessages, getContentBlocks, streamingActive]);
-
-  const canRewindFromMessageIndex = (userMessageIndex: number) => {
-    if (userMessageIndex < 0 || userMessageIndex >= mergedMessages.length) return false;
-    const current = mergedMessages[userMessageIndex];
-    if (current.type !== 'user') return false;
-    if ((current.content || '').trim() === '[tool_result]') return false;
-    const raw = current.raw;
-    if (raw && typeof raw !== 'string') {
-      const content = (raw as any).content ?? (raw as any).message?.content;
-      if (Array.isArray(content) && content.some((block: any) => block && block.type === 'tool_result')) {
-        return false;
-      }
-    }
-    for (let i = userMessageIndex + 1; i < mergedMessages.length; i += 1) {
-      const msg = mergedMessages[i];
-      if (msg.type === 'user') break;
-      const blocks = getContentBlocks(msg);
-      for (const block of blocks) {
-        if (block.type !== 'tool_use') continue;
-        if (isToolName(block.name, FILE_MODIFY_TOOL_NAMES)) return true;
-      }
-    }
-    return false;
-  };
-
-  const rewindableMessages = useMemo((): RewindableMessage[] => {
-    if (currentProvider !== 'claude') return [];
-    const result: RewindableMessage[] = [];
-    for (let i = 0; i < mergedMessages.length - 1; i++) {
-      if (!canRewindFromMessageIndex(i)) continue;
-      const message = mergedMessages[i];
-      const content = message.content || getMessageText(message);
-      const timestamp = message.timestamp ? formatTime(message.timestamp) : undefined;
-      const messagesAfterCount = mergedMessages.length - i - 1;
-      result.push({ messageIndex: i, message, displayContent: content, timestamp, messagesAfterCount });
-    }
-    return result;
-  }, [mergedMessages, currentProvider]);
 
   const statusPanelExpanded = !userCollapsedRef.current;
   const usageMode = getComposerUsageMode(permissionMode);
   const taskState = useMemo<TaskStripState | null>(() => {
     if (loading || streamingActive) {
-      // 只要还在加载或流式输出，就优先把顶部状态视为 running。
-      // 这样不会因为后端状态栏字符串更新稍慢，造成界面闪回到 idle/ready。
       return 'running';
     }
     const normalized = status.trim().toLowerCase() as TaskStripState;
     return KNOWN_TASK_STATES.has(normalized) ? normalized : null;
   }, [loading, status, streamingActive]);
 
-  const sessionTitle = useMemo(() => {
-    if (customSessionTitle) return customSessionTitle;
-    if (messages.length === 0) return t('common.newSession');
-    const firstUserMessage = messages.find((message) => message.type === 'user');
-    if (!firstUserMessage) return t('common.newSession');
-    const text = getMessageText(firstUserMessage);
-    return text.length > 15 ? `${text.substring(0, 15)}...` : text;
-  }, [customSessionTitle, messages, t, getMessageText]);
-
-  // ── Render ──
   return (
     <>
       <ToastContainer messages={toasts} onDismiss={dismissToast} />
@@ -557,7 +615,13 @@ const App = () => {
         currentView={currentView}
         sessionTitle={sessionTitle}
         t={t}
-        modeStrip={<ChatModeStrip usageMode={usageMode} taskState={taskState} currentProvider={currentProvider as 'claude' | 'codex'} />}
+        modeStrip={(
+          <ChatModeStrip
+            usageMode={usageMode}
+            taskState={taskState}
+            currentProvider={currentProvider as 'claude' | 'codex'}
+          />
+        )}
         onBack={() => setCurrentView('chat')}
         onNewSession={createNewSession}
         onNewTab={() => sendBridgeEvent('create_new_tab')}
@@ -590,185 +654,93 @@ const App = () => {
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
         />
       ) : currentView === 'chat' ? (
-        <>
-          <div className="messages-shell">
-            <MessageAnchorRail
-              messages={mergedMessages}
-              collapsedCount={anchorCollapsedCount}
-              containerRef={messagesContainerRef}
-              messageNodeMap={messageNodeMapRef}
-            />
-            <div className="messages-container" ref={messagesContainerRef}>
-              {messages.length === 0 && (
-                <WelcomeScreen
-                  currentProvider={currentProvider}
-                  currentModelId={selectedModel}
-                  t={t}
-                  onProviderChange={wrappedHandleProviderSelect}
-                  onVersionClick={() => setShowChangelogDialog(true)}
-                />
-              )}
-
-              <MessageList
-                messages={mergedMessages}
-                streamingActive={streamingActive}
-                isThinking={isThinking}
-                loading={loading}
-                loadingStartTime={loadingStartTime}
-                t={t}
-                getMessageText={getMessageText}
-                getContentBlocks={getContentBlocks}
-                findToolResult={findToolResult}
-                extractMarkdownContent={extractMarkdownContent}
-                messagesEndRef={messagesEndRef}
-                onMessageNodeRef={handleMessageNodeRef}
-                onCollapsedCountChange={setAnchorCollapsedCount}
-                onNavigateToProviderSettings={() => {
-                  setSettingsInitialTab('providers');
-                  setCurrentView('settings');
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Scroll control button */}
-          <ScrollControl containerRef={messagesContainerRef} inputAreaRef={inputAreaRef} />
-        </>
+        <ChatScreen
+          mergedMessages={mergedMessages}
+          getMessageText={getMessageText}
+          getContentBlocks={getContentBlocks}
+          findToolResult={findToolResult as (toolUseId?: string, messageIndex?: number) => ToolResultBlock | null}
+          getToolResultRaw={getToolResultRaw}
+          subagents={subagents}
+          globalTodos={globalTodos}
+          filteredFileChanges={filteredFileChanges}
+          subagentHistoryCtxValue={subagentHistoryCtxValue}
+          sessionIdCtxValue={sessionIdCtxValue}
+          chatInputRef={chatInputRef}
+          messagesContainerRef={messagesContainerRef}
+          messagesEndRef={messagesEndRef}
+          inputAreaRef={inputAreaRef}
+          messageNodeMapRef={messageNodeMapRef}
+          userCollapsedRef={userCollapsedRef}
+          anchorCollapsedCount={anchorCollapsedCount}
+          setAnchorCollapsedCount={setAnchorCollapsedCount}
+          onMessageNodeRef={handleMessageNodeRef}
+          statusPanelExpanded={statusPanelExpanded}
+          forceStatusUpdate={forceStatusUpdate}
+          onUndoFile={handleUndoFile}
+          onDiscardAll={onDiscardAll}
+          onKeepAll={handleKeepAll}
+          onSubmit={handleSubmit}
+          onInterrupt={interruptSession}
+          onRewind={handleOpenRewindSelectDialog}
+          onNavigateToProviderSettings={handleNavigateToProviderSettings}
+          onProviderSelect={wrappedHandleProviderSelect}
+          currentProvider={currentProvider}
+          selectedModel={selectedModel}
+          permissionMode={permissionMode}
+          selectedAgent={selectedAgent}
+          sdkStatusLoaded={sdkStatusLoaded}
+          currentSdkInstalled={currentSdkInstalled}
+          activeProviderConfig={activeProviderConfig}
+          claudeSettingsAlwaysThinkingEnabled={claudeSettingsAlwaysThinkingEnabled}
+          reasoningEffort={reasoningEffort}
+          streamingEnabledSetting={streamingEnabledSetting}
+          sendShortcut={sendShortcut}
+          autoOpenFileEnabled={autoOpenFileEnabled}
+          longContextEnabled={longContextEnabled}
+          usagePercentage={usagePercentage}
+          usageUsedTokens={usageUsedTokens}
+          usageMaxTokens={usageMaxTokens}
+          onModeSelect={handleModeSelect}
+          onModelSelect={handleModelSelect}
+          onAgentSelect={handleAgentSelect}
+          onReasoningChange={handleReasoningChange}
+          onToggleThinking={handleToggleThinking}
+          onStreamingEnabledChange={handleStreamingEnabledChange}
+          onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          onLongContextChange={handleLongContextChange}
+          messageQueue={messageQueue}
+          onRemoveFromQueue={dequeueMessage}
+        />
       ) : (
         <HistoryView
           historyData={historyData}
           currentProvider={currentProvider}
           onLoadSession={loadHistorySession}
           onDeleteSession={deleteHistorySession}
+          onDeleteSessions={deleteHistorySessions}
           onExportSession={exportHistorySession}
           onToggleFavorite={toggleFavoriteSession}
           onUpdateTitle={updateHistoryTitle}
         />
       )}
 
-      {currentView === 'chat' && (
-        <>
-          <StatusPanelErrorBoundary>
-            <StatusPanel
-              todos={globalTodos}
-              fileChanges={filteredFileChanges}
-              subagents={subagents}
-              expanded={statusPanelExpanded}
-              isStreaming={streamingActive}
-              usageMode={usageMode}
-              taskState={taskState}
-              onUndoFile={handleUndoFile}
-              onDiscardAll={onDiscardAll}
-              onKeepAll={handleKeepAll}
-            />
-          </StatusPanelErrorBoundary>
-          <div className="input-area" ref={inputAreaRef}>
-            <ChatInputBox
-              ref={chatInputRef}
-              isLoading={loading}
-              selectedModel={selectedModel}
-              defaultCodexModelFromConfig={defaultCodexModelFromConfig}
-              codexBaseUrl={codexBaseUrl}
-              codexUsesCustomBaseUrl={codexUsesCustomBaseUrl}
-              permissionMode={permissionMode}
-              currentProvider={currentProvider}
-              usagePercentage={usagePercentage}
-              usageUsedTokens={usageUsedTokens}
-              usageMaxTokens={usageMaxTokens}
-              showUsage={true}
-              alwaysThinkingEnabled={activeProviderConfig?.settingsConfig?.alwaysThinkingEnabled ?? claudeSettingsAlwaysThinkingEnabled}
-              placeholder={sendShortcut === 'cmdEnter' ? t('chat.inputPlaceholderCmdEnter') : t('chat.inputPlaceholderEnter')}
-              sdkInstalled={currentSdkInstalled}
-              sdkStatusLoading={!sdkStatusLoaded}
-              onInstallSdk={() => {
-                setSettingsInitialTab('dependencies');
-                setCurrentView('settings');
-              }}
-              value={draftInput}
-              onInput={setDraftInput}
-              onSubmit={handleSubmit}
-              onStop={interruptSession}
-              onModeSelect={handleModeSelect}
-              onModelSelect={handleModelSelect}
-              onProviderSelect={wrappedHandleProviderSelect}
-              reasoningEffort={reasoningEffort}
-              onReasoningChange={handleReasoningChange}
-              onToggleThinking={handleToggleThinking}
-              streamingEnabled={streamingEnabledSetting}
-              onStreamingEnabledChange={handleStreamingEnabledChange}
-              sendShortcut={sendShortcut}
-              selectedAgent={selectedAgent}
-              onAgentSelect={handleAgentSelect}
-              activeFile={contextInfo?.file}
-              selectedLines={contextInfo?.startLine !== undefined && contextInfo?.endLine !== undefined
-                ? (contextInfo.startLine === contextInfo.endLine
-                    ? `L${contextInfo.startLine}`
-                    : `L${contextInfo.startLine}-${contextInfo.endLine}`)
-                : undefined}
-              onClearContext={() => setContextInfo(null)}
-              onOpenAgentSettings={() => {
-                setSettingsInitialTab('agents');
-                setCurrentView('settings');
-              }}
-              onOpenPromptSettings={() => {
-                setSettingsInitialTab('prompts');
-                setCurrentView('settings');
-              }}
-              onOpenModelSettings={() => {
-                setAddModelDialogOpen(true);
-              }}
-              hasMessages={messages.length > 0}
-              onRewind={handleOpenRewindSelectDialog}
-              statusPanelExpanded={statusPanelExpanded}
-              onToggleStatusPanel={() => { userCollapsedRef.current = !userCollapsedRef.current; forceStatusUpdate(c => c + 1); }}
-              addToast={addToast}
-              messageQueue={messageQueue}
-              onRemoveFromQueue={dequeueMessage}
-              autoOpenFileEnabled={autoOpenFileEnabled}
-              onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
-            />
-          </div>
-        </>
-      )}
-
       <div id="image-preview-root" />
 
       <AppDialogs
-        t={t}
         showNewSessionConfirm={showNewSessionConfirm}
         onConfirmNewSession={handleConfirmNewSession}
         onCancelNewSession={handleCancelNewSession}
         showInterruptConfirm={showInterruptConfirm}
         onConfirmInterrupt={handleConfirmInterrupt}
         onCancelInterrupt={handleCancelInterrupt}
-        permissionDialogOpen={permissionDialogOpen}
-        currentPermissionRequest={currentPermissionRequest}
-        onPermissionApprove={handlePermissionApprove}
-        onPermissionSkip={handlePermissionSkip}
-        onPermissionApproveAlways={handlePermissionApproveAlways}
-        askUserQuestionDialogOpen={askUserQuestionDialogOpen}
-        currentAskUserQuestionRequest={currentAskUserQuestionRequest}
-        onAskUserQuestionSubmit={handleAskUserQuestionSubmit}
-        onAskUserQuestionCancel={handleAskUserQuestionCancel}
-        planApprovalDialogOpen={planApprovalDialogOpen}
-        currentPlanApprovalRequest={currentPlanApprovalRequest}
-        onPlanApprovalApprove={handlePlanApprovalApprove}
-        onPlanApprovalReject={handlePlanApprovalReject}
-        rewindSelectDialogOpen={rewindSelectDialogOpen}
         rewindableMessages={rewindableMessages}
         onRewindSelect={handleRewindSelect}
         onRewindSelectCancel={handleRewindSelectCancel}
-        rewindDialogOpen={rewindDialogOpen}
-        currentRewindRequest={currentRewindRequest}
-        isRewinding={isRewinding}
         onRewindConfirm={handleRewindConfirm}
         onRewindCancel={handleRewindCancel}
-        showChangelogDialog={showChangelogDialog}
-        onCloseChangelog={handleCloseChangelog}
-        addModelDialogOpen={addModelDialogOpen}
-        onCloseAddModel={() => setAddModelDialogOpen(false)}
         currentProvider={currentProvider}
       />
+
       <TaskReminderDialog
         isOpen={taskReminderRequest !== null}
         request={taskReminderRequest}

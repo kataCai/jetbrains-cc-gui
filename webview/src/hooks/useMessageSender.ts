@@ -5,6 +5,13 @@ import type { ClaudeContentBlock, ClaudeMessage } from '../types';
 import type { Attachment, ChatInputBoxHandle, PermissionMode, SelectedAgent } from '../components/ChatInputBox/types';
 import type { ViewMode } from './useModelProviderState';
 
+/**
+ * Command sets for local handling (shared with App.tsx to avoid duplication)
+ */
+export const NEW_SESSION_COMMANDS = new Set(['/new', '/clear', '/reset']);
+export const RESUME_COMMANDS = new Set(['/resume', '/continue']);
+export const PLAN_COMMANDS = new Set(['/plan']);
+
 export interface UseMessageSenderOptions {
   t: TFunction;
   addToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -26,6 +33,7 @@ export interface UseMessageSenderOptions {
   setSettingsInitialTab: React.Dispatch<React.SetStateAction<any>>;
   setCurrentView: React.Dispatch<React.SetStateAction<ViewMode>>;
   forceCreateNewSession: () => void;
+  handleModeSelect?: (mode: PermissionMode) => void;
 }
 
 /**
@@ -52,12 +60,8 @@ export function useMessageSender({
   setSettingsInitialTab,
   setCurrentView,
   forceCreateNewSession,
+  handleModeSelect,
 }: UseMessageSenderOptions) {
-  /**
-   * Set of commands that trigger new session creation (/new, /clear, /reset)
-   */
-  const NEW_SESSION_COMMANDS = new Set(['/new', '/clear', '/reset']);
-
   /**
    * Check if the input is a new session command
    */
@@ -70,6 +74,35 @@ export function useMessageSender({
     }
     return false;
   }, [forceCreateNewSession]);
+
+  /**
+   * Check for local-handled slash commands (/resume, /plan)
+   * Returns true if the command was handled locally
+   * Note: This is also checked in App.tsx handleSubmit to bypass loading queue
+   */
+  const checkLocalCommand = useCallback((text: string): boolean => {
+    if (!text.startsWith('/')) return false;
+    const command = text.split(/\s+/)[0].toLowerCase();
+
+    // /resume - open history view
+    if (RESUME_COMMANDS.has(command)) {
+      setCurrentView('history');
+      return true;
+    }
+
+    // /plan - switch to plan mode (Claude only)
+    if (PLAN_COMMANDS.has(command)) {
+      if (currentProvider === 'codex') {
+        addToast(t('chat.planModeNotAvailableForCodex', { defaultValue: 'Plan mode is not available for Codex provider' }), 'warning');
+      } else if (handleModeSelect) {
+        handleModeSelect('plan');
+        addToast(t('chat.planModeEnabled', { defaultValue: 'Plan mode enabled' }), 'info');
+      }
+      return true;
+    }
+
+    return false;
+  }, [setCurrentView, handleModeSelect, currentProvider, addToast, t]);
 
   /**
    * Check for unimplemented slash commands
@@ -309,12 +342,15 @@ export function useMessageSender({
     // Check new session commands
     if (checkNewSessionCommand(text)) return;
 
+    // Check local-handled commands (/resume, /plan)
+    if (checkLocalCommand(text)) return;
+
     // Check for unimplemented commands
     if (checkUnimplementedCommand(text)) return;
 
     // Execute message
     executeMessage(content, attachments);
-  }, [checkNewSessionCommand, checkUnimplementedCommand, executeMessage]);
+  }, [checkNewSessionCommand, checkLocalCommand, checkUnimplementedCommand, executeMessage]);
 
   /**
    * Interrupt the current session

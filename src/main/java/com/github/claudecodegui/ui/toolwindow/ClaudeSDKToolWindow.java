@@ -294,10 +294,10 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
                     CompletableFuture<Boolean> future = BridgePreloader.waitForBridgeAsync();
                     Boolean ready = future.get(60, TimeUnit.SECONDS);
 
-                    if (project.isDisposed()) return;
+                    if (project.isDisposed()) { return; }
 
                     ToolWindowManager.getInstance(project).invokeLater(() -> {
-                        if (project.isDisposed()) return;
+                        if (project.isDisposed()) { return; }
 
                         if (ready != null && ready) {
                             LOG.info("[ToolWindow] ai-bridge ready, replacing loading panel with chat window");
@@ -365,6 +365,14 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
                 updateTabCloseableState(contentManager);
                 TabStateService tabStateService = TabStateService.getInstance(project);
                 tabStateService.saveTabCount(contentManager.getContentCount());
+            }
+
+            @Override
+            public void selectionChanged(@NotNull ContentManagerEvent event) {
+                ClaudeChatWindow window = contentToWindowMap.get(event.getContent());
+                if (window != null) {
+                    window.loadRestoredHistoryIfNeeded();
+                }
             }
 
             @Override
@@ -586,6 +594,15 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         loadingPanel.repaint();
     }
 
+    /**
+     * 将启动阶段的 loading 面板替换为真实聊天窗口，并按已保存的标签页状态恢复首个会话。
+     * 这里的首个标签页已经被展示给用户，因此需要立即触发历史恢复，避免出现空白页或还原延迟。
+     *
+     * @param project 当前项目
+     * @param contentFactory 内容工厂
+     * @param contentManager ToolWindow 内容管理器
+     * @param loadingContent 启动阶段占位的 loading content
+     */
     private void replaceLoadingPanelWithChatWindow(
             @NotNull Project project,
             ContentFactory contentFactory,
@@ -605,7 +622,7 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         firstChatWindow.setParentContent(loadingContent);
         firstChatWindow.setOriginalTabName(firstTabName);
         loadingContent.setDisposer(firstChatWindow::dispose);
-        restoreTabSessionState(0, firstSavedState, firstChatWindow);
+        restoreTabSessionState(firstSavedState, 0, firstChatWindow, true);
 
         for (int i = 1; i < savedTabCount; i++) {
             TabStateService.TabSessionState savedState = tabStateService.getTabSessionState(i);
@@ -617,12 +634,20 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
             chatWindow.setOriginalTabName(tabName);
             content.setDisposer(chatWindow::dispose);
             contentManager.addContent(content);
-            restoreTabSessionState(i, savedState, chatWindow);
+            restoreTabSessionState(savedState, i, chatWindow, false);
         }
 
         updateTabCloseableState(contentManager);
     }
 
+    /**
+     * 按持久化状态创建聊天窗口内容。
+     * 首个标签页在不经过 loading 面板时也要按“当前可见页”处理，因此保留是否立即恢复历史的显式参数。
+     *
+     * @param project 当前项目
+     * @param contentFactory 内容工厂
+     * @param contentManager ToolWindow 内容管理器
+     */
     private void createChatWindowContent(
             @NotNull Project project,
             ContentFactory contentFactory,
@@ -643,21 +668,31 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
             chatWindow.setOriginalTabName(tabName);
             content.setDisposer(chatWindow::dispose);
             contentManager.addContent(content);
-            restoreTabSessionState(i, savedState, chatWindow);
+            restoreTabSessionState(savedState, i, chatWindow, isFirstTab);
         }
 
         updateTabCloseableState(contentManager);
     }
 
+    /**
+     * 恢复单个标签页的会话绑定关系，并根据可见性决定是否立即加载历史。
+     * 这里统一采用四参版本，避免 loading 面板替换流程和普通恢复流程使用不同的语义分支。
+     *
+     * @param savedState 持久化的标签页状态
+     * @param tabIndex 当前标签页索引，仅用于日志定位
+     * @param chatWindow 目标聊天窗口
+     * @param loadImmediately 是否立即触发历史恢复
+     */
     private void restoreTabSessionState(
-            int tabIndex,
             TabStateService.TabSessionState savedState,
-            ClaudeChatWindow chatWindow
+            int tabIndex,
+            ClaudeChatWindow chatWindow,
+            boolean loadImmediately
     ) {
         if (savedState == null) {
             return;
         }
-        chatWindow.restorePersistedTabSessionState(savedState);
+        chatWindow.restorePersistedTabSessionState(savedState, loadImmediately);
         LOG.info("[TabManager] Restored tab " + tabIndex + " session binding from storage");
     }
 

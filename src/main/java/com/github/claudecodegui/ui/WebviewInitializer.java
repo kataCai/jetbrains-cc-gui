@@ -6,9 +6,11 @@ import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.model.NodeDetectionResult;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.provider.common.EnvironmentCheckResult;
 import com.github.claudecodegui.startup.BridgePreloader;
 import com.github.claudecodegui.util.FontConfigService;
 import com.github.claudecodegui.util.HtmlLoader;
+import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.github.claudecodegui.util.LanguageConfigService;
 import com.github.claudecodegui.util.PlatformUtils;
@@ -124,7 +126,8 @@ public class WebviewInitializer {
             }
         }
 
-        if (!claudeSDKBridge.checkEnvironment()) {
+        EnvironmentCheckResult environmentResult = claudeSDKBridge.checkEnvironmentDetails();
+        if (!environmentResult.isReady()) {
             if (sharedResolver.isExtractionInProgress()) {
                 LOG.info("[ClaudeSDKToolWindow] checkEnvironment failed but extraction in progress, showing loading panel...");
                 showLoadingPanel();
@@ -145,7 +148,7 @@ public class WebviewInitializer {
                 return;
             }
 
-            showErrorPanel();
+            showEnvironmentErrorPanel(environmentResult);
             return;
         }
 
@@ -177,6 +180,11 @@ public class WebviewInitializer {
             JBCefBrowser browser = JBCefBrowserFactory.create();
             host.setBrowser(browser);
             host.getHandlerContext().setBrowser(browser);
+
+            browser.getJBCefClient().addRequestHandler(
+                    new UiFontResourceRequestHandler(),
+                    browser.getCefBrowser()
+            );
 
             JBCefBrowserBase browserBase = browser;
             JBCefJSQuery jsQuery = JBCefJSQuery.create(browserBase);
@@ -269,6 +277,19 @@ public class WebviewInitializer {
                     );
                     cefBrowser.executeJavaScript(fontConfigInjection, cefBrowser.getURL(), 0);
                     LOG.info("[FontSync] Font config injected into frontend");
+
+                    // Pass effective plugin UI font configuration to the frontend
+                    String uiFontConfig = FontConfigService.getResolvedUiFontConfigJson(host.getHandlerContext().getSettingsService());
+                    LOG.info("[UiFontSync] Retrieved UI font config");
+                    String escapedUiFontConfig = JsUtils.escapeJs(uiFontConfig);
+                    String uiFontConfigInjection = String.format(
+                        "(function(){ var c = JSON.parse('%s'); " +
+                        "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
+                        "else { window.__pendingUiFontConfig = c; } })()",
+                        escapedUiFontConfig
+                    );
+                    cefBrowser.executeJavaScript(uiFontConfigInjection, cefBrowser.getURL(), 0);
+                    LOG.info("[UiFontSync] UI font config injected into frontend");
 
                     // Pass IDEA language configuration to the frontend
                     String languageConfig = LanguageConfigService.getLanguageConfigJson();
@@ -371,17 +392,86 @@ public class WebviewInitializer {
     }
 
     public void showErrorPanel() {
-        ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
-        String message = ClaudeCodeGuiBundle.message(
-            "error.nodeNotFound.message", claudeSDKBridge.getNodeExecutable());
+        showEnvironmentErrorPanel(host.getClaudeSDKBridge().checkEnvironmentDetails());
+    }
 
-        JPanel errorPanel = ErrorPanelBuilder.build(
-            ClaudeCodeGuiBundle.message("error.nodeNotFound.title"),
-            message,
-            claudeSDKBridge.getNodeExecutable(),
-            this::handleNodePathSave
-        );
-        replaceMainContent(errorPanel);
+    /**
+     * 根据结构化环境检查结果展示最贴近真实原因的面板。
+     * 这里优先解决“bridge 未就绪/脚本缺失却误报成 Node.js not found”的问题，
+     * 让用户能直接看到下一步该修什么。
+     *
+     * @param environmentResult 环境检查结果
+     */
+    private void showEnvironmentErrorPanel(EnvironmentCheckResult environmentResult) {
+        ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
+        if (environmentResult == null) {
+            String fallbackMessage = ClaudeCodeGuiBundle.message(
+                "error.nodeNotFound.message", claudeSDKBridge.getNodeExecutable());
+            JPanel fallbackPanel = ErrorPanelBuilder.build(
+                ClaudeCodeGuiBundle.message("error.nodeNotFound.title"),
+                fallbackMessage,
+                claudeSDKBridge.getNodeExecutable(),
+                this::handleNodePathSave
+            );
+            replaceMainContent(fallbackPanel);
+            return;
+        }
+
+        switch (environmentResult.getFailureCode()) {
+            case BRIDGE_NOT_READY -> {
+                String detail = environmentResult.getDetailMessage() != null
+                    ? environmentResult.getDetailMessage()
+                    : "Bridge directory not ready";
+                JPanel panel = ErrorPanelBuilder.buildCenteredPanel(
+                    "⏳",
+                    "Bridge 准备中",
+                    detail + "\n\n请稍候后重试，或重新打开当前窗口。"
+                );
+                replaceMainContent(panel);
+            }
+            case CHANNEL_SCRIPT_MISSING -> {
+                String detail = environmentResult.getDetailMessage() != null
+                    ? environmentResult.getDetailMessage()
+                    : "channel-manager.js missing";
+                JPanel panel = ErrorPanelBuilder.buildCenteredPanel(
+                    "⚠️",
+                    "Bridge 文件缺失",
+                    detail + "\n\n请重新安装插件或重新构建并部署 ai-bridge 资源。"
+                );
+                replaceMainContent(panel);
+            }
+            case NODE_EXECUTION_FAILED, NODE_NOT_FOUND, UNKNOWN -> {
+                String message = ClaudeCodeGuiBundle.message(
+                    "error.nodeNotFound.message",
+                    environmentResult.getNodePath() != null
+                        ? environmentResult.getNodePath()
+                        : claudeSDKBridge.getNodeExecutable()
+                );
+                if (environmentResult.getDetailMessage() != null && !environmentResult.getDetailMessage().isEmpty()) {
+                    message = message + "\n\nDetail: " + environmentResult.getDetailMessage();
+                }
+                JPanel errorPanel = ErrorPanelBuilder.build(
+                    ClaudeCodeGuiBundle.message("error.nodeNotFound.title"),
+                    message,
+                    environmentResult.getNodePath() != null
+                        ? environmentResult.getNodePath()
+                        : claudeSDKBridge.getNodeExecutable(),
+                    this::handleNodePathSave
+                );
+                replaceMainContent(errorPanel);
+            }
+            default -> {
+                String message = ClaudeCodeGuiBundle.message(
+                    "error.nodeNotFound.message", claudeSDKBridge.getNodeExecutable());
+                JPanel errorPanel = ErrorPanelBuilder.build(
+                    ClaudeCodeGuiBundle.message("error.nodeNotFound.title"),
+                    message,
+                    claudeSDKBridge.getNodeExecutable(),
+                    this::handleNodePathSave
+                );
+                replaceMainContent(errorPanel);
+            }
+        }
     }
 
     private void showVersionErrorPanel(String currentVersion) {
@@ -564,7 +654,7 @@ public class WebviewInitializer {
      */
     public void reloadWebview(String reason) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (host.isDisposed()) return;
+            if (host.isDisposed()) { return; }
             JBCefBrowser browser = host.getBrowser();
             if (browser == null) {
                 recreateWebview(reason + "_no_browser");
@@ -586,7 +676,7 @@ public class WebviewInitializer {
      */
     public void recreateWebview(String reason) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (host.isDisposed()) return;
+            if (host.isDisposed()) { return; }
 
             host.setFrontendReady(false);
             JPanel mainPanel = host.getMainPanel();

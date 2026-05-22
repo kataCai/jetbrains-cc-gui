@@ -70,6 +70,16 @@ export async function sendMessage(
   let attempt = 0;
 
   while (true) {
+    let streamStarted = false;
+    let streamEnded = false;
+    const emitStreamEndOnce = () => {
+      if (!streamStarted || streamEnded) {
+        return;
+      }
+      streamEnded = true;
+      console.log('[STREAM_END]');
+    };
+
     const normalizedPermissionMode = normalizeCodexPermissionMode(permissionMode || 'default');
     console.log('[DEBUG] Codex sendMessage called with params:', {
       threadId,
@@ -93,7 +103,6 @@ export async function sendMessage(
       // ============================================================
       // 1. Initialize Codex SDK (dynamic loading)
       // ============================================================
-
       const sdk = await ensureCodexSdk();
       const Codex = sdk.Codex || sdk.default || sdk;
 
@@ -119,7 +128,6 @@ export async function sendMessage(
       // ============================================================
       // 2. Map Unified Permission Mode to Codex Format
       // ============================================================
-
       const permissionConfig = CodexPermissionMapper.toProvider(normalizedPermissionMode);
 
       logDebug('PERM_DEBUG', 'Codex permission config:', JSON.stringify(permissionConfig));
@@ -128,7 +136,6 @@ export async function sendMessage(
         CODEX_APPROVAL_POLICY: process.env.CODEX_APPROVAL_POLICY || ''
       }));
 
-      // Allow Java side to force sandbox mapping override via env vars
       const sandboxOverride = resolveSandboxModeOverride();
       if (sandboxOverride) {
         permissionConfig.sandbox = sandboxOverride;
@@ -143,7 +150,6 @@ export async function sendMessage(
       // ============================================================
       // 3. Build Thread Options
       // ============================================================
-
       const threadOptions = {
         skipGitRepoCheck: permissionConfig.skipGitRepoCheck,
         maxTurns: 200
@@ -158,7 +164,6 @@ export async function sendMessage(
         threadOptions.approvalPolicy = permissionConfig.approvalPolicy;
       }
 
-      // CRITICAL: Only set working directory for NEW threads
       const isResumingThread = threadId && threadId.trim() !== '';
 
       if (!isResumingThread) {
@@ -191,7 +196,6 @@ export async function sendMessage(
       // ============================================================
       // 4. Create or Resume Thread
       // ============================================================
-
       let thread;
       if (isResumingThread) {
         console.log('[DEBUG] Resuming thread:', threadId);
@@ -204,7 +208,6 @@ export async function sendMessage(
       // ============================================================
       // 5. Collect AGENTS.md Instructions (only for new threads)
       // ============================================================
-
       let finalMessage = message;
       if (!isResumingThread && cwd) {
         const agentsInstructions = collectAgentsInstructions(cwd);
@@ -217,7 +220,6 @@ export async function sendMessage(
       // ============================================================
       // 6. Build Input and Start Streaming
       // ============================================================
-
       let runInput;
       if (attachments && Array.isArray(attachments) && attachments.length > 0) {
         runInput = [{ type: 'text', text: finalMessage }];
@@ -237,27 +239,29 @@ export async function sendMessage(
       const { events } = await thread.runStreamed(runInput, {
         signal: turnAbortController.signal
       });
+      console.log('[STREAM_START]');
+      streamStarted = true;
 
       // ============================================================
       // 7. Delegate Event Processing to codex-event-handler
       // ============================================================
-
       const workingDirectory = cwd && cwd.trim() !== '' ? cwd : undefined;
-
       const config = {
         cwd: workingDirectory,
         threadId,
         threadOptions,
         normalizedPermissionMode,
-        turnAbortController
+        turnAbortController,
+        onTurnCompleted: emitStreamEndOnce,
+        onTurnFailed: emitStreamEndOnce
       };
 
       await processCodexEventStream(events, state, config);
+      emitStreamEndOnce();
 
       // ============================================================
       // 8. Completion Phase
       // ============================================================
-
       if (!state.reasoningObserved) {
         console.warn('[THINKING_HINT]', 'Codex did not return reasoning items. If you still cannot see the thinking process, please refer to docs/codex/docs/config.md for hide_agent_reasoning/show_raw_agent_reasoning settings, and ensure your OpenAI account has been verified.');
       }
@@ -294,6 +298,7 @@ export async function sendMessage(
       }));
       return;
     } catch (error) {
+      emitStreamEndOnce();
       console.error('[DEBUG] Error:', error.message);
       console.error('[DEBUG] Error stack:', error.stack);
 

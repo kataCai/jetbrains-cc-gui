@@ -111,13 +111,26 @@ export interface BehaviorTabProps {
     field: 'enabled' | 'recoverCompletedOnParseNoise' | 'retryTransientErrors' | 'maxAttempts' | 'initialDelayMs',
     value: boolean | number,
   ) => void;
+  aiTitleGenerationEnabled?: boolean;
+  onAiTitleGenerationEnabledChange?: (enabled: boolean) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onTestPopup?: () => void;
   onTestBalloon?: () => void;
   onBrowseSound?: () => void;
+  taskCompletionNotificationEnabled?: boolean;
+  onTaskCompletionNotificationEnabledChange?: (enabled: boolean) => void;
 }
 
+/**
+ * 行为配置页签。
+ * 并轨策略是保留当前主线的 canonical taskReminder / recovery policy 配置，
+ * 同时补上 upstream 的 AI title generation 与 task completion notification 开关。
+ * 这两类配置面向的职责不同，不应在同一阶段互相覆盖。
+ *
+ * @param props 行为配置所需的全部状态与回调
+ * @return 行为配置内容
+ */
 const BehaviorTab = ({
   sendShortcut = 'enter',
   onSendShortcutChange = () => {},
@@ -138,11 +151,15 @@ const BehaviorTab = ({
   onTaskReminderSelectedSoundChange = () => {},
   onTaskReminderCustomSoundPathChange = () => {},
   onTaskRecoveryPolicyFieldChange = () => {},
+  aiTitleGenerationEnabled = true,
+  onAiTitleGenerationEnabledChange = () => {},
   onSaveCustomSoundPath = () => {},
   onTestSound = () => {},
   onTestPopup = () => {},
   onTestBalloon = () => {},
   onBrowseSound = () => {},
+  taskCompletionNotificationEnabled = false,
+  onTaskCompletionNotificationEnabledChange = () => {},
 }: BehaviorTabProps) => {
   const { t } = useTranslation();
 
@@ -166,9 +183,8 @@ const BehaviorTab = ({
   const renderReminderStates = (
     channel: TaskReminderChannel,
     title: string,
-      selectedStates: TaskReminderState[],
+    selectedStates: TaskReminderState[],
   ) => (
-    // popup 只展示当前前端真正支持的强提醒状态，避免出现“可配置但永远不会生效”的选项。
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
       {TASK_REMINDER_CHANNEL_STATES[channel].map((state) => {
         const checked = selectedStates.includes(state);
@@ -189,7 +205,6 @@ const BehaviorTab = ({
 
   return (
     <div className={styles.tabContent}>
-      {/* Send shortcut configuration */}
       <div className={styles.sendShortcutSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-keyboard" />
@@ -224,7 +239,6 @@ const BehaviorTab = ({
         </div>
       </div>
 
-      {/* Streaming configuration */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-sync" />
@@ -250,7 +264,6 @@ const BehaviorTab = ({
         </small>
       </div>
 
-      {/* Auto open file configuration */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-file" />
@@ -276,7 +289,6 @@ const BehaviorTab = ({
         </small>
       </div>
 
-      {/* Diff expanded by default configuration */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-diff" />
@@ -302,7 +314,6 @@ const BehaviorTab = ({
         </small>
       </div>
 
-      {/* AI commit generation toggle */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-git-commit" />
@@ -328,7 +339,6 @@ const BehaviorTab = ({
         </small>
       </div>
 
-      {/* Status bar widget toggle */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-layout-statusbar" />
@@ -354,7 +364,56 @@ const BehaviorTab = ({
         </small>
       </div>
 
-      {/* Task reminder configuration */}
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-bell" />
+          <span className={styles.fieldLabel}>{t('settings.basic.taskCompletionNotification.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={taskCompletionNotificationEnabled}
+            onChange={(e) => onTaskCompletionNotificationEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {taskCompletionNotificationEnabled
+              ? t('settings.basic.taskCompletionNotification.enabled')
+              : t('settings.basic.taskCompletionNotification.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.taskCompletionNotification.hint')}</span>
+        </small>
+      </div>
+
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-sparkle" />
+          <span className={styles.fieldLabel}>{t('settings.other.aiTitleGeneration.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={aiTitleGenerationEnabled}
+            onChange={(e) => onAiTitleGenerationEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {aiTitleGenerationEnabled
+              ? t('settings.other.aiTitleGeneration.enabled')
+              : t('settings.other.aiTitleGeneration.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.other.aiTitleGeneration.hint')}</span>
+        </small>
+      </div>
+
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-bell" />
@@ -374,7 +433,6 @@ const BehaviorTab = ({
           </span>
         </small>
 
-        {/* Popup reminder */}
         <div className={styles.customSoundSection}>
           <div className={styles.fieldHeader}>
             <span className="codicon codicon-comment-discussion" />
@@ -410,7 +468,6 @@ const BehaviorTab = ({
           </div>
         </div>
 
-        {/* Balloon reminder */}
         <div className={styles.customSoundSection}>
           <div className={styles.fieldHeader}>
             <span className="codicon codicon-notifications" />
@@ -446,7 +503,6 @@ const BehaviorTab = ({
           </div>
         </div>
 
-        {/* Sound reminder */}
         <div className={styles.customSoundSection}>
           <div className={styles.fieldHeader}>
             <span className="codicon codicon-unmute" />
@@ -516,8 +572,6 @@ const BehaviorTab = ({
           )}
         </div>
 
-
-        {/* System reminder */}
         <div className={styles.customSoundSection}>
           <div className={styles.fieldHeader}>
             <span className="codicon codicon-device-desktop" />

@@ -9,7 +9,7 @@
 
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { PermissionMode, ReasoningEffort } from '../../../components/ChatInputBox/types';
-import { isValidPermissionMode } from '../../../components/ChatInputBox/types';
+import { isValidPermissionMode, normalizeClaudeModelId } from '../../../components/ChatInputBox/types';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
 export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): void {
@@ -90,7 +90,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
   window.onModelChanged = (modelId) => {
     const provider = currentProviderRef.current;
     if (provider === 'claude') {
-      setSelectedClaudeModel(modelId);
+      setSelectedClaudeModel(normalizeClaudeModelId(modelId));
     } else if (provider === 'codex') {
       setSelectedCodexModel(modelId);
     }
@@ -98,7 +98,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
 
   window.onModelConfirmed = (modelId, provider) => {
     if (provider === 'claude') {
-      setSelectedClaudeModel(modelId);
+      setSelectedClaudeModel(normalizeClaudeModelId(modelId));
     } else if (provider === 'codex') {
       setSelectedCodexModel(modelId);
     }
@@ -106,8 +106,10 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
 
   /**
    * 接收后端同步的 Codex 当前模型状态。
-   * 后端仅在本地配置授权后才会返回有效值；前端收到后需要覆盖旧缓存，
-   * 以保证 GUI 展示和 CLI 实际运行模型一致。
+   * 该回调会覆盖前端缓存中的默认模型、reasoning effort 以及 custom base URL 状态，
+   * 确保 GUI 展示与本地 `~/.codex/config.toml` 的真实运行态一致。
+   *
+   * @param jsonStr 后端序列化后的当前模型状态
    */
   window.updateCodexModelState = (jsonStr: string) => {
     try {
@@ -125,16 +127,18 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         }
       }
       if (
-        data.reasoningEffort === 'low'
-        || data.reasoningEffort === 'medium'
-        || data.reasoningEffort === 'high'
-        || data.reasoningEffort === 'xhigh'
+        data.reasoningEffort === 'low' ||
+        data.reasoningEffort === 'medium' ||
+        data.reasoningEffort === 'high' ||
+        data.reasoningEffort === 'xhigh'
       ) {
         setReasoningEffort(data.reasoningEffort);
       }
-      setCodexBaseUrl(typeof data.baseUrl === 'string' && data.baseUrl.trim().length > 0
-        ? data.baseUrl.trim()
-        : null);
+      setCodexBaseUrl(
+        typeof data.baseUrl === 'string' && data.baseUrl.trim().length > 0
+          ? data.baseUrl.trim()
+          : null,
+      );
       setCodexUsesCustomBaseUrl(data.usesCustomBaseUrl === true);
     } catch (error) {
       console.error('[Frontend] Failed to parse Codex model state:', error);
@@ -200,8 +204,6 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     }
   };
 
-  // Drain any pending settings that arrived before callback registration
   drainPendingSettings();
-  // Kick off initial settings requests
   startInitialSettingsRequest();
 }

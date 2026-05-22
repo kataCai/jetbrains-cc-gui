@@ -1,17 +1,37 @@
 package com.github.claudecodegui.notifications;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
+import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.taskstate.TaskState;
 import com.github.claudecodegui.util.SoundNotificationService;
+import com.github.claudecodegui.util.SystemNotificationService;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Claude 通知与状态栏更新工具。
- * 统一收口状态栏文案、任务完成提示音以及远程协作提示，避免不同入口各自拼状态文本。
+ * 统一收口状态栏文案、任务完成提示音、系统气泡预览以及远程协作提示，避免不同入口各自拼接提示内容。
+ * 这里同时兼容旧调用路径和新的“基于会话摘要/最后回复生成通知内容”能力，便于并轨阶段逐步替换调用方。
  */
 public class ClaudeNotifier {
+
+    // Pre-compiled patterns for {@link #condenseForToast}, reused across notifications.
+    private static final Pattern CODE_FENCE_OPEN = Pattern.compile("```[a-zA-Z0-9_+\\-]*\\n");
+    private static final Pattern CODE_FENCE_CLOSE = Pattern.compile("```");
+    private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
+    // Cap how much of an assistant message we run regex over. The toast itself only
+    // shows ~220 codepoints; processing the whole message (which can be tens of KB)
+    // is wasteful and never adds visible content.
+    private static final int CONDENSE_MAX_INPUT = 4096;
 
     public static void setThinking(@NotNull Project project) {
         update(project, "thinking", ClaudeCodeGuiBundle.message("notifier.thinking"));
@@ -26,29 +46,185 @@ public class ClaudeNotifier {
     }
 
     public static void showSuccess(@NotNull Project project, String message) {
-        showSuccess(project, message, true);
+        showSuccess(project, null, message, true);
     }
 
+    /**
+     * 显示成功提示，并允许调用方决定是否播放完成提示音。
+     * 该重载主要用于已接入任务提醒分发器的路径，避免提醒分发器和这里重复播报。
+     *
+     * @param project 当前项目
+     * @param message 提示正文
+     * @param playSound 是否播放完成提示音
+     */
     public static void showSuccess(@NotNull Project project, String message, boolean playSound) {
-        show(project, "Claude ✓", message, 5000);
+        showSuccess(project, null, message, playSound);
+    }
 
+    /**
+     * 显示任务完成通知，并允许调用方传入动态标题。
+     * 为空时系统通知回退到默认标题，同时保留旧调用路径的行为兼容性。
+     *
+     * @param project 当前项目
+     * @param title 可选标题
+     * @param message 提示正文或最后回复预览
+     */
+    public static void showSuccess(@NotNull Project project, @Nullable String title, String message) {
+        showSuccess(project, title, message, true);
+    }
+
+    /**
+     * 显示任务完成通知，同时支持动态标题和可选提示音控制。
+     * 该方法是并轨后的统一收口入口：旧路径可只传 message，新路径可传 title + preview，
+     * 接入 task reminder dispatcher 的路径则可关闭这里的提示音，避免双重播报。
+     *
+     * @param project 当前项目
+     * @param title 可选标题；为空时由系统通知回退到默认标题
+     * @param message 提示正文或最后一段回复预览
+     * @param playSound 是否播放完成提示音
+     */
+    public static void showSuccess(
+        @NotNull Project project,
+        @Nullable String title,
+        String message,
+        boolean playSound
+    ) {
+        show(project, "Claude [OK]", message, 5000);
+        SystemNotificationService.getInstance().showVisualNotificationToast(project, title, message);
         if (playSound) {
-            // 兼容旧调用路径：没有接入 task reminder dispatcher 的地方，
-            // 仍然沿用这里的完成提示音。
             SoundNotificationService.getInstance().playTaskCompleteSound();
         }
     }
 
+    /**
+     * 从会话中提取通知标题。
+     * 优先使用会话摘要；如果摘要为空，则返回 null，让系统通知回退到默认标题。
+     *
+     * @param session 当前会话
+     * @return 可用于系统通知的标题；没有摘要时返回 null
+     */
+    @Nullable
+    public static String buildTitleFromSession(@Nullable ClaudeSession session) {
+        if (session == null) {
+            return null;
+        }
+        String summary = session.getSummary();
+        if (summary == null) {
+            return null;
+        }
+        String trimmed = summary.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * 从最近一条助手消息构建简短预览文本。
+     * 如果没有可见的助手文本，则回退到传入的 fallback。
+     * 这里容忍消息列表在跨线程复制期间出现的读取异常，避免把预览构建失败放大成任务完成回调失败。
+     *
+     * @param session 当前会话
+     * @param fallback 无法提取预览时的回退文本
+     * @return 通知预览文本
+     */
+    public static String buildPreviewFromSession(@Nullable ClaudeSession session, String fallback) {
+        if (session == null) {
+            return fallback;
+        }
+        try {
+            List<ClaudeSession.Message> messages = session.getMessages();
+            if (messages == null || messages.isEmpty()) {
+                return fallback;
+            }
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ClaudeSession.Message m = messages.get(i);
+                if (m == null || m.type != ClaudeSession.Message.Type.ASSISTANT) {
+                    continue;
+                }
+                // Prefer the last text block from raw JSON: in tool-use turns the
+                // accumulated m.content concatenates ALL text segments (including
+                // pre-tool-call prose), so the preview would show mid-turn text
+                // instead of the final answer.
+                String content = extractLastTextFromRaw(m);
+                if (content == null || content.isEmpty()) {
+                    content = m.content;
+                }
+                if (content == null || content.isEmpty()) {
+                    // Tool-call frames are emitted as ASSISTANT with empty text content;
+                    // skip them so the preview prefers actual assistant prose.
+                    continue;
+                }
+                String preview = condenseForToast(content);
+                if (!preview.isEmpty()) {
+                    return preview;
+                }
+            }
+        } catch (Exception e) {
+            return fallback;
+        }
+        return fallback;
+    }
+
+    /**
+     * 把多行文本和代码块压缩成单行预览，便于在系统通知里展示。
+     * 这里只做空白折叠和代码围栏去除，最终截断仍由系统通知层负责。
+     *
+     * @param raw 原始文本
+     * @return 压缩后的单行预览
+     */
+    private static String condenseForToast(String raw) {
+        String input = raw.length() > CONDENSE_MAX_INPUT ? raw.substring(0, CONDENSE_MAX_INPUT) : raw;
+        String stripped = CODE_FENCE_OPEN.matcher(input).replaceAll("");
+        stripped = CODE_FENCE_CLOSE.matcher(stripped).replaceAll("");
+        return WHITESPACE_RUN.matcher(stripped).replaceAll(" ").trim();
+    }
+
+    /**
+     * 从助手消息的 raw JSON 中提取最后一个 text block 的文本。
+     * 工具调用场景下 raw content 往往包含前置说明和最终回答多个文本块，这里只取最后一个，
+     * 让完成通知更贴近真正的最终输出。
+     *
+     * @param m 助手消息
+     * @return 最后一个文本块内容；没有时返回 null
+     */
+    @Nullable
+    private static String extractLastTextFromRaw(@NotNull ClaudeSession.Message m) {
+        JsonObject raw = m.raw;
+        if (raw == null || !raw.has("message") || !raw.get("message").isJsonObject()) {
+            return null;
+        }
+        try {
+            JsonObject message = raw.getAsJsonObject("message");
+            if (!message.has("content") || !message.get("content").isJsonArray()) {
+                return null;
+            }
+            JsonArray contentArray = message.getAsJsonArray("content");
+            String lastText = null;
+            for (JsonElement element : contentArray) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject block = element.getAsJsonObject();
+                if (block.has("type")
+                    && "text".equals(block.get("type").getAsString())
+                    && block.has("text")) {
+                    lastText = block.get("text").getAsString();
+                }
+            }
+            return lastText;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public static void showError(@NotNull Project project, String message) {
-        show(project, "Claude ✗", message, 8000);
+        show(project, "Claude [ERR]", message, 8000);
     }
 
     public static void showWarning(@NotNull Project project, String message) {
-        show(project, "Claude ⚠", message, 6000);
+        show(project, "Claude [WARN]", message, 6000);
     }
 
     public static void showTaskReminderStatus(@NotNull Project project, @NotNull TaskState state, String message) {
-        // 状态栏只接受 ready / waiting / error / success 这一层较粗的状态，
+        // 状态栏只接收 ready / waiting / error / success 这一层较粗的状态，
         // 因此这里把更细粒度的任务状态折叠后再更新，避免前端和 IDE widget 各自维护映射。
         String status = switch (state) {
             case RUNNING, WAITING_CONFIRM, RETRYING, PENDING -> "waiting";
@@ -61,7 +237,7 @@ public class ClaudeNotifier {
     public static void clearStatus(@NotNull Project project) {
         update(project, "ready", null);
     }
-    
+
     public static void setTokenUsage(@NotNull Project project, int usedTokens, int maxTokens) {
         String tokenInfo = formatTokenUsage(usedTokens, maxTokens);
         ApplicationManager.getApplication().invokeLater(() -> {
@@ -73,7 +249,7 @@ public class ClaudeNotifier {
     }
 
     private static String formatTokenUsage(int used, int max) {
-        if (used == 0) return "";
+        if (used == 0) { return ""; }
         String usedStr = formatNumber(used);
         if (max > 0) {
             String maxStr = formatNumber(max);
@@ -81,25 +257,25 @@ public class ClaudeNotifier {
         }
         return String.format("[%s ctx]", usedStr);
     }
-    
+
     public static void setModel(@NotNull Project project, String model) {
         ApplicationManager.getApplication().invokeLater(() -> {
             ClaudeStatusBarWidget widget = ClaudeStatusBarWidget.Factory.getWidget(project);
-            if (widget != null) widget.setModel(model);
+            if (widget != null) { widget.setModel(model); }
         });
     }
 
     public static void setMode(@NotNull Project project, String mode) {
         ApplicationManager.getApplication().invokeLater(() -> {
             ClaudeStatusBarWidget widget = ClaudeStatusBarWidget.Factory.getWidget(project);
-            if (widget != null) widget.setMode(mode);
+            if (widget != null) { widget.setMode(mode); }
         });
     }
 
     public static void setAgent(@NotNull Project project, String agent) {
         ApplicationManager.getApplication().invokeLater(() -> {
             ClaudeStatusBarWidget widget = ClaudeStatusBarWidget.Factory.getWidget(project);
-            if (widget != null) widget.setAgent(agent);
+            if (widget != null) { widget.setAgent(agent); }
         });
     }
 
@@ -117,8 +293,8 @@ public class ClaudeNotifier {
     }
 
     private static String formatNumber(int num) {
-        if (num < 1000) return String.valueOf(num);
-        if (num < 1000000) return String.format("%.1fk", num / 1000.0);
+        if (num < 1000) { return String.valueOf(num); }
+        if (num < 1000000) { return String.format("%.1fk", num / 1000.0); }
         return String.format("%.1fm", num / 1000000.0);
     }
 

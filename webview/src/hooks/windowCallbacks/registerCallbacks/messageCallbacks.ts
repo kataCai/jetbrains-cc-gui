@@ -26,9 +26,13 @@ import { parseSequence } from '../parseSequence';
 const isTruthy = (v: unknown) => v === true || v === 'true';
 
 /**
- * Build a lightweight string signature from non-text raw blocks so we can
- * cheaply detect structural changes (new tool_use/tool_result blocks) without
- * a full JSON.stringify of arbitrary objects.
+ * 为消息中的非文本 raw block 构建轻量签名。
+ * 这样在 streaming 阶段可以低成本判断结构是否真的发生了变化，
+ * 避免对大型 raw 结构做高频 `JSON.stringify`。
+ *
+ * @param message 待分析消息
+ * @param extractRawBlocks raw block 提取函数
+ * @return 非文本 block 的结构签名
  */
 function getStructuralRawBlockSignature(
   message: ClaudeMessage,
@@ -81,9 +85,6 @@ export function registerMessageCallbacks(
     streamingContentRef,
     isStreamingRef,
     useBackendStreamingRenderRef,
-    activeTextSegmentIndexRef,
-    activeThinkingSegmentIndexRef,
-    seenToolUseCountRef,
     streamingMessageIndexRef,
     streamingTurnIdRef,
     findLastAssistantIndex,
@@ -117,14 +118,6 @@ export function registerMessageCallbacks(
     return ensureStreamingAssistantPreserved(prevList, withoutDuplicateToolTail);
   };
 
-  // During streaming, buffer updateMessages calls and process only the latest
-  // one per animation frame. This prevents JSON.parse of large payloads from
-  // blocking the main thread on every coalescer push (which can arrive every
-  // 50ms), eliminating the "fake freeze" symptom.
-  //
-  // Stored on `window` so that if registerMessageCallbacks is called again
-  // (e.g., HMR, parent re-render), the previous pending rAF is cancelled
-  // first — preventing stale closures from executing.
   if (window.__pendingUpdateRaf != null) {
     cancelAnimationFrame(window.__pendingUpdateRaf);
     window.__pendingUpdateRaf = null;
@@ -135,9 +128,6 @@ export function registerMessageCallbacks(
   let pendingUpdateRaf: number | null = null;
   let pendingUpdateSequence: number | null = null;
 
-  // Expose a cancellation function so onStreamEnd can cancel stale rAF-deferred
-  // updateMessages calls, preventing them from overwriting the final state after
-  // streaming refs are cleared.
   const cancelPendingUpdateMessages = () => {
     if (pendingUpdateRaf !== null) {
       cancelAnimationFrame(pendingUpdateRaf);
@@ -164,7 +154,6 @@ export function registerMessageCallbacks(
       }
 
       setMessages((prev) => {
-        // If streaming is active, delegate to the streaming logic
         if (isStreamingRef.current) {
           if (useBackendStreamingRenderRef.current) {
             let smartMerged = parsed.map((newMsg, i) => {
@@ -201,13 +190,12 @@ export function registerMessageCallbacks(
               options.currentProviderRef.current,
             );
 
-            // FIX: In Claude mode, update streamingMessageIndexRef so that
-            // onContentDelta knows which assistant message to update.
             let lastAssistantIdx = findLastAssistantIndex(result);
-            // Verify the found assistant belongs to the current streaming turn
-            if (lastAssistantIdx >= 0 && streamingTurnIdRef.current > 0 &&
-                result[lastAssistantIdx].__turnId !== streamingTurnIdRef.current) {
-              // Scan for the correct turn ID match (from end, consistent with findLastAssistantIndex)
+            if (
+              lastAssistantIdx >= 0 &&
+              streamingTurnIdRef.current > 0 &&
+              result[lastAssistantIdx].__turnId !== streamingTurnIdRef.current
+            ) {
               for (let i = result.length - 1; i >= 0; i--) {
                 if (result[i].type === 'assistant' && result[i].__turnId === streamingTurnIdRef.current) {
                   lastAssistantIdx = i;
@@ -218,8 +206,6 @@ export function registerMessageCallbacks(
             if (lastAssistantIdx >= 0) {
               streamingMessageIndexRef.current = lastAssistantIdx;
 
-              // Always stamp __turnId so ensureStreamingAssistantPreserved can find it,
-              // even before any content delta arrives (streamingContentRef may be empty).
               if (result[lastAssistantIdx]?.__turnId !== streamingTurnIdRef.current) {
                 result[lastAssistantIdx] = {
                   ...result[lastAssistantIdx],
@@ -227,9 +213,6 @@ export function registerMessageCallbacks(
                 };
               }
 
-              // FIX: If there is buffered streaming content (onContentDelta may
-              // fire before updateMessages), apply it to the assistant message
-              // immediately to prevent content loss.
               if (streamingContentRef.current && result[lastAssistantIdx]?.type === 'assistant') {
                 const backendContent = result[lastAssistantIdx].content || '';
                 if (streamingContentRef.current.length >= backendContent.length) {
@@ -239,7 +222,6 @@ export function registerMessageCallbacks(
                     isStreaming: true,
                   });
                 } else {
-                  // Backend has more complete content; sync buffer
                   streamingContentRef.current = backendContent;
                 }
               }
@@ -261,9 +243,7 @@ export function registerMessageCallbacks(
           }
         }
 
-        // Non-streaming case (or streaming hasn't started yet)
         if (!isStreamingRef.current) {
-          // Smart merge: reuse old message objects for performance
           let smartMerged = parsed.map((newMsg, i) => {
             if (i < prev.length) {
               const oldMsg = prev[i];
@@ -289,31 +269,6 @@ export function registerMessageCallbacks(
           return finalizeMessageList(prev, appendOptimisticMessageIfMissing(prev, smartMerged));
         }
 
-        // Streaming + !useBackendStreamingRender: always accept the backend snapshot
-        // but preserve the streaming assistant's text content (which arrives via
-        // onContentDelta and is more up-to-date than the coalesced snapshot).
-        //
-        // Previously this branch only accepted snapshots containing tool_use blocks,
-        // which caused ALL updateMessages to be silently dropped during pure-text
-        // streaming.  When onStreamEnd was subsequently lost (JCEF async chain),
-        // the UI appeared permanently frozen.
-
-        // Track tool_use for segment reset purposes
-        let totalToolUseCount = 0;
-        for (const message of parsed) {
-          if (message.type !== 'assistant') continue;
-          const blocks = extractRawBlocks(message.raw);
-          totalToolUseCount += blocks.filter((b) => b?.type === 'tool_use').length;
-        }
-
-        if (totalToolUseCount > seenToolUseCountRef.current) {
-          seenToolUseCountRef.current = totalToolUseCount;
-          activeTextSegmentIndexRef.current = -1;
-          activeThinkingSegmentIndexRef.current = -1;
-        } else if (totalToolUseCount < seenToolUseCountRef.current) {
-          seenToolUseCountRef.current = totalToolUseCount;
-        }
-
         let patched = [...parsed];
         patched = appendOptimisticMessageIfMissing(prev, patched);
         patched = preserveLastAssistantIdentity(prev, patched, findLastAssistantIndex);
@@ -336,16 +291,29 @@ export function registerMessageCallbacks(
           });
         }
 
-        // Only skip updates when neither message structure nor non-text raw blocks
-        // changed. This keeps pure content_delta traffic cheap, while still
-        // re-rendering when the backend injects tool_use/tool_result blocks into
-        // an existing assistant message during streaming.
         const hasStructuralChange = patched.length !== prev.length ||
           patched.some((msg, i) => {
             if (i >= prev.length) return true;
             const prevMsg = prev[i];
             if (msg.type !== prevMsg.type || msg.timestamp !== prevMsg.timestamp) {
               return true;
+            }
+            if (msg.type === 'assistant' && prevMsg.type === 'assistant') {
+              const prevBlocks = extractRawBlocks(prevMsg.raw);
+              const newBlocks = extractRawBlocks(msg.raw);
+              const prevThinkingBlocks = prevBlocks.filter(
+                (b): b is { type: 'thinking'; thinking?: string } => b?.type === 'thinking',
+              );
+              const newThinkingBlocks = newBlocks.filter(
+                (b): b is { type: 'thinking'; thinking?: string } => b?.type === 'thinking',
+              );
+              if (prevThinkingBlocks.length !== newThinkingBlocks.length) return true;
+              for (let j = 0; j < prevThinkingBlocks.length; j++) {
+                const prevThinking = prevThinkingBlocks[j]?.thinking ?? '';
+                const newThinking = newThinkingBlocks[j]?.thinking ?? '';
+                if (prevThinking !== newThinking) return true;
+              }
+              if (prevBlocks.length !== newBlocks.length) return true;
             }
             return getStructuralRawBlockSignature(msg, extractRawBlocks) !==
               getStructuralRawBlockSignature(prevMsg, extractRawBlocks);
@@ -362,8 +330,6 @@ export function registerMessageCallbacks(
   };
 
   window.updateMessages = (json, sequenceArg) => {
-    // During session transition, ignore message updates from stale session
-    // callbacks to prevent cleared messages from being restored
     if (window.__sessionTransitioning) return;
     const sequence = parseSequence(sequenceArg);
     const minAcceptedSequence = window.__minAcceptedUpdateSequence ?? 0;
@@ -371,18 +337,10 @@ export function registerMessageCallbacks(
       return;
     }
 
-    // FIX: Bump stream stall watchdog — receiving updateMessages proves the
-    // backend→frontend bridge is alive even between content deltas (e.g.,
-    // during tool execution phases where no text is produced).
     if (isStreamingRef.current && window.__lastStreamActivityAt !== undefined) {
       window.__lastStreamActivityAt = Date.now();
     }
 
-    // During streaming, coalesce rapid updateMessages calls into one-per-frame.
-    // The backend coalescer may push every 50ms; JSON.parse of large payloads
-    // (100KB+ for long conversations) blocks the main thread and causes dropped
-    // frames ("fake freeze"). Deferring to rAF ensures we only parse the latest
-    // payload and yield to the browser between frames.
     if (isStreamingRef.current) {
       pendingUpdateJson = json;
       pendingUpdateSequence = sequence;
@@ -426,7 +384,6 @@ export function registerMessageCallbacks(
   }
 
   window.updateStatus = (text) => {
-    // Do not release the transition guard from generic status updates.
     setStatus(text);
     if (suppressNextStatusToastRef.current) {
       suppressNextStatusToastRef.current = false;
@@ -438,12 +395,10 @@ export function registerMessageCallbacks(
   window.showLoading = (value) => {
     const isLoading = isTruthy(value);
 
-    // FIX: Ignore loading=false during streaming — onStreamEnd handles it uniformly.
     if (!isLoading && isStreamingRef.current) {
       return;
     }
 
-    // Notify backend about loading state change for tab indicator
     sendBridgeEvent('tab_loading_changed', JSON.stringify({ loading: isLoading }));
 
     setLoading((prevLoading) => {
@@ -453,6 +408,7 @@ export function registerMessageCallbacks(
         }
       } else {
         // 非 streaming 分支在 loading 结束时补一次耗时，避免只依赖 onStreamEnd。
+        // 如果 onStreamEnd 已经落过 durationMs，则这里直接跳过，避免重复写入。
         setLoadingStartTime((prevStartTime) => {
           if (prevStartTime != null) {
             const durationMs = Date.now() - prevStartTime;
@@ -548,8 +504,6 @@ export function registerMessageCallbacks(
   };
 
   window.clearMessages = () => {
-    // Cancel any pending deferred updateMessages to prevent stale data from
-    // being applied after messages are cleared.
     if (pendingUpdateRaf !== null) {
       cancelAnimationFrame(pendingUpdateRaf);
       pendingUpdateRaf = null;
@@ -573,14 +527,18 @@ export function registerMessageCallbacks(
     setMessages((prev) => [...prev, message]);
   };
 
-  // History load complete callback — triggers Markdown re-rendering
   window.historyLoadComplete = () => {
     releaseSessionTransition();
+    const pendingToast = window.__pendingSessionTransitionToast;
+    if (pendingToast) {
+      window.__pendingSessionTransitionToast = undefined;
+      addToast(pendingToast.message, pendingToast.type);
+    }
+    window.__lastStreamEndedTurnId = undefined;
+    window.__lastStreamEndedAt = undefined;
     setMessages((prev) => {
       if (prev.length === 0) return prev;
-      const updated = [...prev];
-      updated[updated.length - 1] = { ...updated[updated.length - 1] };
-      return updated;
+      return prev.map((m) => ({ ...m }));
     });
   };
 
@@ -600,5 +558,4 @@ export function registerMessageCallbacks(
       }
     });
   };
-
 }

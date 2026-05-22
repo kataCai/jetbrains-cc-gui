@@ -2,7 +2,6 @@ package com.github.claudecodegui.remote.provider;
 
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.Objects;
 import java.util.Set;
 
 /**

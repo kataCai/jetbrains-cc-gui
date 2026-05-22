@@ -1,5 +1,11 @@
 // hooks/useSettingsBasicActions.ts
 import { useState, useEffect, useCallback } from 'react';
+export type { UiFontConfig } from '../../../types/uiFontConfig';
+import type { UiFontConfig } from '../../../types/uiFontConfig';
+import type { CommitAiConfig, CommitAiProvider } from '../../../types/aiFeatureConfig';
+import { DEFAULT_COMMIT_AI_CONFIG } from '../../../types/aiFeatureConfig';
+import type { PromptEnhancerConfig, PromptEnhancerProvider } from '../../../types/promptEnhancer';
+import { DEFAULT_PROMPT_ENHANCER_CONFIG } from '../../../types/promptEnhancer';
 import type { TaskReminderChannel, TaskReminderConfig, TaskReminderState } from '../../../types/taskReminder';
 import {
   DEFAULT_TASK_REMINDER_CONFIG,
@@ -22,9 +28,6 @@ export interface UseSettingsBasicActionsProps {
 }
 
 export interface UseSettingsBasicActionsReturn {
-  // =========================================================================
-  // Public read-only state (safe to read in components)
-  // =========================================================================
   nodePath: string;
   nodeVersion: string | null;
   minNodeVersion: number;
@@ -38,14 +41,12 @@ export interface UseSettingsBasicActionsReturn {
         lineSpacing: number;
       }
     | undefined;
-  /** Streaming enabled state (prefers prop over local state) */
+  uiFontConfig: UiFontConfig | undefined;
   streamingEnabled: boolean;
   localStreamingEnabled: boolean;
   codexSandboxMode: 'workspace-write' | 'danger-full-access';
-  /** Send shortcut state (prefers prop over local state) */
   sendShortcut: 'enter' | 'cmdEnter';
   localSendShortcut: 'enter' | 'cmdEnter';
-  /** Auto open file state (prefers prop over local state) */
   autoOpenFileEnabled: boolean;
   localAutoOpenFileEnabled: boolean;
   commitPrompt: string;
@@ -54,13 +55,17 @@ export interface UseSettingsBasicActionsReturn {
   diffExpandedByDefault: boolean;
   historyCompletionEnabled: boolean;
   commitGenerationEnabled: boolean;
+  aiTitleGenerationEnabled: boolean;
   statusBarWidgetEnabled: boolean;
+  taskCompletionNotificationEnabled: boolean;
+  commitAiConfig: CommitAiConfig;
+  promptEnhancerConfig: PromptEnhancerConfig;
 
-  // =========================================================================
-  // Handler functions (public API for components)
-  // =========================================================================
   handleSaveNodePath: () => void;
   handleSaveWorkingDirectory: () => void;
+  handleUiFontSelectionChange: (selection: string) => void;
+  handleSaveUiFontCustomPath: (path: string) => void;
+  handleBrowseUiFontFile: () => void;
   handleStreamingEnabledChange: (enabled: boolean) => void;
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
@@ -88,19 +93,23 @@ export interface UseSettingsBasicActionsReturn {
   handleBrowseSound: () => void;
   handleSaveCommitPrompt: () => void;
   handleCommitGenerationEnabledChange: (enabled: boolean) => void;
+  handleAiTitleGenerationEnabledChange: (enabled: boolean) => void;
   handleStatusBarWidgetEnabledChange: (enabled: boolean) => void;
+  handleTaskCompletionNotificationEnabledChange: (enabled: boolean) => void;
+  handleCommitAiProviderChange: (provider: CommitAiProvider) => void;
+  handleCommitAiModelChange: (model: string) => void;
+  handleCommitAiResetToDefault: () => void;
+  handlePromptEnhancerProviderChange: (provider: PromptEnhancerProvider) => void;
+  handlePromptEnhancerModelChange: (model: string) => void;
+  handlePromptEnhancerResetToDefault: () => void;
 
-  // =========================================================================
-  // @internal — State setters used only by useSettingsWindowCallbacks.
-  // Components should not call these directly; use handlers above instead.
-  // =========================================================================
-  /** @internal */ setNodePath: (path: string) => void;
-  /** @internal */ setNodeVersion: (version: string | null) => void;
-  /** @internal */ setMinNodeVersion: (version: number) => void;
-  /** @internal */ setSavingNodePath: (saving: boolean) => void;
-  /** @internal */ setWorkingDirectory: (dir: string) => void;
-  /** @internal */ setSavingWorkingDirectory: (saving: boolean) => void;
-  /** @internal */ setEditorFontConfig: (
+  setNodePath: (path: string) => void;
+  setNodeVersion: (version: string | null) => void;
+  setMinNodeVersion: (version: number) => void;
+  setSavingNodePath: (saving: boolean) => void;
+  setWorkingDirectory: (dir: string) => void;
+  setSavingWorkingDirectory: (saving: boolean) => void;
+  setEditorFontConfig: (
     config:
       | {
           fontFamily: string;
@@ -109,21 +118,41 @@ export interface UseSettingsBasicActionsReturn {
         }
       | undefined
   ) => void;
-  /** @internal */ setLocalStreamingEnabled: (enabled: boolean) => void;
-  /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
-  /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
-  /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
-  /** @internal */ setCommitPrompt: (prompt: string) => void;
-  /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
-  /** @internal */ setTaskReminderConfig: (
+  setUiFontConfig: (config: UiFontConfig | undefined) => void;
+  setLocalStreamingEnabled: (enabled: boolean) => void;
+  setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
+  setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
+  setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
+  setCommitPrompt: (prompt: string) => void;
+  setSavingCommitPrompt: (saving: boolean) => void;
+  setTaskReminderConfig: (
     config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
   ) => void;
-  /** @internal */ setDiffExpandedByDefault: (expanded: boolean) => void;
-  /** @internal */ setHistoryCompletionEnabled: (enabled: boolean) => void;
-  /** @internal */ setCommitGenerationEnabled: (enabled: boolean) => void;
-  /** @internal */ setStatusBarWidgetEnabled: (enabled: boolean) => void;
+  setDiffExpandedByDefault: (expanded: boolean) => void;
+  setHistoryCompletionEnabled: (enabled: boolean) => void;
+  setCommitGenerationEnabled: (enabled: boolean) => void;
+  setAiTitleGenerationEnabled: (enabled: boolean) => void;
+  setStatusBarWidgetEnabled: (enabled: boolean) => void;
+  setTaskCompletionNotificationEnabled: (enabled: boolean) => void;
+  setCommitAiConfig: (config: CommitAiConfig) => void;
+  setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
 }
 
+/**
+ * 管理设置页基础行为配置。
+ * 这里并轨后的关键原则是“保留主线 canonical taskReminder/remote collab 相关语义，
+ * 同时接纳 upstream 的 UI 字体、Prompt Enhancer、Commit AI、AI title 和任务完成通知配置”。
+ *
+ * 对外仍暴露扁平的 state + handler + setter 结构，因为设置页窗口回调与页面组件都直接依赖这些字段。
+ *
+ * @param streamingEnabledProp 来自 App 的流式总开关
+ * @param onStreamingEnabledChangeProp 来自 App 的流式切换回调
+ * @param sendShortcutProp 来自 App 的发送快捷键
+ * @param onSendShortcutChangeProp 来自 App 的发送快捷键回调
+ * @param autoOpenFileEnabledProp 来自 App 的自动打开文件开关
+ * @param onAutoOpenFileEnabledChangeProp 来自 App 的自动打开文件回调
+ * @return 设置页基础行为状态与处理函数
+ */
 export function useSettingsBasicActions({
   streamingEnabledProp,
   onStreamingEnabledChangeProp,
@@ -132,17 +161,14 @@ export function useSettingsBasicActions({
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
 }: UseSettingsBasicActionsProps): UseSettingsBasicActionsReturn {
-  // Node.js path
   const [nodePath, setNodePath] = useState('');
   const [nodeVersion, setNodeVersion] = useState<string | null>(null);
   const [minNodeVersion, setMinNodeVersion] = useState(18);
   const [savingNodePath, setSavingNodePath] = useState(false);
 
-  // Working directory configuration
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [savingWorkingDirectory, setSavingWorkingDirectory] = useState(false);
 
-  // IDEA editor font configuration (read-only display)
   const [editorFontConfig, setEditorFontConfig] = useState<
     | {
         fontFamily: string;
@@ -151,33 +177,27 @@ export function useSettingsBasicActions({
       }
     | undefined
   >();
+  const [uiFontConfig, setUiFontConfig] = useState<UiFontConfig | undefined>();
 
-  // Streaming configuration - prefer props, fallback to local state
   const [localStreamingEnabled, setLocalStreamingEnabled] = useState<boolean>(false);
   const streamingEnabled = streamingEnabledProp ?? localStreamingEnabled;
 
   const [codexSandboxMode, setCodexSandboxMode] = useState<'workspace-write' | 'danger-full-access'>(
-    'danger-full-access'
+    'danger-full-access',
   );
 
-  // Send shortcut configuration - prefer props, fallback to local state
   const [localSendShortcut, setLocalSendShortcut] = useState<'enter' | 'cmdEnter'>('enter');
   const sendShortcut = sendShortcutProp ?? localSendShortcut;
 
-  // Auto open file configuration - prefer props, fallback to local state
   const [localAutoOpenFileEnabled, setLocalAutoOpenFileEnabled] = useState<boolean>(false);
   const autoOpenFileEnabled = autoOpenFileEnabledProp ?? localAutoOpenFileEnabled;
 
-  // Commit AI prompt configuration
   const [commitPrompt, setCommitPrompt] = useState('');
   const [savingCommitPrompt, setSavingCommitPrompt] = useState(false);
-
-  // Canonical task reminder configuration
   const [taskReminderConfig, setTaskReminderConfigState] = useState<TaskReminderConfig>(
     DEFAULT_TASK_REMINDER_CONFIG,
   );
 
-  // Diff expanded by default configuration (localStorage-only)
   const [diffExpandedByDefault, setDiffExpandedByDefault] = useState<boolean>(() => {
     try {
       return localStorage.getItem('diffExpandedByDefault') === 'true';
@@ -186,19 +206,23 @@ export function useSettingsBasicActions({
     }
   });
 
-  // History completion toggle configuration
   const [historyCompletionEnabled, setHistoryCompletionEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('historyCompletionEnabled');
-    return saved !== 'false'; // Enabled by default
+    return saved !== 'false';
   });
 
-  // AI commit generation toggle (default: true)
   const [commitGenerationEnabled, setCommitGenerationEnabled] = useState<boolean>(true);
-
-  // Status bar widget toggle (default: true)
+  const [aiTitleGenerationEnabled, setAiTitleGenerationEnabled] = useState<boolean>(true);
   const [statusBarWidgetEnabled, setStatusBarWidgetEnabled] = useState<boolean>(true);
+  const [taskCompletionNotificationEnabled, setTaskCompletionNotificationEnabled] = useState<boolean>(false);
 
-  // Diff expanded by default handler
+  const [commitAiConfig, setCommitAiConfig] = useState<CommitAiConfig>(
+    DEFAULT_COMMIT_AI_CONFIG,
+  );
+  const [promptEnhancerConfig, setPromptEnhancerConfig] = useState<PromptEnhancerConfig>(
+    DEFAULT_PROMPT_ENHANCER_CONFIG,
+  );
+
   useEffect(() => {
     try {
       if (diffExpandedByDefault) {
@@ -206,86 +230,104 @@ export function useSettingsBasicActions({
       } else {
         localStorage.removeItem('diffExpandedByDefault');
       }
-    } catch { /* ignore storage errors */ }
+    } catch {
+      // ignore storage errors
+    }
   }, [diffExpandedByDefault]);
 
-  const handleSaveNodePath = useCallback(() => {
-    setSavingNodePath(true);
-    const payload = { path: (nodePath || '').trim() };
-    sendToJava(`set_node_path:${JSON.stringify(payload)}`);
-  }, [nodePath]);
-
-  const handleSaveWorkingDirectory = useCallback(() => {
-    setSavingWorkingDirectory(true);
-    const payload = { customWorkingDir: (workingDirectory || '').trim() };
-    sendToJava(`set_working_directory:${JSON.stringify(payload)}`);
-  }, [workingDirectory]);
-
-  // Streaming toggle change handler
-  const handleStreamingEnabledChange = useCallback((enabled: boolean) => {
-    // If prop callback is provided (from App.tsx), use it for centralized state management
-    if (onStreamingEnabledChangeProp) {
-      onStreamingEnabledChangeProp(enabled);
-    } else {
-      // Fallback to local state if no prop callback provided
-      setLocalStreamingEnabled(enabled);
-      const payload = { streamingEnabled: enabled };
-      sendToJava(`set_streaming_enabled:${JSON.stringify(payload)}`);
-    }
-  }, [onStreamingEnabledChangeProp]);
-
-  const handleCodexSandboxModeChange = useCallback((mode: 'workspace-write' | 'danger-full-access') => {
-    setCodexSandboxMode(mode);
-    const payload = { sandboxMode: mode };
-    sendToJava(`set_codex_sandbox_mode:${JSON.stringify(payload)}`);
-  }, []);
-
-  // Send shortcut change handler
-  const handleSendShortcutChange = useCallback((shortcut: 'enter' | 'cmdEnter') => {
-    // If prop callback is provided (from App.tsx), use it for centralized state management
-    if (onSendShortcutChangeProp) {
-      onSendShortcutChangeProp(shortcut);
-    } else {
-      // Fallback to local state if no prop callback provided
-      setLocalSendShortcut(shortcut);
-      const payload = { sendShortcut: shortcut };
-      sendToJava(`set_send_shortcut:${JSON.stringify(payload)}`);
-    }
-  }, [onSendShortcutChangeProp]);
-
-  // Auto open file toggle change handler
-  const handleAutoOpenFileEnabledChange = useCallback((enabled: boolean) => {
-    // If prop callback is provided (from App.tsx), use it for centralized state management
-    if (onAutoOpenFileEnabledChangeProp) {
-      onAutoOpenFileEnabledChangeProp(enabled);
-    } else {
-      // Fallback to local state if no prop callback provided
-      setLocalAutoOpenFileEnabled(enabled);
-      const payload = { autoOpenFileEnabled: enabled };
-      sendToJava(`set_auto_open_file_enabled:${JSON.stringify(payload)}`);
-    }
-  }, [onAutoOpenFileEnabledChangeProp]);
-
+  /**
+   * 对外暴露规范化后的 taskReminder setter。
+   * 无论数据来自本地交互还是窗口回调，都先做一次 normalize，
+   * 保证设置页组件树里看到的永远是完整、合法、可渲染的结构。
+   *
+   * @param nextConfig 新配置或基于旧配置的 updater
+   */
   const setTaskReminderConfig: UseSettingsBasicActionsReturn['setTaskReminderConfig'] = useCallback((nextConfig) => {
-    setTaskReminderConfigState((prev) => {
-      // 无论数据来自窗口回调还是本地交互，都重新做一次 normalize，
-      // 保证 settings 组件树内部看到的永远是完整、合法、可渲染的配置。
-      const resolved = normalizeTaskReminderConfig(
-        typeof nextConfig === 'function' ? nextConfig(prev) : nextConfig
-      );
-      return resolved;
-    });
+    setTaskReminderConfigState((prev) => normalizeTaskReminderConfig(
+      typeof nextConfig === 'function' ? nextConfig(prev) : nextConfig,
+    ));
   }, []);
 
+  /**
+   * 本地乐观更新 + 异步写回 Java 的 taskReminder 通用桥接。
+   * 这样设置页切换可以立即反馈，后端后续回推时再做最终对齐。
+   *
+   * @param updater 基于旧配置生成新配置的函数
+   */
   const updateAndPersistTaskReminder = useCallback((updater: (prev: TaskReminderConfig) => TaskReminderConfig) => {
     setTaskReminderConfigState((prev) => {
       const next = normalizeTaskReminderConfig(updater(prev));
-      // 采用“先本地乐观更新，再异步发给 Java”的方式，
-      // 让设置页切换体验立即生效；Java 回推配置后再做一次最终对齐。
       sendToJava(`set_task_reminder_config:${JSON.stringify(next)}`);
       return next;
     });
   }, []);
+
+  const handleSaveNodePath = useCallback(() => {
+    setSavingNodePath(true);
+    sendToJava(`set_node_path:${JSON.stringify({ path: (nodePath || '').trim() })}`);
+  }, [nodePath]);
+
+  const handleSaveWorkingDirectory = useCallback(() => {
+    setSavingWorkingDirectory(true);
+    sendToJava(`set_working_directory:${JSON.stringify({ customWorkingDir: (workingDirectory || '').trim() })}`);
+  }, [workingDirectory]);
+
+  const handleUiFontSelectionChange = useCallback((selection: string) => {
+    if (selection === 'followEditor') {
+      sendToJava(`set_ui_font_config:${JSON.stringify({ mode: 'followEditor' })}`);
+      return;
+    }
+
+    if (selection === 'customFile' && uiFontConfig?.customFontPath) {
+      sendToJava(`set_ui_font_config:${JSON.stringify({
+        mode: 'customFile',
+        customFontPath: uiFontConfig.customFontPath,
+      })}`);
+    }
+  }, [uiFontConfig?.customFontPath]);
+
+  const handleSaveUiFontCustomPath = useCallback((path: string) => {
+    sendToJava(`set_ui_font_config:${JSON.stringify({
+      mode: 'customFile',
+      customFontPath: path,
+    })}`);
+  }, []);
+
+  const handleBrowseUiFontFile = useCallback(() => {
+    sendToJava('browse_ui_font_file:');
+  }, []);
+
+  const handleStreamingEnabledChange = useCallback((enabled: boolean) => {
+    if (onStreamingEnabledChangeProp) {
+      onStreamingEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalStreamingEnabled(enabled);
+    sendToJava(`set_streaming_enabled:${JSON.stringify({ streamingEnabled: enabled })}`);
+  }, [onStreamingEnabledChangeProp]);
+
+  const handleCodexSandboxModeChange = useCallback((mode: 'workspace-write' | 'danger-full-access') => {
+    setCodexSandboxMode(mode);
+    sendToJava(`set_codex_sandbox_mode:${JSON.stringify({ sandboxMode: mode })}`);
+  }, []);
+
+  const handleSendShortcutChange = useCallback((shortcut: 'enter' | 'cmdEnter') => {
+    if (onSendShortcutChangeProp) {
+      onSendShortcutChangeProp(shortcut);
+      return;
+    }
+    setLocalSendShortcut(shortcut);
+    sendToJava(`set_send_shortcut:${JSON.stringify({ sendShortcut: shortcut })}`);
+  }, [onSendShortcutChangeProp]);
+
+  const handleAutoOpenFileEnabledChange = useCallback((enabled: boolean) => {
+    if (onAutoOpenFileEnabledChangeProp) {
+      onAutoOpenFileEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalAutoOpenFileEnabled(enabled);
+    sendToJava(`set_auto_open_file_enabled:${JSON.stringify({ autoOpenFileEnabled: enabled })}`);
+  }, [onAutoOpenFileEnabledChangeProp]);
 
   const handleTaskReminderEnabledChange = useCallback((channel: TaskReminderChannel, enabled: boolean) => {
     updateAndPersistTaskReminder((prev) => ({
@@ -304,7 +346,6 @@ export function useSettingsBasicActions({
   ) => {
     updateAndPersistTaskReminder((prev) => {
       const currentStates = prev[channel].states;
-      // 用 Set 保证状态列表天然去重，避免用户反复点击或旧数据回放后出现重复状态。
       const nextStates = enabled
         ? Array.from(new Set([...currentStates, state]))
         : currentStates.filter((item) => item !== state);
@@ -342,7 +383,7 @@ export function useSettingsBasicActions({
   }, [updateAndPersistTaskReminder]);
 
   const handleTaskReminderCustomSoundPathChange = useCallback((path: string) => {
-    // 输入路径时先只更新本地草稿，避免用户每敲一个字符就把配置写回后端。
+    // 输入路径时先只更新本地草稿，避免每次敲字都立即写回后端。
     setTaskReminderConfigState((prev) => ({
       ...prev,
       sound: {
@@ -366,12 +407,9 @@ export function useSettingsBasicActions({
   }, [updateAndPersistTaskReminder]);
 
   const handleSaveCustomSoundPath = useCallback(() => {
-    // 自定义路径走显式保存，和 browse / test 的行为拆开，
-    // 这样用户可以先编辑路径，再决定是否真正写入配置。
     sendToJava(`set_task_reminder_config:${JSON.stringify(taskReminderConfig)}`);
   }, [taskReminderConfig]);
 
-  // Test sound
   const handleTestSound = useCallback(() => {
     const payload = {
       soundId: taskReminderConfig.sound.selectedSound,
@@ -388,30 +426,131 @@ export function useSettingsBasicActions({
     sendToJava('test_task_reminder_balloon:');
   }, []);
 
-  // Browse sound file
   const handleBrowseSound = useCallback(() => {
     sendToJava('browse_sound_file:');
   }, []);
 
-  // AI commit generation toggle change handler
   const handleCommitGenerationEnabledChange = useCallback((enabled: boolean) => {
     setCommitGenerationEnabled(enabled);
-    const payload = { commitGenerationEnabled: enabled };
-    sendToJava(`set_commit_generation_enabled:${JSON.stringify(payload)}`);
+    sendToJava(`set_commit_generation_enabled:${JSON.stringify({ commitGenerationEnabled: enabled })}`);
   }, []);
 
-  // Status bar widget toggle change handler
+  const handleAiTitleGenerationEnabledChange = useCallback((enabled: boolean) => {
+    setAiTitleGenerationEnabled(enabled);
+    sendToJava(`set_ai_title_generation_enabled:${JSON.stringify({ aiTitleGenerationEnabled: enabled })}`);
+  }, []);
+
   const handleStatusBarWidgetEnabledChange = useCallback((enabled: boolean) => {
     setStatusBarWidgetEnabled(enabled);
-    const payload = { statusBarWidgetEnabled: enabled };
-    sendToJava(`set_status_bar_widget_enabled:${JSON.stringify(payload)}`);
+    sendToJava(`set_status_bar_widget_enabled:${JSON.stringify({ statusBarWidgetEnabled: enabled })}`);
   }, []);
 
-  // Commit AI prompt save handler
+  const handleTaskCompletionNotificationEnabledChange = useCallback((enabled: boolean) => {
+    setTaskCompletionNotificationEnabled(enabled);
+    sendToJava(`set_task_completion_notification_enabled:${JSON.stringify({ taskCompletionNotificationEnabled: enabled })}`);
+  }, []);
+
+  const handleCommitAiProviderChange = useCallback((provider: CommitAiProvider) => {
+    const providerAvailable = commitAiConfig.availability[provider];
+    const nextConfig: CommitAiConfig = {
+      ...commitAiConfig,
+      provider,
+      effectiveProvider: providerAvailable ? provider : null,
+      resolutionSource: providerAvailable ? 'manual' : 'unavailable',
+    };
+    setCommitAiConfig(nextConfig);
+    sendToJava(`set_commit_ai_config:${JSON.stringify({
+      provider,
+      models: nextConfig.models,
+    })}`);
+  }, [commitAiConfig]);
+
+  const handleCommitAiModelChange = useCallback((model: string) => {
+    const activeProvider = commitAiConfig.provider ?? commitAiConfig.effectiveProvider ?? 'codex';
+    const nextConfig: CommitAiConfig = {
+      ...commitAiConfig,
+      models: {
+        ...commitAiConfig.models,
+        [activeProvider]: model,
+      },
+    };
+    setCommitAiConfig(nextConfig);
+    sendToJava(`set_commit_ai_config:${JSON.stringify({
+      provider: commitAiConfig.provider,
+      models: nextConfig.models,
+    })}`);
+  }, [commitAiConfig]);
+
+  const handleCommitAiResetToDefault = useCallback(() => {
+    const nextConfig: CommitAiConfig = {
+      ...commitAiConfig,
+      provider: null,
+      effectiveProvider: commitAiConfig.availability.codex
+        ? 'codex'
+        : (commitAiConfig.availability.claude ? 'claude' : null),
+      resolutionSource: commitAiConfig.availability.codex || commitAiConfig.availability.claude
+        ? 'auto'
+        : 'unavailable',
+    };
+    setCommitAiConfig(nextConfig);
+    sendToJava(`set_commit_ai_config:${JSON.stringify({
+      provider: null,
+      models: nextConfig.models,
+    })}`);
+  }, [commitAiConfig]);
+
+  const handlePromptEnhancerProviderChange = useCallback((provider: PromptEnhancerProvider) => {
+    const providerAvailable = promptEnhancerConfig.availability[provider];
+    const nextConfig: PromptEnhancerConfig = {
+      ...promptEnhancerConfig,
+      provider,
+      effectiveProvider: providerAvailable ? provider : null,
+      resolutionSource: providerAvailable ? 'manual' : 'unavailable',
+    };
+    setPromptEnhancerConfig(nextConfig);
+    sendToJava(`set_prompt_enhancer_config:${JSON.stringify({
+      provider,
+      models: nextConfig.models,
+    })}`);
+  }, [promptEnhancerConfig]);
+
+  const handlePromptEnhancerModelChange = useCallback((model: string) => {
+    const activeProvider = promptEnhancerConfig.provider ?? promptEnhancerConfig.effectiveProvider ?? 'claude';
+    const nextConfig: PromptEnhancerConfig = {
+      ...promptEnhancerConfig,
+      models: {
+        ...promptEnhancerConfig.models,
+        [activeProvider]: model,
+      },
+    };
+    setPromptEnhancerConfig(nextConfig);
+    sendToJava(`set_prompt_enhancer_config:${JSON.stringify({
+      provider: promptEnhancerConfig.provider,
+      models: nextConfig.models,
+    })}`);
+  }, [promptEnhancerConfig]);
+
+  const handlePromptEnhancerResetToDefault = useCallback(() => {
+    const nextConfig: PromptEnhancerConfig = {
+      ...promptEnhancerConfig,
+      provider: null,
+      effectiveProvider: promptEnhancerConfig.availability.codex
+        ? 'codex'
+        : (promptEnhancerConfig.availability.claude ? 'claude' : null),
+      resolutionSource: promptEnhancerConfig.availability.codex || promptEnhancerConfig.availability.claude
+        ? 'auto'
+        : 'unavailable',
+    };
+    setPromptEnhancerConfig(nextConfig);
+    sendToJava(`set_prompt_enhancer_config:${JSON.stringify({
+      provider: null,
+      models: nextConfig.models,
+    })}`);
+  }, [promptEnhancerConfig]);
+
   const handleSaveCommitPrompt = useCallback(() => {
     setSavingCommitPrompt(true);
-    const payload = { prompt: commitPrompt };
-    sendToJava(`set_commit_prompt:${JSON.stringify(payload)}`);
+    sendToJava(`set_commit_prompt:${JSON.stringify({ prompt: commitPrompt })}`);
   }, [commitPrompt]);
 
   return {
@@ -429,6 +568,8 @@ export function useSettingsBasicActions({
     setSavingWorkingDirectory,
     editorFontConfig,
     setEditorFontConfig,
+    uiFontConfig,
+    setUiFontConfig,
     localStreamingEnabled,
     setLocalStreamingEnabled,
     streamingEnabled,
@@ -452,6 +593,9 @@ export function useSettingsBasicActions({
     setHistoryCompletionEnabled,
     handleSaveNodePath,
     handleSaveWorkingDirectory,
+    handleUiFontSelectionChange,
+    handleSaveUiFontCustomPath,
+    handleBrowseUiFontFile,
     handleStreamingEnabledChange,
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
@@ -471,8 +615,24 @@ export function useSettingsBasicActions({
     commitGenerationEnabled,
     setCommitGenerationEnabled,
     handleCommitGenerationEnabledChange,
+    aiTitleGenerationEnabled,
+    setAiTitleGenerationEnabled,
+    handleAiTitleGenerationEnabledChange,
     statusBarWidgetEnabled,
     setStatusBarWidgetEnabled,
     handleStatusBarWidgetEnabledChange,
+    taskCompletionNotificationEnabled,
+    setTaskCompletionNotificationEnabled,
+    handleTaskCompletionNotificationEnabledChange,
+    commitAiConfig,
+    setCommitAiConfig,
+    handleCommitAiProviderChange,
+    handleCommitAiModelChange,
+    handleCommitAiResetToDefault,
+    promptEnhancerConfig,
+    setPromptEnhancerConfig,
+    handlePromptEnhancerProviderChange,
+    handlePromptEnhancerModelChange,
+    handlePromptEnhancerResetToDefault,
   };
 }

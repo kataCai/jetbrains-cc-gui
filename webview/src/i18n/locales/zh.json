@@ -94,7 +94,7 @@
     "attachmentFile": "[附件: {{fileName}}]",
     "unknownFile": "未知文件",
     "attachmentsUploaded": "[已上传附件]",
-    "streamingConnected": "Claude 已成功连接，正在理解问题",
+    "streamingConnected": "{{provider}} 已成功连接，正在理解问题",
     "showEarlierMessages": "显示之前的 {{count}} 条消息",
     "composerMode": "对话模式",
     "chatMode": "对话",
@@ -111,7 +111,8 @@
       "recovered": "已恢复",
       "completed": "已完成",
       "final_error": "需处理"
-    }
+    },
+    "totalDuration": "本次耗时"
   },
   "settings": {
     "title": "设置",
@@ -142,7 +143,8 @@
         "french": "Français",
         "japanese": "日本語",
         "russian": "Русский",
-        "korean": "한국어"
+        "korean": "한국어",
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Node.js 路径",
@@ -171,8 +173,16 @@
         "level6": "最大（140%）"
       },
       "editorFont": {
-        "label": "字体（跟随编辑器字体）",
-        "hint": "此处暂时不可修改，如需修改，请在 IDEA 设置 → 编辑器 → 字体 中调整（重启 IDEA 后本插件字体生效）"
+        "label": "字体",
+        "hint": "这里修改的是插件界面字体；字号和行高仍跟随编辑器。",
+        "followOption": "跟随编辑器（{{font}}）",
+        "customOption": "自定义字体文件",
+        "customPathLabel": "字体文件路径",
+        "customPathPlaceholder": "选择或输入 .ttf / .otf 字体文件路径",
+        "browse": "浏览",
+        "warningUnavailable": "字体不可用，当前已回退到编辑器字体",
+        "statusFollowEditor": "当前跟随编辑器字体：{{font}}",
+        "statusCustom": "当前使用自定义字体：{{font}}"
       },
       "streaming": {
         "label": "流式传输",
@@ -185,6 +195,20 @@
         "enabled": "已开启",
         "disabled": "已关闭",
         "hint": "开启后，在项目树选择文件时会自动将文件路径告诉 AI（注意：只传递文件路径，不传文件内容）。关闭后需要手动操作。"
+      },
+      "promptEnhancer": {
+        "label": "增强提示词",
+        "modelLabel": "增强模型",
+        "resetToDefault": "恢复默认",
+        "providerAvailable": "可用",
+        "providerUnavailable": "当前不可用",
+        "provider": {
+          "claude": "Claude Code",
+          "codex": "Codex"
+        },
+        "currentProviderAuto": "当前使用自动选择：{{provider}}",
+        "currentProviderManual": "当前使用手动选择的 provider：{{provider}}",
+        "currentProviderUnavailable": "当前所选 provider 不可用：{{provider}}"
       },
       "diffExpanded": {
         "label": "默认展开差异",
@@ -203,6 +227,12 @@
         "enabled": "已开启",
         "disabled": "已关闭",
         "hint": "开启后，在 IDE 右下角状态栏显示当前模型和模式信息（如 GUI [Opus] {自动}）。关闭后隐藏。"
+      },
+      "taskCompletionNotification": {
+        "label": "任务完成通知",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "hint": "开启后，当 AI 任务完成时显示系统通知。关闭后不显示系统通知。"
       },
       "sendShortcut": {
         "label": "发送快捷键",
@@ -279,6 +309,10 @@
     },
     "providers": "供应商管理",
     "providersDesc": "管理 Claude 和 Codex API 供应商配置，切换不同的 API 服务提供商",
+    "promptEnhancer": {
+      "title": "增强提示词",
+      "description": "配置增强提示词功能使用的 provider 与模型，在消息发送前对输入内容进行重写增强。"
+    },
     "providerTab": {
       "claude": "Claude Code",
       "codex": "Codex"
@@ -347,6 +381,16 @@
     "commit": {
       "title": "Commit AI",
       "description": "配置 AI 生成 Git Commit 消息的行为",
+      "providerModel": {
+        "label": "Commit 生成 Provider",
+        "modelLabel": "Commit 生成模型",
+        "resetToDefault": "恢复默认",
+        "providerAvailable": "可用",
+        "providerUnavailable": "当前不可用",
+        "currentProviderAuto": "当前使用自动选择：{{provider}}",
+        "currentProviderManual": "当前使用手动选择的 provider：{{provider}}",
+        "currentProviderUnavailable": "当前所选 provider 不可用：{{provider}}"
+      },
       "prompt": {
         "label": "附加提示词",
         "placeholder": "在此添加您的额外要求，例如：使用中文生成 commit、包含 issue 编号，使用表情符号等等...",
@@ -406,6 +450,12 @@
           "hoursAgo": "{{count}}小时前",
           "minutesAgo": "{{count}}分钟前"
         }
+      },
+      "aiTitleGeneration": {
+        "label": "AI 会话标题自动生成",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "hint": "开启后，新会话首次回复完成时将调用 Haiku 模型自动生成简短标题；关闭后会话仍按用户首条消息显示"
       }
     },
     "codexFeatureUnavailable": "Codex暂未适配此功能，请切换到Claude Code使用",
@@ -612,6 +662,7 @@
         "deepseek": "DeepSeek",
         "minimax": "MiniMax",
         "xiaomi": "Xiaomi MiMo",
+        "xiaomiPlan": "Xiaomi MiMo Plan",
         "qwen": "阿里千问",
         "openrouter": "OpenRouter"
       }
@@ -902,6 +953,16 @@
     "confirmDelete": "确认删除",
     "deleteMessage": "确定要删除这个会话吗?此操作无法撤销。",
     "deleteSession": "删除此会话",
+    "selectMode": "多选",
+    "exitSelectMode": "退出多选",
+    "selectedSessions": "已选择 {{count}} 个会话",
+    "selectAll": "全选",
+    "clearSelection": "清除",
+    "deleteSelected": "删除所选",
+    "confirmDeleteSelected": "确认删除",
+    "deleteSelectedMessage": "确定要删除选中的 {{count}} 个会话吗?此操作无法撤销。",
+    "selectSession": "选择会话",
+    "selectSessionWithTitle": "选择 {{title}}",
     "exportSession": "导出会话",
     "exportSuccess": "会话已导出",
     "exportFailed": "导出失败",
@@ -1011,6 +1072,12 @@
     "clickToCopy": "点击复制",
     "switch": "切换",
     "switchProvider": "切换供应商",
+    "runtimeProvider": {
+      "title": "切换当前供应商",
+      "loading": "正在加载供应商...",
+      "empty": "暂无可用供应商",
+      "switched": "已切换到 {{provider}}"
+    },
     "link": "链接"
   },
   "markdown": {
@@ -1263,6 +1330,24 @@
     "allCompleted": "已完成 {{completed}}/{{total}} 个任务",
     "stopped": "已停止"
   },
+  "subagent": {
+    "process": {
+      "title": "Agent 进程",
+      "thought": "思考",
+      "filesRead_one": "读取 {{count}} 个文件",
+      "filesRead_other": "读取 {{count}} 个文件",
+      "otherTools": "其他工具",
+      "result": "结果",
+      "showFullOutput": "查看完整输出",
+      "loading": "正在加载 Agent 进程…",
+      "unavailable": "本次会话未生成进程日志（需要会话 ID）。",
+      "reportGenerated": "已生成结构化分析报告",
+      "unitMs": "毫秒",
+      "unitS": "秒",
+      "unitTools": "个工具",
+      "unitTokens": "tokens"
+    }
+  },
   "statusPanel": {
     "todoTab": "计划",
     "tasksTab": "任务",
@@ -1432,19 +1517,48 @@
       }
     }
   },
+  "claudeEffort": {
+    "title": "选择推理强度",
+    "low": {
+      "label": "low",
+      "description": "短小、范围明确、对延迟敏感的任务"
+    },
+    "medium": {
+      "label": "medium",
+      "description": "成本敏感型工作，可牺牲部分智能"
+    },
+    "high": {
+      "label": "high",
+      "description": "平衡 Token 用量与智能水平"
+    },
+    "xhigh": {
+      "label": "xhigh",
+      "description": "大多数编程任务的最佳效果（推荐）"
+    },
+    "max": {
+      "label": "max",
+      "description": "高难度任务的最大推理深度（仅当前会话）"
+    }
+  },
   "models": {
     "addModel": "添加模型",
+    "longContext": {
+      "label": "1M",
+      "shortLabel": "1M上下文",
+      "tooltipEnabled": "开启/关闭1M上下文窗口",
+      "tooltipDisabled": "Haiku不支持1M上下文"
+    },
     "claude": {
       "sonnet46": {
         "label": "Sonnet 4.6",
         "description": "Sonnet 4.6 · 默认推荐模型"
       },
       "opus46": {
-        "label": "Opus 4.6",
-        "description": "Opus 4.6 · 最新最强大的模型"
+        "label": "Opus 4.7",
+        "description": "Opus 4.7 · 最新最强大的模型"
       },
       "opus46_1m": {
-        "label": "Opus (1M 上下文)",
+        "label": "Opus 4.6",
         "description": "Opus 4.6 长会话模式"
       },
       "haiku45": {
@@ -1458,20 +1572,40 @@
         "description": "适用于复杂编码、研究和真实工作场景的前沿模型。"
       },
       "gpt53codex": {
-        "label": "gpt-5.3-codex",
+        "label": "GPT-5.3-Codex",
         "description": "最新前沿智能编程模型，能力全面增强"
+      },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "最新前沿模型，能力进一步增强"
       },
       "gpt54": {
         "label": "gpt-5.4",
         "description": "适合日常编码的强大模型"
       },
+      "gpt52codex": {
+        "label": "GPT-5.2-Codex",
+        "description": "前沿智能编程模型"
+      },
+      "gpt51codexMax": {
+        "label": "GPT-5.1-Codex-Max",
+        "description": "针对Codex优化的旗舰模型，深度与快速推理兼备"
+      },
       "gpt54mini": {
         "label": "gpt-5.4-mini",
         "description": "适合简单编码任务的小型、快速、成本更低的模型"
       },
+      "gpt53codexSpark": {
+        "label": "GPT-5.3-Codex-Spark",
+        "description": "超高速编程模型"
+      },
       "gpt52": {
         "label": "gpt-5.2",
         "description": "适合专业工作和长时间运行任务的优化模型"
+      },
+      "gpt51codexMini": {
+        "label": "GPT-5.1-Codex-Mini",
+        "description": "针对Codex优化。更便宜、更快，但性能较差"
       }
     }
   },
@@ -1524,7 +1658,7 @@
       "label": "Claude Code"
     },
     "codex": {
-      "label": "Codex Cli"
+      "label": "Codex"
     },
     "gemini": {
       "label": "Gemini Cli"
@@ -1578,20 +1712,24 @@
   "reasoning": {
     "title": "选择思考深度",
     "low": {
-      "label": "较少",
+      "label": "low",
       "description": "快速响应，基础推理"
     },
     "medium": {
-      "label": "中等",
+      "label": "medium",
       "description": "平衡思考（默认）"
     },
     "high": {
-      "label": "较多",
+      "label": "high",
       "description": "深度推理，适合复杂任务"
     },
     "xhigh": {
-      "label": "最多",
-      "description": "最深推理，最高精度"
+      "label": "xhigh",
+      "description": "额外深度推理，适合高难度任务"
+    },
+    "max": {
+      "label": "max",
+      "description": "最大推理深度"
     }
   },
   "errorBoundary": {

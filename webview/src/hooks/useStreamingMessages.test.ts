@@ -1,71 +1,396 @@
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import type { ClaudeMessage } from '../types';
+import { getContentBlocks, normalizeBlocks } from '../utils/messageUtils';
 import { useStreamingMessages } from './useStreamingMessages';
 
+const localizeMessage = (text: string) => text;
+const t = ((key: string) => key) as any;
+
+const getRenderedBlocks = (message: ClaudeMessage) =>
+  getContentBlocks(
+    message,
+    (raw) => normalizeBlocks(raw, localizeMessage, t),
+    localizeMessage,
+  );
+
+interface ContentBlockTest {
+  type: string;
+  thinking?: string;
+  text?: string;
+  id?: string;
+}
+
+/**
+ * `useStreamingMessages` 行为回归测试。
+ * 这些测试覆盖当前主线已经验证过的 streaming 契约：
+ * 1. `.content` 与 raw block 文本同步；
+ * 2. thinking/text 在工具边界前后不重复；
+ * 3. backend snapshot 晚到或回退时不覆盖更完整的前端累计结果；
+ * 4. backend-only trailing block 在本地 patch 时不被误删。
+ */
 describe('useStreamingMessages', () => {
-  it('buildStreamingBlocks keeps thinking/text phase order around tool_use boundaries', () => {
+  it('sets .content from streamingContentRef and syncs a single raw text block', () => {
     const { result } = renderHook(() => useStreamingMessages());
 
-    result.current.streamingThinkingSegmentsRef.current = ['first thinking', 'second thinking'];
-    result.current.streamingTextSegmentsRef.current = ['first text', 'second text'];
+    result.current.streamingContentRef.current = 'Hello world';
 
-    const blocks = result.current.buildStreamingBlocks([
-      { type: 'thinking', thinking: 'stale thinking' },
-      { type: 'text', text: 'stale text' },
-      { type: 'tool_use', id: 'tool-1', name: 'shell_command' },
-      { type: 'thinking', thinking: 'stale thinking 2' },
-      { type: 'text', text: 'stale text 2' },
-    ]);
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: false,
+      raw: {
+        message: {
+          content: [{ type: 'text', text: 'Backend text' }],
+        },
+      },
+    };
 
-    expect(blocks).toEqual([
-      { type: 'thinking', thinking: 'first thinking' },
-      { type: 'text', text: 'first text' },
-      { type: 'tool_use', id: 'tool-1', name: 'shell_command' },
-      { type: 'thinking', thinking: 'second thinking' },
-      { type: 'text', text: 'second text' },
-    ]);
+    const patched = result.current.patchAssistantForStreaming(assistant);
+
+    expect(patched.content).toBe('Hello world');
+    expect(patched.isStreaming).toBe(true);
+    const rawContent = (patched.raw as any).message.content;
+    expect(rawContent).toHaveLength(1);
+    expect(rawContent[0]).toMatchObject({ type: 'text', text: 'Hello world' });
   });
 
-  it('buildStreamingBlocks merges overlapping text tails to avoid duplicated markdown fence suffixes', () => {
+  it('preserves tool_use blocks in raw unchanged', () => {
     const { result } = renderHook(() => useStreamingMessages());
 
-    result.current.streamingTextSegmentsRef.current = ['Hello\\n```ts\\nconst a = 1;\\n```'];
+    result.current.streamingContentRef.current = 'Running command.';
 
-    const blocks = result.current.buildStreamingBlocks([
-      { type: 'text', text: 'Hello\\n```ts\\n' },
-    ]);
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'Running command.',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'text', text: 'Running command.' },
+            { type: 'tool_use', id: 'bash-1', name: 'run_command', input: { command: 'ls' } },
+          ],
+        },
+      },
+    };
 
-    expect(blocks).toEqual([
-      { type: 'text', text: 'Hello\\n```ts\\nconst a = 1;\\n```' },
-    ]);
+    const patched = result.current.patchAssistantForStreaming(assistant);
+
+    expect(patched.content).toBe('Running command.');
+    const rawContent = (patched.raw as any).message.content;
+    expect(rawContent).toHaveLength(2);
+    expect(rawContent[1]).toMatchObject({ type: 'tool_use', id: 'bash-1' });
   });
 
-  it('buildStreamingBlocks collapses duplicated thinking/text phase replay around tool boundaries', () => {
+  it('preserves thinking blocks in raw unchanged', () => {
     const { result } = renderHook(() => useStreamingMessages());
 
-    result.current.streamingThinkingSegmentsRef.current = ['prep', 'prep'];
-    result.current.streamingTextSegmentsRef.current = ['run tool', 'run tool'];
+    result.current.streamingContentRef.current = 'Done.';
 
-    const blocks = result.current.buildStreamingBlocks([
-      { type: 'thinking', thinking: 'stale prep' },
-      { type: 'text', text: 'stale run tool' },
-      { type: 'thinking', thinking: 'stale prep replay' },
-      { type: 'text', text: 'stale run tool replay' },
-      { type: 'tool_use', id: 'tool-2', name: 'shell_command' },
-    ]);
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'Done.',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Let me think about this.' },
+            { type: 'text', text: 'Done.' },
+          ],
+        },
+      },
+    };
 
-    expect(blocks).toEqual([
-      { type: 'thinking', thinking: 'prep' },
-      { type: 'text', text: 'run tool' },
-      { type: 'tool_use', id: 'tool-2', name: 'shell_command' },
-    ]);
+    const patched = result.current.patchAssistantForStreaming(assistant);
+
+    const rawContent = (patched.raw as any).message.content;
+    expect(rawContent).toHaveLength(2);
+    expect(rawContent[0]).toMatchObject({ type: 'thinking', thinking: 'Let me think about this.' });
   });
 
-  it('patchAssistantForStreaming preserves backend-only trailing blocks outside current streaming range', () => {
+  it('uses backend content when it is longer than delta content', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingContentRef.current = 'ABC';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'ABCDE',
+      isStreaming: true,
+      raw: { message: { content: [{ type: 'text', text: 'ABCDE' }] } },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    expect(patched.content).toBe('ABCDE');
+    expect(patched.isStreaming).toBe(true);
+  });
+
+  it('uses delta content when it is longer than backend content', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingContentRef.current = 'ABCDEF';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'ABC',
+      isStreaming: true,
+      raw: { message: { content: [{ type: 'text', text: 'ABC' }] } },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    expect(patched.content).toBe('ABCDEF');
+  });
+
+  it('handles missing raw gracefully', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingContentRef.current = 'Response';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+
+    expect(patched.content).toBe('Response');
+    expect(patched.isStreaming).toBe(true);
+    expect(patched.raw).toBeUndefined();
+  });
+
+  it('extractRawBlocks correctly extracts blocks from raw', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    const blocks = result.current.extractRawBlocks({
+      message: {
+        content: [
+          { type: 'text', text: 'Hello' },
+          { type: 'thinking', thinking: 'Thinking...' },
+        ],
+      },
+    });
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ type: 'text', text: 'Hello' });
+    expect(blocks[1]).toMatchObject({ type: 'thinking', thinking: 'Thinking...' });
+  });
+
+  it('extractRawBlocks returns empty array for null/undefined raw', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    expect(result.current.extractRawBlocks(null)).toEqual([]);
+    expect(result.current.extractRawBlocks(undefined)).toEqual([]);
+    expect(result.current.extractRawBlocks({})).toEqual([]);
+  });
+
+  it('keeps rendered text blocks in sync with streaming content when backend raw text is stale', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingContentRef.current = 'ABCDE';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'ABC',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [{ type: 'text', text: 'ABC' }],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const renderedBlocks = getRenderedBlocks(patched);
+
+    expect(renderedBlocks).toHaveLength(1);
+    expect(renderedBlocks[0]).toMatchObject({ type: 'text', text: 'ABCDE' });
+  });
+
+  it('creates a visible thinking block before the first backend snapshot arrives', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingThinkingRef.current = 'Thinking before snapshot';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const renderedBlocks = getRenderedBlocks(patched);
+
+    expect(renderedBlocks).toHaveLength(1);
+    expect(renderedBlocks[0]).toMatchObject({
+      type: 'thinking',
+      thinking: 'Thinking before snapshot',
+      text: 'Thinking before snapshot',
+    });
+  });
+
+  it('does not duplicate earlier thinking content when a second thinking block follows a tool_use', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingThinkingRef.current = 'Let me think...Now I need...';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Let me think...', text: 'Let me think...' },
+            { type: 'tool_use', id: 'search-1', name: 'search', input: { q: 'foo' } },
+            { type: 'thinking', thinking: 'Now I need...', text: 'Now I need...' },
+          ],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    expect(rawContent).toHaveLength(3);
+    expect(rawContent[0]).toMatchObject({ type: 'thinking', thinking: 'Let me think...' });
+    expect(rawContent[1]).toMatchObject({ type: 'tool_use', id: 'search-1' });
+    expect(rawContent[2]).toMatchObject({ type: 'thinking', thinking: 'Now I need...' });
+  });
+
+  it('appends streamed text after trailing tool_use blocks instead of moving the tool card to the bottom', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'Before tool.',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'text', text: 'Before tool.' },
+            { type: 'tool_use', id: 'bash-1', name: 'shell_command', input: { command: 'git status' } },
+          ],
+        },
+      },
+    };
+
+    result.current.streamingContentRef.current = 'Before tool.';
+    const toolAppeared = result.current.patchAssistantForStreaming(assistant);
+    expect(((toolAppeared.raw as any).message.content as ContentBlockTest[]).map((block) => block.type))
+      .toEqual(['text', 'tool_use']);
+
+    result.current.streamingContentRef.current = 'Before tool.After tool.';
+    const patched = result.current.patchAssistantForStreaming(toolAppeared);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    expect(rawContent.map((block) => block.type)).toEqual(['text', 'tool_use', 'text']);
+    expect(rawContent[0]).toMatchObject({ type: 'text', text: 'Before tool.' });
+    expect(rawContent[1]).toMatchObject({ type: 'tool_use', id: 'bash-1' });
+    expect(rawContent[2]).toMatchObject({ type: 'text', text: 'After tool.' });
+
+    result.current.streamingContentRef.current = 'Before tool.After tool.More output.';
+    const patchedAgain = result.current.patchAssistantForStreaming(patched);
+    const updatedRawContent = (patchedAgain.raw as any).message.content as ContentBlockTest[];
+
+    expect(updatedRawContent.map((block) => block.type)).toEqual(['text', 'tool_use', 'text']);
+    expect(updatedRawContent[2]).toMatchObject({ type: 'text', text: 'After tool.More output.' });
+
+    const staleBackendSnapshot: ClaudeMessage = {
+      ...patchedAgain,
+      content: 'Before tool.',
+      raw: assistant.raw,
+    };
+
+    const recoveredFromStaleSnapshot = result.current.patchAssistantForStreaming(staleBackendSnapshot);
+    const recoveredRawContent = (recoveredFromStaleSnapshot.raw as any).message.content as ContentBlockTest[];
+
+    expect(recoveredRawContent.map((block) => block.type)).toEqual(['text', 'tool_use', 'text']);
+    expect(recoveredRawContent[2]).toMatchObject({ type: 'text', text: 'After tool.More output.' });
+  });
+
+  it('splits already-buffered text when the first tool snapshot arrives late', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingContentRef.current = 'Before tool.After tool.';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: 'Before tool.',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'text', text: 'Before tool.' },
+            { type: 'tool_use', id: 'bash-late', name: 'shell_command', input: { command: 'git status' } },
+          ],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    expect(rawContent.map((block) => block.type)).toEqual(['text', 'tool_use', 'text']);
+    expect(rawContent[0]).toMatchObject({ type: 'text', text: 'Before tool.' });
+    expect(rawContent[1]).toMatchObject({ type: 'tool_use', id: 'bash-late' });
+    expect(rawContent[2]).toMatchObject({ type: 'text', text: 'After tool.' });
+  });
+
+  it('extends the last thinking block as new deltas arrive', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingThinkingRef.current = 'Thinking longer now';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [{ type: 'thinking', thinking: 'Thinking', text: 'Thinking' }],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    expect(rawContent).toHaveLength(1);
+    expect(rawContent[0]).toMatchObject({ type: 'thinking', thinking: 'Thinking longer now' });
+  });
+
+  it('keeps backend raw structure intact when the cumulative thinking buffer cannot be reconciled', () => {
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingThinkingRef.current = 'Completely different content';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Original first', text: 'Original first' },
+            { type: 'tool_use', id: 't1', name: 'noop', input: {} },
+            { type: 'thinking', thinking: 'Original second', text: 'Original second' },
+          ],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    expect(rawContent[0]).toMatchObject({ thinking: 'Original first' });
+    expect(rawContent[2]).toMatchObject({ thinking: 'Original second' });
+  });
+
+  it('preserves backend-only trailing blocks outside current streaming range', () => {
     const { result } = renderHook(() => useStreamingMessages());
 
     result.current.streamingContentRef.current = 'updated intro';
-    result.current.streamingTextSegmentsRef.current = ['updated intro'];
 
     const patched = result.current.patchAssistantForStreaming({
       type: 'assistant',

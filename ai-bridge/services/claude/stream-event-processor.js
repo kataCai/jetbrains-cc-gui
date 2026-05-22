@@ -75,32 +75,26 @@ export function processMessageContent(msg, turnState) {
       if (block.type === 'text') {
         const currentText = block.text || '';
         rememberStreamSnapshot(turnState, 'text', i, currentText);
-        if (turnState.streamingEnabled && !turnState.hasStreamEvents && currentText.length > turnState.lastAssistantContent.length) {
+        // snapshot 比 stream_event 更完整时仍补发尾部 delta，避免最终内容丢字。
+        if (turnState.streamingEnabled && currentText.length > turnState.lastAssistantContent.length) {
           const delta = currentText.substring(turnState.lastAssistantContent.length);
           if (delta) {
             process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
           }
           turnState.lastAssistantContent = currentText;
-        } else if (turnState.streamingEnabled && turnState.hasStreamEvents) {
-          if (currentText.length > turnState.lastAssistantContent.length) {
-            turnState.lastAssistantContent = currentText;
-          }
         } else if (!turnState.streamingEnabled) {
           console.log('[CONTENT]', truncateErrorContent(currentText));
         }
       } else if (block.type === 'thinking') {
         const thinkingText = block.thinking || block.text || '';
         rememberStreamSnapshot(turnState, 'thinking', i, thinkingText);
-        if (turnState.streamingEnabled && !turnState.hasStreamEvents && thinkingText.length > turnState.lastThinkingContent.length) {
+        // thinking snapshot 同样允许补发尾部，重复片段由长度与 normalizer 状态共同约束。
+        if (turnState.streamingEnabled && thinkingText.length > turnState.lastThinkingContent.length) {
           const delta = thinkingText.substring(turnState.lastThinkingContent.length);
           if (delta) {
             process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
           }
           turnState.lastThinkingContent = thinkingText;
-        } else if (turnState.streamingEnabled && turnState.hasStreamEvents) {
-          if (thinkingText.length > turnState.lastThinkingContent.length) {
-            turnState.lastThinkingContent = thinkingText;
-          }
         } else if (!turnState.streamingEnabled) {
           console.log('[THINKING]', thinkingText);
         }
@@ -108,16 +102,13 @@ export function processMessageContent(msg, turnState) {
     }
   } else if (typeof content === 'string') {
     rememberStreamSnapshot(turnState, 'text', 0, content);
-    if (turnState.streamingEnabled && !turnState.hasStreamEvents && content.length > turnState.lastAssistantContent.length) {
+    // 字符串 content 走同一套尾部补偿策略。
+    if (turnState.streamingEnabled && content.length > turnState.lastAssistantContent.length) {
       const delta = content.substring(turnState.lastAssistantContent.length);
       if (delta) {
         process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
       }
       turnState.lastAssistantContent = content;
-    } else if (turnState.streamingEnabled && turnState.hasStreamEvents) {
-      if (content.length > turnState.lastAssistantContent.length) {
-        turnState.lastAssistantContent = content;
-      }
     } else if (!turnState.streamingEnabled) {
       console.log('[CONTENT]', truncateErrorContent(content));
     }

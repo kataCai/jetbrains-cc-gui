@@ -37,7 +37,7 @@ public class CodexSDKBridgeHistoryLoadTest {
                             "{\"type\":\"user_message\",\"message\":\"Explain the previous answer\"}")
             );
 
-            TestableCodexSDKBridge bridge = new TestableCodexSDKBridge(sessionsDir);
+            CodexSDKBridge bridge = new CodexSDKBridge(sessionsDir);
 
             List<JsonObject> messages = bridge.getSessionMessages("session-history-1", "/workspace/demo");
 
@@ -116,21 +116,4 @@ public class CodexSDKBridgeHistoryLoadTest {
      * 仅用于测试的 CodexSDKBridge。
      * 通过覆写历史读取入口，把本地临时目录下的会话文件接入到 SDKBridge 恢复链路。
      */
-    private static final class TestableCodexSDKBridge extends CodexSDKBridge {
-        private final CodexHistoryReader historyReader;
-
-        private TestableCodexSDKBridge(Path sessionsDir) {
-            this.historyReader = new CodexHistoryReader(sessionsDir, new com.google.gson.Gson()) {
-                @Override
-                boolean isCodexLocalConfigAuthorized() {
-                    return false;
-                }
-            };
-        }
-
-        @Override
-        protected CodexHistoryReader createHistoryReader() {
-            return historyReader;
-        }
-    }
 }

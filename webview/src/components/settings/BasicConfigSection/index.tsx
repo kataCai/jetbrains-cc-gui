@@ -2,6 +2,7 @@ import { useState } from 'react';
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
 import type { DiffThemeMode } from '../../../utils/diffTheme';
+import type { UiFontConfig } from '../hooks/useSettingsBasicActions';
 import type { TaskReminderChannel, TaskReminderConfig, TaskReminderState } from '../../../types/taskReminder';
 import AppearanceTab from './AppearanceTab';
 import BehaviorTab from './BehaviorTab';
@@ -35,34 +36,28 @@ interface BasicConfigSectionProps {
     fontSize: number;
     lineSpacing: number;
   };
-  // Streaming configuration
+  uiFontConfig?: UiFontConfig;
+  onUiFontSelectionChange?: (selection: string) => void;
+  onSaveUiFontCustomPath?: (path: string) => void;
+  onBrowseUiFontFile?: () => void;
   streamingEnabled?: boolean;
   onStreamingEnabledChange?: (enabled: boolean) => void;
-  // Auto open file configuration
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
-  // Send shortcut configuration
   sendShortcut?: 'enter' | 'cmdEnter';
   onSendShortcutChange?: (shortcut: 'enter' | 'cmdEnter') => void;
-  // Chat background color configuration
   chatBgColor?: string;
   onChatBgColorChange?: (color: string) => void;
-  // User message bubble color configuration
   userMsgColor?: string;
   onUserMsgColorChange?: (color: string) => void;
-  // Diff theme configuration
   diffTheme?: DiffThemeMode;
   onDiffThemeChange?: (theme: DiffThemeMode) => void;
-  // Diff expanded by default configuration
   diffExpandedByDefault?: boolean;
   onDiffExpandedByDefaultChange?: (enabled: boolean) => void;
-  // AI commit generation configuration
   commitGenerationEnabled?: boolean;
   onCommitGenerationEnabledChange?: (enabled: boolean) => void;
-  // Status bar widget configuration
   statusBarWidgetEnabled?: boolean;
   onStatusBarWidgetEnabledChange?: (enabled: boolean) => void;
-  // Task reminder configuration
   taskReminderConfig?: TaskReminderConfig;
   onTaskReminderEnabledChange?: (channel: TaskReminderChannel, enabled: boolean) => void;
   onTaskReminderStateToggle?: (channel: TaskReminderChannel, state: TaskReminderState, enabled: boolean) => void;
@@ -73,13 +68,25 @@ interface BasicConfigSectionProps {
     field: 'enabled' | 'recoverCompletedOnParseNoise' | 'retryTransientErrors' | 'maxAttempts' | 'initialDelayMs',
     value: boolean | number,
   ) => void;
+  aiTitleGenerationEnabled?: boolean;
+  onAiTitleGenerationEnabledChange?: (enabled: boolean) => void;
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onTestPopup?: () => void;
   onTestBalloon?: () => void;
   onBrowseSound?: () => void;
+  taskCompletionNotificationEnabled?: boolean;
+  onTaskCompletionNotificationEnabledChange?: (enabled: boolean) => void;
 }
 
+/**
+ * 设置页基础配置区域。
+ * Appearance / Behavior / Environment 三个子面板都通过这里统一装配 props。
+ * 并轨后这里需要同时承接当前主线的 taskReminder 行为配置，以及 upstream 的 UI 字体与 AI title 等增强项。
+ *
+ * @param props 基础配置区所有可配置项与回调
+ * @return 基础配置 Tab 视图
+ */
 const BasicConfigSection = (props: BasicConfigSectionProps) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<BasicTab>('appearance');
@@ -89,7 +96,6 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
       <h3 className={styles.sectionTitle}>{t('settings.basic.title')}</h3>
       <p className={styles.sectionDesc}>{t('settings.basic.description')}</p>
 
-      {/* Tab selector */}
       <div className={styles.basicTabSelector}>
         {BASIC_TABS.map((tab) => (
           <button
@@ -103,7 +109,6 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
         ))}
       </div>
 
-      {/* Tab content */}
       {activeTab === 'appearance' && (
         <AppearanceTab
           theme={props.theme}
@@ -111,6 +116,10 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           fontSizeLevel={props.fontSizeLevel}
           onFontSizeLevelChange={props.onFontSizeLevelChange}
           editorFontConfig={props.editorFontConfig}
+          uiFontConfig={props.uiFontConfig}
+          onUiFontSelectionChange={props.onUiFontSelectionChange}
+          onSaveUiFontCustomPath={props.onSaveUiFontCustomPath}
+          onBrowseUiFontFile={props.onBrowseUiFontFile}
           chatBgColor={props.chatBgColor}
           onChatBgColorChange={props.onChatBgColorChange}
           userMsgColor={props.userMsgColor}
@@ -141,11 +150,15 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onTaskReminderSelectedSoundChange={props.onTaskReminderSelectedSoundChange}
           onTaskReminderCustomSoundPathChange={props.onTaskReminderCustomSoundPathChange}
           onTaskRecoveryPolicyFieldChange={props.onTaskRecoveryPolicyFieldChange}
+          aiTitleGenerationEnabled={props.aiTitleGenerationEnabled}
+          onAiTitleGenerationEnabledChange={props.onAiTitleGenerationEnabledChange}
           onSaveCustomSoundPath={props.onSaveCustomSoundPath}
           onTestSound={props.onTestSound}
           onTestPopup={props.onTestPopup}
           onTestBalloon={props.onTestBalloon}
           onBrowseSound={props.onBrowseSound}
+          taskCompletionNotificationEnabled={props.taskCompletionNotificationEnabled}
+          onTaskCompletionNotificationEnabledChange={props.onTaskCompletionNotificationEnabledChange}
         />
       )}
 
