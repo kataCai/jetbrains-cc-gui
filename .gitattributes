@@ -1,0 +1,2 @@
+# Java 源文件需要保持 LF，避免 Windows 环境检出为 CRLF 后触发 checkstyleMain。
+*.java text eol=lf

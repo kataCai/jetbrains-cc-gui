@@ -42,7 +42,6 @@ import GrokMono from '@lobehub/icons/es/Grok/components/Mono';
 import OpenRouterMono from '@lobehub/icons/es/OpenRouter/components/Mono';
 import YiColor from '@lobehub/icons/es/Yi/components/Color';
 import YiMono from '@lobehub/icons/es/Yi/components/Mono';
-import XiaomiMiMoMono from '@lobehub/icons/es/XiaomiMiMo/components/Mono';
 import type { ReactElement } from 'react';
 import { resolveIconVendor, type ModelVendor } from '../../utils/modelIconMapping';
 
@@ -57,6 +56,15 @@ export interface ProviderModelIconProps {
   colored?: boolean;
 }
 
+/**
+ * 生成 Xiaomi/MiMo 图标外层容器样式。
+ *
+ * 该容器同时用于彩色态和单色态，负责提供统一的尺寸、圆角和居中布局，
+ * 避免 fallback 文本徽标在不同列表和按钮里出现对不齐的问题。
+ *
+ * @param size 图标目标尺寸，单位为像素。
+ * @returns 可直接绑定到 React 元素的外层样式对象。
+ */
 function getXiaomiWrapperStyle(size: number): React.CSSProperties {
   return {
     alignItems: 'center',
@@ -72,18 +80,51 @@ function getXiaomiWrapperStyle(size: number): React.CSSProperties {
   };
 }
 
-const XiaomiMiMoIcon = (size: number, colored: boolean): ReactElement => {
-  if (!colored) {
-    return <XiaomiMiMoMono size={size} />;
-  }
+/**
+ * 生成 Xiaomi/MiMo fallback 文本徽标的文字样式。
+ *
+ * 当前依赖版本缺少 XiaomiMiMo 官方图标导出，因此这里通过文本徽标退化显示。
+ * 文字尺寸与字重会随图标大小缩放，保证在紧凑列表与普通卡片里都具备可识别性。
+ *
+ * @param size 图标目标尺寸，单位为像素。
+ * @returns 可直接绑定到 React 元素的文字样式对象。
+ */
+function getXiaomiLabelStyle(size: number): React.CSSProperties {
+  return {
+    color: '#fff',
+    fontSize: Math.max(9, Math.round(size * 0.42)),
+    fontWeight: 600,
+    letterSpacing: '-0.02em',
+    lineHeight: 1,
+  };
+}
 
+/**
+ * 渲染 Xiaomi/MiMo 的兼容图标。
+ *
+ * 当上游图标库缺失 XiaomiMiMo 组件时，这里退化为带背景的文本徽标，
+ * 以保证构建稳定且不影响模型供应商识别。彩色态与单色态仅在背景色上区分，
+ * 不再依赖不存在的第三方图标模块。
+ *
+ * @param size 图标目标尺寸，单位为像素。
+ * @param colored 是否使用彩色态；`true` 为黑底，`false` 为灰底。
+ * @returns Xiaomi/MiMo 图标对应的 React 元素。
+ */
+const XiaomiMiMoIcon = (size: number, colored: boolean): ReactElement => {
   return (
     <span
       aria-label="XiaomiMiMo"
       role="img"
-      style={getXiaomiWrapperStyle(size)}
+      style={{
+        ...getXiaomiWrapperStyle(size),
+        background: colored ? '#000' : '#6b7280',
+      }}
     >
-      <XiaomiMiMoMono size={Math.max(1, Math.round(size * 0.72))} />
+      {
+        // 当前 @lobehub/icons 版本没有 XiaomiMiMo 导出，这里退化为稳定的文字徽标，
+        // 既避免主线构建失败，也保留 Xiaomi/MiMo 模型的可识别性。
+      }
+      <span style={getXiaomiLabelStyle(size)}>Mi</span>
     </span>
   );
 };
