@@ -678,7 +678,9 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
     }
 
     event.preventDefault();
-    const href = anchor.getAttribute('href');
+  // Prefer the raw attribute we generated ourselves so JCEF/DOM href normalization
+  // does not turn Unicode file paths into percent-encoded navigation payloads.
+  const href = anchor.getAttribute('data-raw-href') ?? anchor.getAttribute('href');
     if (!href) {
       return;
     }

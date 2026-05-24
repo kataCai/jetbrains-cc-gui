@@ -30,6 +30,37 @@ public class OpenFileHandlerTest {
     }
 
     @Test
+    public void decodesPercentEncodedUnicodePathBeforeOpening() {
+        String encodedPath = "/Users/demo/notes/Hermes%E4%BD%BF%E7%94%A8%E6%95%99%E7%A8%8B.md";
+
+        assertEquals(
+                "/Users/demo/notes/Hermes使用教程.md",
+                OpenFileHandler.decodeNavigationPathIfNeeded(encodedPath)
+        );
+    }
+
+    @Test
+    public void decodesPercentEncodedUnicodePathWithLineInfoBeforeOpening() {
+        OpenFileHandler.LineInfo lineInfo =
+                OpenFileHandler.parseLineInfo("/Users/demo/notes/Hermes%E4%BD%BF%E7%94%A8.md:18-20");
+
+        assertEquals("/Users/demo/notes/Hermes%E4%BD%BF%E7%94%A8.md", lineInfo.actualPath());
+        assertEquals(
+                "/Users/demo/notes/Hermes使用.md",
+                OpenFileHandler.decodeNavigationPathIfNeeded(lineInfo.actualPath())
+        );
+        assertEquals(18, lineInfo.lineNumber());
+        assertEquals(20, lineInfo.endLineNumber());
+    }
+
+    @Test
+    public void keepsOriginalPathWhenDecodingFails() {
+        String invalidEncodedPath = "/Users/demo/notes/%E4%BD%A0%A.md";
+
+        assertEquals(invalidEncodedPath, OpenFileHandler.decodeNavigationPathIfNeeded(invalidEncodedPath));
+    }
+
+    @Test
     public void rejectsColumnSyntax() {
         OpenFileHandler.LineInfo lineInfo = OpenFileHandler.parseLineInfo("E:\\project\\src\\Foo.java:42:15");
 

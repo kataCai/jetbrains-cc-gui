@@ -93,6 +93,16 @@ describe('linkify', () => {
     expect(html).toContain('./中文/utils.ts');
   });
 
+  it('preserves raw unicode file paths on generated anchors', () => {
+    const html = linkifyPlainTextSegment(
+      'Open /Users/demo/notes/2026-05-23-Hermes使用教程与飞书接入指南.md now.',
+      DEFAULT_LINKIFY_CAPABILITIES,
+    );
+
+    expect(html).toContain('data-linkify="file"');
+    expect(html).toContain('data-raw-href="/Users/demo/notes/2026-05-23-Hermes使用教程与飞书接入指南.md"');
+  });
+
   it('does not linkify weak signals or unsupported path:line:column values', () => {
     const html = linkifyPlainTextSegment(
       'Ignore foo/bar, 123:456, abc:def, com.example.api and E:\\project\\Foo.java:42:15',

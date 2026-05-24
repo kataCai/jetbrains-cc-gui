@@ -23,6 +23,8 @@ import com.intellij.util.concurrency.AppExecutorUtil;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -57,7 +59,9 @@ class OpenFileHandler {
         CompletableFuture.runAsync(() -> {
             try {
                 LineInfo lineInfo = parseLineInfo(filePath);
-                String actualPath = lineInfo.actualPath();
+                // JCEF/DOM may normalize Unicode href values into percent-encoded strings.
+                // Decode only the file-path portion so navigation uses the original local path.
+                String actualPath = decodeNavigationPathIfNeeded(lineInfo.actualPath());
                 int lineNumber = lineInfo.lineNumber();
                 int endLineNumber = lineInfo.endLineNumber();
 
@@ -132,6 +136,23 @@ class OpenFileHandler {
         } catch (NumberFormatException e) {
             LOG.warn("Failed to parse line number: " + filePath);
             return new LineInfo(filePath, -1, -1, false);
+        }
+    }
+
+    static String decodeNavigationPathIfNeeded(String path) {
+        if (path == null || path.isBlank() || !path.contains("%")) {
+            return path;
+        }
+
+        try {
+            String decodedPath = URLDecoder.decode(path, StandardCharsets.UTF_8.name());
+            return decodedPath == null || decodedPath.isBlank() ? path : decodedPath;
+        } catch (IllegalArgumentException e) {
+            LOG.warn("Failed to decode navigation path, fallback to original: " + path);
+            return path;
+        } catch (Exception e) {
+            LOG.warn("Unexpected navigation path decode failure, fallback to original: " + path);
+            return path;
         }
     }
 

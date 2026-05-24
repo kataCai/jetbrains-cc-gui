@@ -191,6 +191,23 @@ describe('MarkdownBlock linkify integration', () => {
   });
 
   /**
+   * 验证包含中文的文件路径点击时，会把原始未编码路径传给 openFile。
+   * 断言意图：避免 DOM/JCEF 将 href 规范化为百分号编码后，桥接层收到错误路径。
+   */
+  it('dispatches raw unicode file paths instead of encoded href values', () => {
+    const rawPath = '/Users/demo/notes/2026-05-23-Hermes使用教程与飞书接入指南.md';
+
+    render(<MarkdownBlock content={`Open ${rawPath}`} />);
+
+    const fileLink = screen.getByRole('link', { name: rawPath });
+    expect(fileLink.getAttribute('data-linkify')).toBe('file');
+
+    fireEvent.click(fileLink);
+
+    expect(bridgeMocks.openFile).toHaveBeenCalledWith(rawPath);
+  });
+
+  /**
    * 验证 streaming 阶段与 final 阶段的链接行为保持一致。
    * 断言意图：避免流式阶段能点、收尾后不能点，或者反过来只在最终态生效。
    */

@@ -28,11 +28,35 @@ interface RankedMatch extends LinkifyMatch {
 }
 
 const URL_REGEX = /https?:\/\/[^\s<>()]+[^\s<>().,!?;:'")\]]/g;
-const WINDOWS_ABSOLUTE_PATH_REGEX = /[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n\s]+\\)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?!:\d)/g;
-const POSIX_ABSOLUTE_PATH_REGEX = /\/(?:[^/\s]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?!:\d)/g;
-const EXPLICIT_RELATIVE_PATH_REGEX = /(?:\.\/|(?:\.\.\/)+)(?:[^/\s]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?!:\d)/g;
-const PROJECT_RELATIVE_PATH_REGEX = /(?:[A-Za-z0-9_-]+\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?!:\d)/g;
-const FILE_WITH_LINE_REGEX = /(?:[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n\s]+\\)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+|\/(?:[^/\s]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+|(?:\.\/|(?:\.\.\/)+)(?:[^/\s]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+|(?:[A-Za-z0-9_-]+\/)(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+|[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+):\d+(?:-\d+)?(?!:\d)/g;
+const WINDOWS_PATH_SEGMENT = '[^\\\\/:*?"<>|\\r\\n\\s]+';
+const POSIX_PATH_SEGMENT = '[^/\\s<>:"|?*]+';
+const FILE_NAME_WITH_EXTENSION = '[^/\\\\\\s<>:"|?*]+\\.[A-Za-z0-9._-]+';
+const WINDOWS_ABSOLUTE_PATH_REGEX = new RegExp(
+  `[A-Za-z]:\\\\(?:${WINDOWS_PATH_SEGMENT}\\\\)*${FILE_NAME_WITH_EXTENSION}(?!:\\d)`,
+  'g',
+);
+const POSIX_ABSOLUTE_PATH_REGEX = new RegExp(
+  `\\/(?:${POSIX_PATH_SEGMENT}\\/)*${FILE_NAME_WITH_EXTENSION}(?!:\\d)`,
+  'g',
+);
+const EXPLICIT_RELATIVE_PATH_REGEX = new RegExp(
+  `(?:\\.\\/|(?:\\.\\.\\/)+)(?:${POSIX_PATH_SEGMENT}\\/)*${FILE_NAME_WITH_EXTENSION}(?!:\\d)`,
+  'g',
+);
+const PROJECT_RELATIVE_PATH_REGEX = new RegExp(
+  `(?:${POSIX_PATH_SEGMENT}\\/)(?:${POSIX_PATH_SEGMENT}\\/)*${FILE_NAME_WITH_EXTENSION}(?!:\\d)`,
+  'g',
+);
+const FILE_WITH_LINE_REGEX = new RegExp(
+  `(?:` +
+    `[A-Za-z]:\\\\(?:${WINDOWS_PATH_SEGMENT}\\\\)*${FILE_NAME_WITH_EXTENSION}` +
+    `|\\/(?:${POSIX_PATH_SEGMENT}\\/)*${FILE_NAME_WITH_EXTENSION}` +
+    `|(?:\\.\\/|(?:\\.\\.\\/)+)(?:${POSIX_PATH_SEGMENT}\\/)*${FILE_NAME_WITH_EXTENSION}` +
+    `|(?:${POSIX_PATH_SEGMENT}\\/)(?:${POSIX_PATH_SEGMENT}\\/)*${FILE_NAME_WITH_EXTENSION}` +
+    `|[A-Za-z0-9._-]+\\.[A-Za-z0-9._-]+` +
+  `):\\d+(?:-\\d+)?(?!:\\d)`,
+  'g',
+);
 const JAVA_FQCN_REGEX = /[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*/g;
 const FILE_LINE_INFO_REGEX = /^(.*):(\d+)(?:-(\d+))?$/;
 const HTTP_LINK_REGEX = /^(https?:|mailto:)/i;
@@ -293,6 +317,7 @@ function getDetectors(includeUrls: boolean): ReadonlyArray<Detector> {
 function createLinkElement(document: Document, match: LinkifyMatch): HTMLAnchorElement {
   const anchor = document.createElement('a');
   anchor.setAttribute('href', match.value);
+  anchor.setAttribute('data-raw-href', match.value);
   anchor.setAttribute('data-linkify', match.type);
   anchor.classList.add(`${match.type}-link`);
   anchor.textContent = match.value;
@@ -301,7 +326,7 @@ function createLinkElement(document: Document, match: LinkifyMatch): HTMLAnchorE
 
 function buildAnchorHtml(match: LinkifyMatch): string {
   const escapedValue = escapeHtml(match.value);
-  return `<a class="${match.type}-link" data-linkify="${match.type}" href="${escapedValue}">${escapedValue}</a>`;
+  return `<a class="${match.type}-link" data-linkify="${match.type}" data-raw-href="${escapedValue}" href="${escapedValue}">${escapedValue}</a>`;
 }
 
 function findNextMatch(
