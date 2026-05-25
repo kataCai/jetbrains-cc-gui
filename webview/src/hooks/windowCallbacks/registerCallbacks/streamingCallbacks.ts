@@ -16,7 +16,8 @@ import { getStreamEndHandlingMode } from '../messageSync';
 /**
  * 检测 streaming 卡死的超时时间。
  * 如果在该时长内既没有 delta，也没有 streaming heartbeat/updateMessages，
- * 则认为后端的 onStreamEnd 可能丢失，前端主动触发一次恢复性收口。
+ * 则认为后端的 onStreamEnd 可能丢失，前端只做一次本地恢复性收口。
+ * 这里不能再把 watchdog 超时升级成 completed 语义，否则会再次制造误报。
  */
 const STREAM_STALL_TIMEOUT_MS = 60_000;
 const STREAM_STALL_CHECK_INTERVAL_MS = 5_000;
@@ -69,12 +70,22 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       const elapsed = Date.now() - (window.__lastStreamActivityAt ?? 0);
       if (elapsed >= STREAM_STALL_TIMEOUT_MS) {
         console.warn(
-          `[StreamWatchdog] Stream stalled for ${elapsed}ms — forcing stream-end recovery`,
+          `[StreamWatchdog] Stream stalled for ${elapsed}ms — performing local recovery only`,
         );
         clearStallWatchdog();
-        if (typeof window.onStreamEnd === 'function') {
-          window.onStreamEnd();
-        }
+        // watchdog 只负责恢复前端本地 streaming/loading/thinking 状态，
+        // 不能再复用 onStreamEnd 去间接制造 completed 语义。
+        isStreamingRef.current = false;
+        useBackendStreamingRenderRef.current = false;
+        streamingMessageIndexRef.current = -1;
+        streamingTurnIdRef.current = -1;
+        streamingContentRef.current = '';
+        streamingThinkingRef.current = '';
+        autoExpandedThinkingKeysRef.current.clear();
+        setStreamingActive(false);
+        setLoading(false);
+        setLoadingStartTime(null);
+        setIsThinking(false);
       }
     }, STREAM_STALL_CHECK_INTERVAL_MS);
   };
@@ -215,10 +226,16 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
     clearStallWatchdog();
     const parsedSequence = parseSequence(sequence);
+    console.info(
+      '[TaskLifecycle] eventType=stream_end_ui'
+        + ` sequence=${parsedSequence ?? -1}`
+        + ` turnId=${currentTurnId}`
+        + ` handlingMode=${handlingMode}`
+        + ` isStreaming=${isStreamingRef.current}`,
+    );
     if (parsedSequence != null && parsedSequence >= 0) {
       window.__minAcceptedUpdateSequence = Math.max(window.__minAcceptedUpdateSequence ?? 0, parsedSequence);
     }
-    sendBridgeEvent('tab_status_changed', JSON.stringify({ status: 'completed' }));
 
     if (handlingMode === 'minimal') {
       if (typeof window.__cancelPendingUpdateMessages === 'function') {
@@ -356,6 +373,16 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     setLoadingStartTime(null);
     setIsThinking(false);
     window.__streamEndProcessedTurnId = endedStreamingTurnId > 0 ? endedStreamingTurnId : undefined;
+  };
+
+  /**
+   * 任务真正完成时由后端显式调用。
+   * 这里单独上报 completed，避免继续复用 onStreamEnd 导致 turn 级结束误报为任务完成。
+   */
+  window.onTaskCompleted = () => {
+    if (window.__sessionTransitioning) return;
+    console.info('[TaskLifecycle] eventType=task_completed_ui');
+    sendBridgeEvent('tab_status_changed', JSON.stringify({ status: 'completed' }));
   };
 
   window.onStreamingHeartbeat = () => {

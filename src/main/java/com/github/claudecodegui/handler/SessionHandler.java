@@ -483,6 +483,14 @@ public class SessionHandler extends BaseMessageHandler {
     private void notifySendStarted(String preferredTaskSummary) {
         if (taskStateService != null) {
             taskStateService.onSendStarted(getSessionId());
+            LOG.info(
+                "[TaskLifecycle] eventType=send_started"
+                    + ", eventSource=SessionHandler.notifySendStarted"
+                    + ", provider=" + context.getSession().getProvider()
+                    + ", sessionId=" + getSessionId()
+                    + ", taskState=" + taskStateService.getCurrentSnapshot().getState().getValue()
+                    + ", summary=" + (preferredTaskSummary != null ? preferredTaskSummary : "(none)")
+            );
             dispatchTaskReminder(false, preferredTaskSummary);
             publishRemoteTaskEvent(preferredTaskSummary);
         }
@@ -518,12 +526,24 @@ public class SessionHandler extends BaseMessageHandler {
                 dispatchTaskReminder(false);
             }
             taskStateService.onSendCompleted(sessionId);
+            LOG.info(
+                "[TaskLifecycle] eventType=task_completed"
+                    + ", eventSource=SessionHandler.notifySendCompleted"
+                    + ", provider=" + (session != null ? session.getProvider() : "(none)")
+                    + ", sessionId=" + sessionId
+                    + ", taskState=" + taskStateService.getCurrentSnapshot().getState().getValue()
+                    + ", busy=" + (session != null && session.getState() != null && session.getState().isBusy())
+                    + ", loading=" + (session != null && session.getState() != null && session.getState().isLoading())
+            );
             dispatchTaskReminder(false);
             publishRemoteTaskEvent(null);
             if (session != null) {
                 session.getState().clearLastRecoveryMetadata();
             }
         }
+        // completed 只允许由 send 最终成功收口时显式触发，
+        // 不能再借道 stream_end / onStreamEnd 等 turn 级信号回推。
+        context.callJavaScript("onTaskCompleted");
     }
 
     private void notifySendFailed(Throwable throwable) {
@@ -544,6 +564,14 @@ public class SessionHandler extends BaseMessageHandler {
                 // 失败原因尽量沿用真实异常，方便前端弹窗、状态栏和日志看到同一份上下文。
                 taskStateService.onSendFailed(getSessionId(), reason);
             }
+            LOG.info(
+                "[TaskLifecycle] eventType=task_failed"
+                    + ", eventSource=SessionHandler.notifySendFailed"
+                    + ", provider=" + context.getSession().getProvider()
+                    + ", sessionId=" + getSessionId()
+                    + ", taskState=" + taskStateService.getCurrentSnapshot().getState().getValue()
+                    + ", reason=" + reason
+            );
             dispatchTaskReminder(false);
             publishRemoteTaskEvent(null);
         }

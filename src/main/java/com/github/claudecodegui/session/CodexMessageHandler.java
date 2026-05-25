@@ -152,6 +152,15 @@ public class CodexMessageHandler implements MessageCallback {
     public void onComplete(SDKResult result) {
         boolean streamEndedBeforeComplete = streamEndedThisTurn;
         boolean wasStreaming = isStreaming;
+        LOG.info(
+            "[CodexLifecycle] eventType=send_complete"
+                + ", eventSource=CodexMessageHandler.onComplete"
+                + ", sessionId=" + (state.getSessionId() != null ? state.getSessionId() : "(none)")
+                + ", streamEndedBeforeComplete=" + streamEndedBeforeComplete
+                + ", wasStreaming=" + wasStreaming
+                + ", busyBefore=" + state.isBusy()
+                + ", loadingBefore=" + state.isLoading()
+        );
 
         isStreaming = false;
         streamEndedThisTurn = false;
@@ -755,6 +764,14 @@ public class CodexMessageHandler implements MessageCallback {
             return;
         }
 
+        LOG.info(
+            "[CodexLifecycle] eventType=stream_end"
+                + ", eventSource=CodexMessageHandler.handleStreamEnd"
+                + ", sessionId=" + (state.getSessionId() != null ? state.getSessionId() : "(none)")
+                + ", busyBefore=" + state.isBusy()
+                + ", loadingBefore=" + state.isLoading()
+                + ", messageCount=" + state.getMessages().size()
+        );
         isStreaming = false;
         streamEndedThisTurn = true;
         callbackHandler.notifyMessageUpdate(state.getMessages());
@@ -773,7 +790,14 @@ public class CodexMessageHandler implements MessageCallback {
      * @since 1.0.0
      */
     private void handleMessageEnd() {
-        LOG.debug("Codex message_end received, deferring stream cleanup to stream_end/onComplete");
+        LOG.info(
+            "[CodexLifecycle] eventType=message_end"
+                + ", eventSource=CodexMessageHandler.handleMessageEnd"
+                + ", sessionId=" + (state.getSessionId() != null ? state.getSessionId() : "(none)")
+                + ", isStreaming=" + isStreaming
+                + ", busy=" + state.isBusy()
+                + ", loading=" + state.isLoading()
+        );
     }
 
     /**

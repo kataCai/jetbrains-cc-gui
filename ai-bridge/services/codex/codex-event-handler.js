@@ -743,9 +743,6 @@ export async function processCodexEventStream(events, state, config) {
           });
           console.log('[DEBUG] Emitted usage statistics (Claude-compatible format):', claudeUsage);
         }
-        if (typeof config.onTurnCompleted === 'function') {
-          config.onTurnCompleted(event, state);
-        }
         break;
       }
 
@@ -759,9 +756,6 @@ export async function processCodexEventStream(events, state, config) {
         if (state.commandApprovalAbortRequested && /aborted|abort|cancel|interrupt/i.test(errorMsg)) {
           logInfo('PERM_DEBUG', `Ignore turn.failed after command denial abort: ${errorMsg}`);
           break;
-        }
-        if (typeof config.onTurnFailed === 'function') {
-          config.onTurnFailed(event, state);
         }
         console.error('[DEBUG] Turn failed:', errorMsg);
         throw new Error(errorMsg);
@@ -777,9 +771,6 @@ export async function processCodexEventStream(events, state, config) {
         if (state.commandApprovalAbortRequested && /aborted|abort|cancel|interrupt/i.test(generalError)) {
           logInfo('PERM_DEBUG', `Ignore error event after command denial abort: ${generalError}`);
           break;
-        }
-        if (typeof config.onTurnFailed === 'function') {
-          config.onTurnFailed(event, state);
         }
         console.error('[DEBUG] Codex error:', generalError);
         throw new Error(generalError);

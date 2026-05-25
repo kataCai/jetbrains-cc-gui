@@ -251,13 +251,10 @@ export async function sendMessage(
         threadId,
         threadOptions,
         normalizedPermissionMode,
-        turnAbortController,
-        onTurnCompleted: emitStreamEndOnce,
-        onTurnFailed: emitStreamEndOnce
+        turnAbortController
       };
 
       await processCodexEventStream(events, state, config);
-      emitStreamEndOnce();
 
       // ============================================================
       // 8. Completion Phase
@@ -291,6 +288,9 @@ export async function sendMessage(
 
       state.messageEndObserved = true;
       console.log('[MESSAGE_END]');
+      // 这里将 STREAM_END 收窄为“本次 sendMessage 真正收口完成”，
+      // 避免 turn.completed 在事件处理中提前制造任务结束语义。
+      emitStreamEndOnce();
       console.log(JSON.stringify({
         success: true,
         threadId: state.currentThreadId,

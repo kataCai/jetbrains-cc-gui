@@ -692,4 +692,80 @@ describe('useWindowCallbacks integration', () => {
       expect(window.__streamEndProcessedTurnId).toBeUndefined();
     });
   });
+
+  describe('streaming completed semantics', () => {
+    it('onStreamEnd only closes local streaming UI and no longer reports completed bridge event', () => {
+      const opts = createOptions({
+        isStreamingRef: { current: true },
+        streamingMessageIndexRef: { current: 0 },
+      });
+      renderHook(() => useWindowCallbacks(opts));
+
+      const previousMessages: ClaudeMessage[] = [
+        {
+          type: 'assistant',
+          content: 'partial answer',
+          timestamp: '2026-05-25T10:00:00.000Z',
+          isStreaming: true,
+          __turnId: 1,
+        },
+      ];
+
+      act(() => {
+        window.onStreamStart?.();
+        window.onContentDelta?.(' final');
+        // 中文注释：测试环境里的 setMessages 是 mock，不会真正执行 onStreamStart 的 updater，
+        // 这里手动补齐当前流式消息索引，确保 onStreamEnd 走到真实收口分支。
+        opts.streamingMessageIndexRef.current = 0;
+        window.onStreamEnd?.('12');
+      });
+
+      expect(window.sendToJava).not.toHaveBeenCalledWith(
+        'tab_status_changed:{"status":"completed"}',
+      );
+      expect(opts.setStreamingActive).toHaveBeenCalledWith(false);
+      expect(opts.setLoading).toHaveBeenCalledWith(false);
+      expect(opts.setLoadingStartTime).toHaveBeenCalledWith(null);
+      expect(opts.setIsThinking).toHaveBeenCalledWith(false);
+
+      const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as
+        | ((messages: ClaudeMessage[]) => ClaudeMessage[])
+        | undefined;
+      expect(updater).toBeTypeOf('function');
+      const nextMessages = updater!(previousMessages);
+      expect(nextMessages[0]).toMatchObject({
+        type: 'assistant',
+        content: ' final',
+        isStreaming: false,
+        __turnId: 1,
+      });
+    });
+
+    it('stall watchdog timeout only performs local recovery and does not report completed bridge event', () => {
+      vi.useFakeTimers();
+      const opts = createOptions();
+      renderHook(() => useWindowCallbacks(opts));
+
+      act(() => {
+        window.onStreamStart?.();
+      });
+
+      expect(opts.isStreamingRef.current).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(65_000);
+      });
+
+      expect(window.sendToJava).not.toHaveBeenCalledWith(
+        'tab_status_changed:{"status":"completed"}',
+      );
+      expect(opts.setStreamingActive).toHaveBeenCalledWith(false);
+      expect(opts.setLoading).toHaveBeenCalledWith(false);
+      expect(opts.setLoadingStartTime).toHaveBeenCalledWith(null);
+      expect(opts.setIsThinking).toHaveBeenCalledWith(false);
+      expect(opts.isStreamingRef.current).toBe(false);
+
+      vi.useRealTimers();
+    });
+  });
 });

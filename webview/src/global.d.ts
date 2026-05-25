@@ -608,6 +608,11 @@ interface Window {
   onStreamEnd?: (sequence?: string | number) => void;
 
   /**
+   * Task completed callback - called only after the backend confirms the whole send lifecycle completed.
+   */
+  onTaskCompleted?: () => void;
+
+  /**
    * Streaming heartbeat callback - lightweight signal from backend during
    * tool execution phases to prevent the stall watchdog from falsely triggering.
    */

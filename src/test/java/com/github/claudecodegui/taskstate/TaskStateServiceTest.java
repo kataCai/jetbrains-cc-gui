@@ -72,4 +72,18 @@ public class TaskStateServiceTest {
         assertEquals(TaskState.RECOVERED, service.getCurrentSnapshot().getState());
         assertEquals("runtime_terminated_after_success", service.getCurrentSnapshot().getLatestEvent().getReason());
     }
+
+    @Test
+    public void shouldNotPromoteRecoveredStateToCompletedWithoutExplicitSendCompleted() {
+        TaskStateService service = new TaskStateService();
+
+        service.onSendStarted("session-recovery");
+        service.onRecovered("session-recovery", "runtime_terminated_after_success");
+
+        // recovered 只是中间恢复态；只有显式 onSendCompleted 才能进入最终 completed。
+        assertEquals(TaskState.RECOVERED, service.getCurrentSnapshot().getState());
+
+        service.onSendCompleted("session-recovery");
+        assertEquals(TaskState.COMPLETED, service.getCurrentSnapshot().getState());
+    }
 }

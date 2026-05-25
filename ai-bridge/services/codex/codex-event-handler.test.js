@@ -81,3 +81,69 @@ test('Codex item.updated agent_message emits incremental content deltas before c
     },
   });
 });
+
+test('Codex turn.completed keeps usage emission but must not trigger outer stream-end callback', async () => {
+  const emittedMessages = [];
+  const state = createInitialEventState((message) => emittedMessages.push(message));
+  let turnCompletedCallbackCount = 0;
+
+  await processCodexEventStream(
+    eventsFrom([
+      {
+        type: 'thread.started',
+        thread_id: 'thread-1',
+      },
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 11,
+          output_tokens: 7,
+          cached_input_tokens: 3,
+        },
+      },
+    ]),
+    state,
+    {
+      ...makeConfig(),
+      onTurnCompleted: () => {
+        turnCompletedCallbackCount += 1;
+      },
+    },
+  );
+
+  assert.equal(turnCompletedCallbackCount, 0);
+  assert.equal(emittedMessages.length, 1);
+  assert.equal(emittedMessages[0].type, 'result');
+  assert.deepEqual(emittedMessages[0].usage, {
+    input_tokens: 11,
+    output_tokens: 7,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 3,
+  });
+});
+
+test('Codex turn.failed must throw without triggering outer stream-end callback early', async () => {
+  const state = createInitialEventState(() => {});
+  let turnFailedCallbackCount = 0;
+
+  await assert.rejects(
+    processCodexEventStream(
+      eventsFrom([
+        {
+          type: 'turn.failed',
+          error: { message: 'simulated failure' },
+        },
+      ]),
+      state,
+      {
+        ...makeConfig(),
+        onTurnFailed: () => {
+          turnFailedCallbackCount += 1;
+        },
+      },
+    ),
+    /simulated failure/,
+  );
+
+  assert.equal(turnFailedCallbackCount, 0);
+});

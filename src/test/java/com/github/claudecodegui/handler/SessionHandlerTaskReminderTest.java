@@ -251,22 +251,53 @@ public class SessionHandlerTaskReminderTest {
         }
     }
 
+    @Test
+    public void shouldNotifyFrontendTaskCompletedWhenSendCompletes() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-task-completed-js-test");
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-task-completed", projectDir.toString());
+            RecordingJsCallback jsCallback = new RecordingJsCallback();
+
+            HandlerContext context = createContext(projectDir, session, jsCallback);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            java.lang.reflect.Method method = SessionHandler.class.getDeclaredMethod("notifySendCompleted");
+            method.setAccessible(true);
+            method.invoke(handler);
+
+            assertTrue(jsCallback.functionNames.contains("onTaskCompleted"));
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
     private static HandlerContext createContext(Path projectDir, ClaudeSession session) {
+        return createContext(projectDir, session, new RecordingJsCallback());
+    }
+
+    private static HandlerContext createContext(
+        Path projectDir,
+        ClaudeSession session,
+        HandlerContext.JsCallback jsCallback
+    ) {
         HandlerContext context = new HandlerContext(
             createProject(projectDir),
             new FixedNodeClaudeSDKBridge(),
             new CodexSDKBridge(),
             null,
-            new HandlerContext.JsCallback() {
-                @Override
-                public void callJavaScript(String functionName, String... args) {
-                }
-
-                @Override
-                public String escapeJs(String str) {
-                    return str;
-                }
-            }
+            jsCallback
         );
         context.setSession(session);
         return context;
@@ -300,6 +331,20 @@ public class SessionHandlerTaskReminderTest {
         @Override
         public String getCachedNodeVersion() {
             return "18.0.0";
+        }
+    }
+
+    private static class RecordingJsCallback implements HandlerContext.JsCallback {
+        private final List<String> functionNames = new ArrayList<>();
+
+        @Override
+        public void callJavaScript(String functionName, String... args) {
+            functionNames.add(functionName);
+        }
+
+        @Override
+        public String escapeJs(String str) {
+            return str;
         }
     }
 

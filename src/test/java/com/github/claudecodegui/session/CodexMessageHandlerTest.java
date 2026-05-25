@@ -293,4 +293,25 @@ public class CodexMessageHandlerTest {
         assertFalse(state.isBusy());
         assertFalse(state.isLoading());
     }
+
+    @Test
+    public void messageEndAloneMustNotFinalizeBusyLoadingOrEmitStreamEnd() {
+        SessionState state = new SessionState();
+        state.setBusy(true);
+        state.setLoading(true);
+
+        CallbackHandler callbackHandler = new CallbackHandler();
+        RecordingCallback callback = new RecordingCallback();
+        callbackHandler.setCallback(callback);
+
+        CodexMessageHandler handler = new CodexMessageHandler(state, callbackHandler);
+        handler.onMessage("stream_start", "");
+        handler.onMessage("content_delta", "answer");
+        handler.onMessage("message_end", "");
+
+        // message_end 只是结构边界，不得单独把 turn 收口为 completed/stream_end。
+        assertEquals(0, callback.streamEndCount);
+        assertTrue(state.isBusy());
+        assertTrue(state.isLoading());
+    }
 }
