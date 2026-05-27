@@ -556,6 +556,101 @@ public class TaskReminderDispatcherTest {
         assertEquals("Fix the current reminder summary behavior", systemNotifier.messages.get(0));
     }
 
+    /**
+     * 验证 completed 分发阶段如果聊天区已经出现 completion task-notification summary，
+     * 本地 system reminder 必须优先复用这条最终总结，而不是继续沿用较早的 user message 或 session summary。
+     * 该用例直接覆盖本次改造目标，确保聊天区展示与本地提醒链路在 completed 场景下保持一致。
+     */
+    @Test
+    public void shouldPreferCompletionTaskNotificationSummaryForSystemReminderWhenCompleted() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        ClaudeSession session = sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "Old user task summary"
+        );
+        session.getState().addMessage(completedTaskNotificationMessage("Completed summary from chat area"));
+        context.setSession(session);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-completed-summary", "req-completed-summary", "send_completed"), false);
+
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("Old session title", systemNotifier.notificationTitles.get(0));
+        assertEquals("Completed summary from chat area", systemNotifier.messages.get(0));
+        assertEquals(0, balloonNotifier.callCount.get());
+        assertEquals(0, soundCalls.get());
+    }
+
+    /**
+     * 验证即使 dispatcher 已在同一轮较早状态缓存过旧摘要，
+     * completed 阶段只要聊天区已经出现 completion task-notification summary，
+     * 最终 system reminder 仍应被 payload factory 覆盖为这条最新完成总结。
+     * 该场景直接防止 completed 提醒继续复用 WAITING_CONFIRM 阶段留下的旧 task summary。
+     */
+    @Test
+    public void shouldOverrideCachedTaskSummaryWithCompletionTaskNotificationSummaryWhenCompleted() {
+        CapturingHandlerContext context = new CapturingHandlerContext();
+        ClaudeSession session = sessionWithSummaryAndUserMessage(
+            "Old session title",
+            "Old user task summary"
+        );
+        context.setSession(session);
+        RecordingBalloonNotifier balloonNotifier = new RecordingBalloonNotifier();
+        RecordingSystemReminderNotifier systemNotifier = new RecordingSystemReminderNotifier();
+        AtomicInteger soundCalls = new AtomicInteger();
+        TaskReminderPolicy policy = new TaskReminderPolicy(
+            java.util.EnumSet.of(TaskState.WAITING_CONFIRM),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.noneOf(TaskState.class),
+            java.util.EnumSet.of(TaskState.COMPLETED),
+            java.util.EnumSet.noneOf(TaskState.class),
+            false,
+            true,
+            true,
+            true,
+            true
+        );
+        TaskReminderDispatcher dispatcher = new TaskReminderDispatcher(
+            context,
+            policy,
+            balloonNotifier,
+            systemNotifier,
+            state -> soundCalls.incrementAndGet(),
+            () -> false
+        );
+
+        dispatcher.dispatch(snapshot(TaskState.WAITING_CONFIRM, "session-completed-summary-cache", "req-cache-1", "plan_approval_requested"), false);
+        session.getState().addMessage(completedTaskNotificationMessage("Completed summary from chat area"));
+
+        dispatcher.dispatch(snapshot(TaskState.COMPLETED, "session-completed-summary-cache", "req-cache-2", "send_completed"), false);
+
+        assertEquals(1, context.executedJs.size());
+        assertEquals(1, systemNotifier.callCount.get());
+        assertEquals("Completed summary from chat area", systemNotifier.messages.get(0));
+    }
+
     @Test
     public void shouldDedupeSystemReminderForSameSnapshot() {
         CapturingHandlerContext context = new CapturingHandlerContext();
@@ -666,6 +761,48 @@ public class TaskReminderDispatcherTest {
         message.add("content", content);
         raw.add("message", message);
         return new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "[tool_result]", raw);
+    }
+
+    /**
+     * 构造 completed task-notification 消息，模拟聊天区已经展示的统一完成总结。
+     * Dispatcher 测试通过这条消息验证 completed 本地提醒是否复用了聊天区同一份 summary。
+     *
+     * @param summary 聊天区最终展示的 completion summary
+     * @return 挂有 task-notification raw 的用户消息
+     */
+    private static ClaudeSession.Message completedTaskNotificationMessage(String summary) {
+        return new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "<task-notification><status>completed</status><summary>" + summary + "</summary></task-notification>",
+            taskNotificationRaw("completed", summary)
+        );
+    }
+
+    /**
+     * 构造最小 task-notification raw，保持与当前通知链路解析所依赖的数据结构一致。
+     *
+     * @param status task-notification 状态
+     * @param summary task-notification summary 内容
+     * @return 可挂到消息对象上的 raw JSON
+     */
+    private static com.google.gson.JsonObject taskNotificationRaw(String status, String summary) {
+        com.google.gson.JsonObject raw = new com.google.gson.JsonObject();
+        com.google.gson.JsonObject origin = new com.google.gson.JsonObject();
+        origin.addProperty("kind", "task-notification");
+        raw.add("origin", origin);
+
+        com.google.gson.JsonObject message = new com.google.gson.JsonObject();
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        com.google.gson.JsonObject block = new com.google.gson.JsonObject();
+        block.addProperty("type", "text");
+        block.addProperty(
+            "text",
+            "<task-notification><status>" + status + "</status><summary>" + summary + "</summary></task-notification>"
+        );
+        content.add(block);
+        message.add("content", content);
+        raw.add("message", message);
+        return raw;
     }
 
     /**

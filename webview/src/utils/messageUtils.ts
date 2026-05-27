@@ -119,6 +119,13 @@ function extractTextsFromRaw(raw: ClaudeRawMessage | string | undefined): string
 export function isTaskNotificationOnlyMessage(message: ClaudeMessage): boolean {
   if (message.type !== 'user') return false;
 
+  if (message.raw && typeof message.raw === 'object') {
+    const origin = (message.raw as { origin?: { kind?: string } }).origin;
+    if (origin?.kind === 'task-notification') {
+      return true;
+    }
+  }
+
   // Check raw content structures for task-notification tag
   const rawTexts = extractTextsFromRaw(message.raw);
   if (rawTexts.some(hasTaskNotificationTag)) return true;

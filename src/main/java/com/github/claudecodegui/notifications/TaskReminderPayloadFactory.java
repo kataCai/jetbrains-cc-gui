@@ -2,6 +2,7 @@ package com.github.claudecodegui.notifications;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.taskstate.TaskState;
 import com.github.claudecodegui.taskstate.TaskStateSnapshot;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -70,6 +71,7 @@ public class TaskReminderPayloadFactory {
             context != null ? context.getSession() : null,
             context != null ? context.getProject() : null,
             sessionId,
+            snapshot != null ? snapshot.getState() : null,
             fallbackMessage,
             preferredTaskSummary
         );
@@ -112,6 +114,7 @@ public class TaskReminderPayloadFactory {
             context != null ? context.getSession() : null,
             context != null ? context.getProject() : null,
             sessionId,
+            snapshot != null ? snapshot.getState() : null,
             fallbackMessage,
             preferredTaskSummary
         );
@@ -132,10 +135,18 @@ public class TaskReminderPayloadFactory {
         ClaudeSession session,
         Project project,
         String sessionId,
+        TaskState state,
         String fallbackMessage,
         String preferredTaskSummary
     ) {
         String explicitSummary = sanitizeHeadlineAndTruncate(preferredTaskSummary);
+        String completionTaskNotificationSummary = sanitizeHeadlineAndTruncate(
+            findLatestCompletionTaskNotificationSummary(session, state)
+        );
+        if (hasText(completionTaskNotificationSummary)) {
+            return completionTaskNotificationSummary;
+        }
+
         if (hasText(explicitSummary)) {
             return explicitSummary;
         }
@@ -193,6 +204,51 @@ public class TaskReminderPayloadFactory {
             }
         }
         return null;
+    }
+
+    /**
+     * 仅在 completed 场景扫描聊天区最近的 completion task-notification summary，
+     * 让本地提醒优先复用聊天区最终展示的完成总结，避免回退到更早的 user message 或 session summary。
+     *
+     * @param session 当前会话
+     * @param state 当前提醒状态
+     * @return 最近一条 completion task-notification 的 summary；不存在时返回 null
+     */
+    private String findLatestCompletionTaskNotificationSummary(ClaudeSession session, TaskState state) {
+        if (session == null || state != TaskState.COMPLETED) {
+            return null;
+        }
+        List<ClaudeSession.Message> messages = session.getMessages();
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            String summary = extractCompletionTaskNotificationSummary(messages.get(i));
+            if (hasText(summary)) {
+                return summary;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从单条消息中提取 completion task-notification summary。
+     * 只有 raw 显式标记为 task-notification 且 status=completed 时才视为可复用的完成总结，
+     * 防止普通 XML 文本或其他状态消息误进入 completed 提醒正文。
+     *
+     * @param message 待解析的会话消息
+     * @return completion task-notification summary；不匹配时返回 null
+     */
+    private String extractCompletionTaskNotificationSummary(ClaudeSession.Message message) {
+        if (message == null || message.raw == null || !isTaskNotificationRaw(message.raw)) {
+            return null;
+        }
+        String rawText = extractLastTextBlock(message.raw);
+        if (!hasText(rawText)) {
+            return null;
+        }
+        String status = extractXmlTagValue(rawText, "status");
+        if (!"completed".equals(status)) {
+            return null;
+        }
+        return extractXmlTagValue(rawText, "summary");
     }
 
     /**
@@ -260,6 +316,84 @@ public class TaskReminderPayloadFactory {
             hasVisibleContent = true;
         }
         return hasToolResult && !hasVisibleContent;
+    }
+
+    /**
+     * 判断 raw 是否来自 task-notification。
+     * 当前链路依赖 origin.kind 的显式标记，避免把普通消息正文误判成 completion summary。
+     *
+     * @param raw 消息 raw JSON
+     * @return true 表示该 raw 为 task-notification
+     */
+    private static boolean isTaskNotificationRaw(JsonObject raw) {
+        if (raw == null || !raw.has("origin") || !raw.get("origin").isJsonObject()) {
+            return false;
+        }
+        JsonObject origin = raw.getAsJsonObject("origin");
+        return origin.has("kind")
+            && !origin.get("kind").isJsonNull()
+            && "task-notification".equals(origin.get("kind").getAsString());
+    }
+
+    /**
+     * 提取 raw.message.content 中最后一个 text block 文本。
+     * completion task-notification 当前通过 text block 承载 XML 内容，这里保持最小解析实现即可。
+     *
+     * @param raw 消息 raw JSON
+     * @return 最后一个 text block 的文本；不存在时返回 null
+     */
+    private static String extractLastTextBlock(JsonObject raw) {
+        if (raw == null) {
+            return null;
+        }
+        JsonElement content = raw.has("content") ? raw.get("content") : null;
+        if ((content == null || !content.isJsonArray()) && raw.has("message") && raw.get("message").isJsonObject()) {
+            JsonObject rawMessage = raw.getAsJsonObject("message");
+            content = rawMessage.has("content") ? rawMessage.get("content") : null;
+        }
+        if (content == null || !content.isJsonArray()) {
+            return null;
+        }
+
+        JsonArray contentArray = content.getAsJsonArray();
+        String lastText = null;
+        for (JsonElement element : contentArray) {
+            if (element == null || !element.isJsonObject()) {
+                continue;
+            }
+            JsonObject block = element.getAsJsonObject();
+            if (block.has("type")
+                && !block.get("type").isJsonNull()
+                && "text".equals(block.get("type").getAsString())
+                && block.has("text")
+                && !block.get("text").isJsonNull()) {
+                lastText = block.get("text").getAsString();
+            }
+        }
+        return lastText;
+    }
+
+    /**
+     * 从 task-notification XML 文本中提取指定标签值。
+     * 这里只做最小字符串查找，足以支撑当前 completed 提醒摘要的 status/summary 读取需求。
+     *
+     * @param rawText 包含 task-notification XML 的文本
+     * @param tagName 目标标签名
+     * @return 标签内容；不存在或为空时返回 null
+     */
+    private static String extractXmlTagValue(String rawText, String tagName) {
+        if (!hasText(rawText) || !hasText(tagName)) {
+            return null;
+        }
+        String startTag = "<" + tagName + ">";
+        String endTag = "</" + tagName + ">";
+        int start = rawText.indexOf(startTag);
+        int end = rawText.indexOf(endTag);
+        if (start < 0 || end <= start) {
+            return null;
+        }
+        String value = rawText.substring(start + startTag.length(), end).trim();
+        return hasText(value) ? value : null;
     }
 
     private static String sanitizeHeadlineAndTruncate(String value) {

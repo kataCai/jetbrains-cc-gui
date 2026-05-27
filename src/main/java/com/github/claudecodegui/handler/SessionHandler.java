@@ -239,20 +239,9 @@ public class SessionHandler extends BaseMessageHandler {
             sendFuture
                 .thenRun(() -> {
                     notifySendCompleted();
-                    // Claude now triggers success on actual stream_end callback.
-                    // Codex has no stream_end event, keep success trigger at completion.
-                    if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        var session = context.getSession();
-                        ClaudeNotifier.showSuccess(
-                            project,
-                            ClaudeNotifier.buildTitleFromSession(session),
-                            ClaudeNotifier.buildPreviewFromSession(
-                                session,
-                                ClaudeCodeGuiBundle.message("task.send.completed")
-                            ),
-                            taskReminderDispatcher == null
-                        );
-                    }
+                    // completed 的主通知出口已经统一收口到 TaskReminderDispatcher。
+                    // 这里不再为 Codex 额外直发 ClaudeNotifier.showSuccess，避免同一轮完成
+                    // 既走状态机提醒链，又走旧的系统 toast 链，导致用户收到两次完成通知。
                 })
                 .exceptionally(ex -> {
                     notifySendFailed(ex);
@@ -408,20 +397,8 @@ public class SessionHandler extends BaseMessageHandler {
             sendFuture
                 .thenRun(() -> {
                     notifySendCompleted();
-                    // Claude now triggers success on actual stream_end callback.
-                    // Codex has no stream_end event, keep success trigger at completion.
-                    if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        var session = context.getSession();
-                        ClaudeNotifier.showSuccess(
-                            project,
-                            ClaudeNotifier.buildTitleFromSession(session),
-                            ClaudeNotifier.buildPreviewFromSession(
-                                session,
-                                ClaudeCodeGuiBundle.message("task.send.completed")
-                            ),
-                            taskReminderDispatcher == null
-                        );
-                    }
+                    // 附件发送完成后的 completed 提醒同样统一交给 TaskReminderDispatcher，
+                    // 不再额外直发旧成功 toast，防止与统一任务提醒链重复。
                 })
                 .exceptionally(ex -> {
                     notifySendFailed(ex);

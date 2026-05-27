@@ -116,8 +116,43 @@ export function createInitialEventState(emitMessage) {
     currentThreadId: null,
     finalResponse: '',
     assistantText: '',
+    // 区分“本轮出现过 assistant 文本”和“本轮末尾是否仍以 assistant 总结收尾”。
+    // 这样可以避免中途说过几句分析、最后却只剩工具块时，被误判为已经有最终总结。
+    hasVisibleAssistantText: false,
+    trailingAssistantText: '',
+    hasTrailingAssistantTextSummary: false,
+    lastVisibleContentKind: 'none',
+    completionSummaryReady: false,
+    completionSummarySource: '',
+    // 为后续补齐结束总结准备最小结构化摘要上下文。
+    executedCommandCount: 0,
+    changedFilePaths: new Set(),
+    fileChangeCount: 0,
     emitMessage
   };
+}
+
+/**
+ * 记录当前聊天区最后一个可见内容的类型。
+ * 这里只追踪“用户最终看到的尾部是什么”，供 completion phase 判断是否需要补结束总结。
+ *
+ * @param {ReturnType<typeof createInitialEventState>} state 事件流状态
+ * @param {'assistant_text'|'tool_activity'|'notification'} kind 可见内容类别
+ * @param {string} [text] 当 kind 为 assistant_text 时的文本内容
+ * @return {void}
+ */
+function markVisibleContent(state, kind, text = '') {
+  state.lastVisibleContentKind = kind;
+  if (kind === 'assistant_text') {
+    const normalized = typeof text === 'string' ? text.trim() : '';
+    state.hasVisibleAssistantText = normalized.length > 0;
+    state.trailingAssistantText = normalized;
+    state.hasTrailingAssistantTextSummary = normalized.length > 0;
+    return;
+  }
+
+  state.hasTrailingAssistantTextSummary = false;
+  state.trailingAssistantText = '';
 }
 
 function rememberPendingToolUseId(state, command, toolUseId) {
@@ -534,6 +569,7 @@ function handleAgentMessage(item, state, { emitSnapshot = true } = {}) {
   }
   if (emitSnapshot && text && text.trim()) {
     state.emitMessage(textMsg(text));
+    markVisibleContent(state, 'assistant_text', text);
   }
 }
 
@@ -557,6 +593,8 @@ function handleCommandExecution(item, state) {
   }
   state.emitMessage(toolResultMsg(toolUseId, isError, outputStr && outputStr.trim() ? outputStr : '(no output)'));
   state.emittedToolResultIds.add(toolUseId);
+  state.executedCommandCount += 1;
+  markVisibleContent(state, 'tool_activity');
 }
 
 async function handleFileChange(item, state, config) {
@@ -587,6 +625,16 @@ async function handleFileChange(item, state, config) {
     }
   }
   const emitted = emitSyntheticPatchOperations(state, patchBatches, isError, deniedCallIds, rollbackByCallId);
+  const appliedFilePaths = patchBatches
+    .filter((batch) => !deniedCallIds.has(batch.callId))
+    .flatMap((batch) => Array.isArray(batch.operations) ? batch.operations : [])
+    .map((operation) => operation?.filePath)
+    .filter((filePath) => typeof filePath === 'string' && filePath.trim().length > 0);
+  appliedFilePaths.forEach((filePath) => state.changedFilePaths.add(filePath));
+  state.fileChangeCount = state.changedFilePaths.size;
+  if (emitted > 0) {
+    markVisibleContent(state, 'tool_activity');
+  }
   if (emitted > 0) console.log('[DEBUG] file_change synthesized operations:', emitted);
   else console.log('[DEBUG] file_change: no patch operations found in session log');
 }
@@ -619,6 +667,7 @@ function handleMcpToolCall(item, state) {
   const truncatedResult = truncateForDisplay(resultContent, MAX_TOOL_RESULT_CHARS);
   state.emitMessage(toolResultMsg(toolUseId, isError, truncatedResult && truncatedResult.trim() ? truncatedResult : '(no output)'));
   state.emittedToolResultIds.add(toolUseId);
+  markVisibleContent(state, 'tool_activity');
 }
 
 /**

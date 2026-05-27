@@ -672,20 +672,14 @@ public class ClaudeChatWindow {
      * 处理流式会话完成后的收尾通知。
      * 仅在 Claude 且无错误的场景下展示完成提示；标题和摘要优先使用会话内容，缺失时回退到国际化文案。
      */
+    /**
+     * 处理流式会话结束后的收尾钩子。
+     * 当前 completed 主通知已经统一由任务状态链分发，这里仅保留流生命周期收尾入口，
+     * 不再直发成功通知，避免与 TaskReminderDispatcher 的 completed 提醒并行生效。
+     *
+     * @return 无返回值
+     */
     private void onStreamEnded() {
-        if (session == null) {
-            return;
-        }
-        if ("claude".equals(session.getProvider()) && session.getError() == null) {
-            com.github.claudecodegui.notifications.ClaudeNotifier.showSuccess(
-                project,
-                com.github.claudecodegui.notifications.ClaudeNotifier.buildTitleFromSession(session),
-                com.github.claudecodegui.notifications.ClaudeNotifier.buildPreviewFromSession(
-                        session,
-                        com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("task.send.completed")
-                )
-            );
-        }
     }
 
     private void initializeSessionInfo() {

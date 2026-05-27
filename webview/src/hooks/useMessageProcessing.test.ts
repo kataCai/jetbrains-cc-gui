@@ -50,4 +50,32 @@ describe('useMessageProcessing', () => {
     ]);
     expect(result.current.mergedMessages.map((message) => message.__turnId)).toEqual([1, 2]);
   });
+
+  it('converts completion fallback task notifications into task_notification messages', () => {
+    const messages: ClaudeMessage[] = [
+      makeMessage('user', '<task-notification><status>completed</status><summary>本轮任务已完成，可继续追问。</summary></task-notification>', {
+        raw: {
+          content: [
+            {
+              type: 'text',
+              text: '<task-notification><status>completed</status><summary>本轮任务已完成，可继续追问。</summary></task-notification>',
+            },
+          ],
+          origin: { kind: 'task-notification' },
+        } as any,
+        timestamp: '2026-05-26T10:00:00.000Z',
+      }),
+    ];
+
+    const { result } = renderHook(() =>
+      useMessageProcessing({
+        messages,
+        currentSessionId: 'session-completion',
+        t,
+      }),
+    );
+
+    expect(result.current.mergedMessages).toHaveLength(1);
+    expect(result.current.mergedMessages[0].type).toBe('task_notification');
+  });
 });

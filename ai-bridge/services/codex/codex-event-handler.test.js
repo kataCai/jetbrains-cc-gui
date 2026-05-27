@@ -147,3 +147,88 @@ test('Codex turn.failed must throw without triggering outer stream-end callback 
 
   assert.equal(turnFailedCallbackCount, 0);
 });
+
+test('Codex completion summary state distinguishes mid-turn prose from final visible summary', async () => {
+  const emittedMessages = [];
+  const state = createInitialEventState((message) => emittedMessages.push(message));
+
+  await processCodexEventStream(
+    eventsFrom([
+      {
+        type: 'item.updated',
+        item: { id: 'msg-1', type: 'agent_message', text: 'I am checking the repository structure first.' },
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'msg-1', type: 'agent_message', text: 'I am checking the repository structure first.' },
+      },
+      {
+        type: 'item.started',
+        item: { id: 'cmd-1', type: 'command_execution', command: 'git status' },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'cmd-1',
+          type: 'command_execution',
+          command: 'git status',
+          aggregated_output: 'On branch main',
+          exit_code: 0,
+        },
+      },
+      {
+        type: 'turn.completed',
+      },
+    ]),
+    state,
+    makeConfig(),
+  );
+
+  // 中途虽然出现过 assistant 文本，但最后一个可见结构已经是 tool_use/tool_result，
+  // 因此不能把“本轮已有任何文本”误判为“末尾已有最终总结”。
+  assert.equal(state.assistantText.includes('repository structure'), true);
+  assert.equal(state.hasVisibleAssistantText, true);
+  assert.equal(state.hasTrailingAssistantTextSummary, false);
+  assert.equal(state.executedCommandCount, 1);
+  assert.equal(state.fileChangeCount, 0);
+  assert.equal(emittedMessages.some((message) => message?.message?.content?.[0]?.type === 'tool_use'), true);
+});
+
+test('Codex completion summary state remains ready when final assistant text is the last visible content', async () => {
+  const emittedMessages = [];
+  const state = createInitialEventState((message) => emittedMessages.push(message));
+
+  await processCodexEventStream(
+    eventsFrom([
+      {
+        type: 'item.started',
+        item: { id: 'cmd-1', type: 'command_execution', command: 'git status' },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'cmd-1',
+          type: 'command_execution',
+          command: 'git status',
+          aggregated_output: 'On branch main',
+          exit_code: 0,
+        },
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'msg-2', type: 'agent_message', text: 'I have finished checking the repository.' },
+      },
+      {
+        type: 'turn.completed',
+      },
+    ]),
+    state,
+    makeConfig(),
+  );
+
+  assert.equal(state.executedCommandCount, 1);
+  assert.equal(state.hasTrailingAssistantTextSummary, true);
+  assert.equal(state.trailingAssistantText, 'I have finished checking the repository.');
+  assert.equal(state.lastVisibleContentKind, 'assistant_text');
+  assert.equal(emittedMessages.at(-1)?.message?.content?.[0]?.text, 'I have finished checking the repository.');
+});

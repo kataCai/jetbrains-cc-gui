@@ -231,6 +231,39 @@
     }
 }
 
+.message-completion-footer {
+    margin-top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    align-self: flex-start;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--color-success, #22c55e) 35%, transparent);
+    background: color-mix(in srgb, var(--color-success, #22c55e) 10%, transparent);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.message-completion-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-success, #22c55e) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-success, #22c55e) 45%, transparent);
+    color: var(--color-success, #22c55e);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.message-completion-summary {
+    color: var(--text-primary);
+}
+
 /* Inline copy button for user messages (in header row) */
 .message-copy-btn-inline {
     position: relative;
@@ -1112,10 +1145,23 @@
     gap: 8px;
     padding: 8px 0;
     font-size: 13px;
+    flex-wrap: wrap;
 }
 
 .task-notification-icon {
     font-size: 12px;
+}
+
+.task-notification-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    opacity: 0.9;
 }
 
 .task-notification-summary {

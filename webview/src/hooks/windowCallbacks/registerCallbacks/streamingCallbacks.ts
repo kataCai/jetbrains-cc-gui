@@ -21,6 +21,7 @@ import { getStreamEndHandlingMode } from '../messageSync';
  */
 const STREAM_STALL_TIMEOUT_MS = 60_000;
 const STREAM_STALL_CHECK_INTERVAL_MS = 5_000;
+const TASK_COMPLETED_DEFER_FRAME_LIMIT = 8;
 
 export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): void {
   const {
@@ -45,6 +46,35 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     getOrCreateStreamingAssistantIndex,
     patchAssistantForStreaming,
   } = options;
+
+  /**
+   * 在聊天区最终消息快照尚未落地时，延后发送 Tab completed 事件。
+   * 这里显式等待 pending updateMessages 清空后，再用下一帧上报 completed，
+   * 尽量保证“聊天区已出现完成总结”早于“Tab 显示已完成”。
+   * 同时保留有限帧兜底，避免极端情况下因为某个挂起标记未清掉而永久不完成。
+   *
+   * @param frameAttempt 当前已重试的帧次数
+   */
+  const flushDeferredTaskCompleted = (frameAttempt = 0): void => {
+    if (!window.__pendingTaskCompleted) {
+      return;
+    }
+
+    const hasPendingMessageFlush =
+      window.__pendingUpdateRaf != null ||
+      (typeof window.__pendingUpdateJson === 'string' && window.__pendingUpdateJson.length > 0);
+
+    if (hasPendingMessageFlush && frameAttempt < TASK_COMPLETED_DEFER_FRAME_LIMIT) {
+      window.__pendingTaskCompletedRaf = requestAnimationFrame(() => {
+        flushDeferredTaskCompleted(frameAttempt + 1);
+      });
+      return;
+    }
+
+    window.__pendingTaskCompleted = false;
+    window.__pendingTaskCompletedRaf = null;
+    sendBridgeEvent('tab_status_changed', JSON.stringify({ status: 'completed' }));
+  };
 
   if (window.__stallWatchdogInterval != null) {
     clearInterval(window.__stallWatchdogInterval);
@@ -382,7 +412,12 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
   window.onTaskCompleted = () => {
     if (window.__sessionTransitioning) return;
     console.info('[TaskLifecycle] eventType=task_completed_ui');
-    sendBridgeEvent('tab_status_changed', JSON.stringify({ status: 'completed' }));
+    if (window.__pendingTaskCompletedRaf != null) {
+      cancelAnimationFrame(window.__pendingTaskCompletedRaf);
+      window.__pendingTaskCompletedRaf = null;
+    }
+    window.__pendingTaskCompleted = true;
+    flushDeferredTaskCompleted();
   };
 
   window.onStreamingHeartbeat = () => {

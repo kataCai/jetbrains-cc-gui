@@ -277,18 +277,63 @@ describe('registerStreamingCallbacks', () => {
     expect(options.setIsThinking).toHaveBeenCalledWith(false);
   });
 
-  it('onTaskCompleted reports completed status through bridge event', () => {
+  it('onTaskCompleted reports completed status through bridge event on the next frame when no message flush is pending', () => {
+    vi.useFakeTimers();
     const sendBridgeEventSpy = vi.spyOn(bridge, 'sendBridgeEvent').mockReturnValue(true);
+    vi.spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((handle: number) => {
+      window.clearTimeout(handle);
+    });
     const options = createOptions();
 
     registerStreamingCallbacks(options);
 
     (window as any).onTaskCompleted?.();
 
+    vi.runAllTimers();
+
     expect(sendBridgeEventSpy).toHaveBeenCalledWith(
       'tab_status_changed',
       JSON.stringify({ status: 'completed' }),
     );
+    vi.useRealTimers();
+  });
+
+  it('onTaskCompleted waits for pending updateMessages flush before reporting completed status', () => {
+    vi.useFakeTimers();
+    const sendBridgeEventSpy = vi.spyOn(bridge, 'sendBridgeEvent').mockReturnValue(true);
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((handle: number) => {
+      window.clearTimeout(handle);
+    });
+
+    const options = createOptions();
+    registerStreamingCallbacks(options);
+
+    (window as any).__pendingUpdateJson = JSON.stringify([{ type: 'assistant', content: 'final snapshot' }]);
+
+    (window as any).onTaskCompleted?.();
+
+    expect(sendBridgeEventSpy).not.toHaveBeenCalledWith(
+      'tab_status_changed',
+      JSON.stringify({ status: 'completed' }),
+    );
+    expect((window as any).__pendingTaskCompleted).toBe(true);
+    expect(requestAnimationFrameSpy).toHaveBeenCalled();
+
+    (window as any).__pendingUpdateJson = null;
+    vi.runAllTimers();
+
+    expect(sendBridgeEventSpy).toHaveBeenCalledWith(
+      'tab_status_changed',
+      JSON.stringify({ status: 'completed' }),
+    );
+    expect((window as any).__pendingTaskCompleted).toBe(false);
+    expect((window as any).__pendingTaskCompletedRaf).toBeNull();
+    vi.useRealTimers();
   });
 
   it('watchdog timeout performs local recovery only and never reports completed status', () => {

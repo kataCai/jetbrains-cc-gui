@@ -608,6 +608,24 @@ describe('isTaskNotificationOnlyMessage', () => {
     expect(isTaskNotificationOnlyMessage(msg)).toBe(true);
   });
 
+  it('returns true when raw.origin.kind is task-notification', () => {
+    const msg: ClaudeMessage = {
+      type: 'user',
+      content: '',
+      timestamp: '1',
+      raw: {
+        content: [
+          {
+            type: 'text',
+            text: '<task-notification><status>completed</status><summary>done</summary></task-notification>',
+          },
+        ],
+        origin: { kind: 'task-notification' },
+      },
+    };
+    expect(isTaskNotificationOnlyMessage(msg)).toBe(true);
+  });
+
   it('returns false when no task-notification tag found', () => {
     const msg: ClaudeMessage = {
       type: 'user',

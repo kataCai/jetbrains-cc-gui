@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ClaudeContentBlock, ClaudeMessage, ToolResultBlock } from '../../types';
 import { extractMarkdownContent } from '../../utils/copyUtils';
@@ -19,9 +19,18 @@ vi.mock('../toolBlocks', () => ({
 }));
 
 vi.mock('./ContentBlockRenderer', () => ({
-  ContentBlockRenderer: ({ block }: { block: ClaudeContentBlock }) => (
-    <div data-testid={`content-block-${block.type}`}>{block.type}</div>
-  ),
+  ContentBlockRenderer: ({ block, t }: { block: ClaudeContentBlock; t: (key: string) => string }) => {
+    if (block.type === 'task_notification') {
+      const statusLabel = block.status === 'completed' ? t('common.completed') : block.status;
+      return (
+        <div data-testid="content-block-task_notification">
+          <span>{statusLabel}</span>
+          <span>{block.summary}</span>
+        </div>
+      );
+    }
+    return <div data-testid={`content-block-${block.type}`}>{block.type}</div>;
+  },
 }));
 
 vi.mock('./ProviderNotConfiguredCard', () => ({
@@ -35,13 +44,13 @@ const t = ((key: string) => {
     'markdown.copySuccess': '已复制',
     'chat.streamingConnected': '已连接',
     'chat.totalDuration': '本次耗时',
+    'common.completed': '已完成',
   };
   return translations[key] ?? key;
 }) as any;
 
 /**
  * 提取消息纯文本内容，供 MessageItem 判断复制按钮显隐。
- * 这里沿用组件真实依赖的简化实现，避免测试里引入额外分支。
  *
  * @param message 待渲染的消息对象
  * @return 消息 content 字段，若不存在则返回空串
@@ -50,7 +59,7 @@ const getMessageText = (message: ClaudeMessage) => message.content ?? '';
 
 /**
  * 从 raw.content 中提取内容块，模拟前端消息渲染入口的真实读取方式。
- * 该测试只关心 block 级渲染路径，因此优先读取 raw.content 与 raw.message.content。
+ * 本测试只关心 block 级渲染路径，因此优先读取 raw.content 和 raw.message.content。
  *
  * @param message 待渲染的消息对象
  * @return 可供 MessageItem 使用的内容块数组
@@ -105,7 +114,7 @@ describe('MessageItem copy button visibility', () => {
   /**
    * 验证纯工具 assistant 消息不会显示复制按钮。
    * 前置条件：消息只包含 bash 类 tool_use block，没有额外文本 block。
-   * 断言意图：工具型消息应只展示工具块，不产生可复制的 assistant 文本。
+   * 断言意图：工具型消息应只显示工具块，不产生可复制的 assistant 文本。
    */
   it('hides the assistant copy button for tool-only messages', () => {
     const message: ClaudeMessage = {
@@ -132,7 +141,7 @@ describe('MessageItem copy button visibility', () => {
 
   /**
    * 验证工具块后仍有文本回复时，复制按钮必须保留。
-   * 前置条件：assistant 消息同时包含 tool_use 与 text block。
+   * 前置条件：assistant 消息同时包含 tool_use 和 text block。
    * 断言意图：只要消息末尾仍有可复制文本，就不能隐藏复制按钮。
    */
   it('keeps the assistant copy button when tool output is followed by reply text', () => {
@@ -162,7 +171,7 @@ describe('MessageItem copy button visibility', () => {
   });
 
   /**
-   * 验证连续 exec_command 会按 bash group 统一展示。
+   * 验证连续 exec_command 会按 bash group 统一显示。
    * 前置条件：同一条 assistant 消息内连续出现两个 exec_command。
    * 断言意图：应渲染 bash group，而不是两个独立的 tool_use block。
    */
@@ -194,7 +203,7 @@ describe('MessageItem copy button visibility', () => {
   });
 
   /**
-   * 验证已完成的 assistant 消息会展示总耗时。
+   * 验证已完成的 assistant 消息会显示总耗时。
    * 前置条件：消息包含文本内容且 durationMs 为有效整数。
    * 断言意图：消息底部需要显示本地化耗时标签和格式化后的 mm:ss 值。
    */
@@ -217,5 +226,96 @@ describe('MessageItem copy button visibility', () => {
 
     expect(screen.getByText('本次耗时')).toBeTruthy();
     expect(screen.getByText('1:05')).toBeTruthy();
+  });
+
+  /**
+   * 验证 completed 的 task_notification 会打出更明确的完成标识。
+   * 前置条件：消息类型为 task_notification，内容块状态为 completed。
+   * 断言意图：在缺少 assistant 自然语言总结时，聊天区仍应明确告诉用户“本轮已完成”。
+   */
+  it('shows an explicit completed label for completed task notifications', () => {
+    const message: ClaudeMessage = {
+      type: 'task_notification',
+      content: 'fallback',
+      raw: {
+        content: [
+          {
+            type: 'task_notification',
+            icon: '●',
+            summary: '本轮任务已完成，已修改 2 个文件。',
+            status: 'completed',
+          },
+        ],
+      } as any,
+    };
+
+    renderMessageItem(message);
+
+    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(screen.getByText('本轮任务已完成，已修改 2 个文件。')).toBeTruthy();
+  });
+
+  /**
+   * 验证 assistant 完成消息在包含 completed task_notification 时，
+   * 底部必须额外出现独立 completion footer，而不是只剩“本次耗时”。
+   * 前置条件：assistant 消息正文先有工具块，再有 completed task_notification，且耗时已补写。
+   * 断言意图：即使没有自然语言总结，用户也能在消息尾部看出任务已完成且会话仍可继续。
+   */
+  it('shows a dedicated completion footer for assistant messages that contain completed task notifications', () => {
+    const message: ClaudeMessage = {
+      type: 'assistant',
+      content: 'fallback',
+      durationMs: 21000,
+      raw: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool-1',
+            name: 'exec_command',
+            input: { command: 'git status' },
+          },
+          {
+            type: 'task_notification',
+            icon: '•',
+            summary: '本轮任务已完成，会话仍可继续。',
+            status: 'completed',
+          },
+        ],
+      } as any,
+    };
+
+    renderMessageItem(message);
+
+    const footer = screen.getByTestId('message-completion-footer');
+    expect(footer).toBeTruthy();
+    expect(within(footer).getByText('已完成')).toBeTruthy();
+    expect(within(footer).getByText('本轮任务已完成，会话仍可继续。')).toBeTruthy();
+    expect(screen.getByText('本次耗时')).toBeTruthy();
+  });
+
+  /**
+   * 验证普通 assistant 完成消息不会误显示 completion footer。
+   * 前置条件：assistant 消息仅包含普通文本和耗时，没有 completed task_notification。
+   * 断言意图：completion footer 必须只由真实完成摘要驱动，不能把任意流结束都误判为“已完成”。
+   */
+  it('does not show the completion footer for assistant messages without completed task notifications', () => {
+    const message: ClaudeMessage = {
+      type: 'assistant',
+      content: 'regular answer',
+      durationMs: 5000,
+      raw: {
+        content: [
+          {
+            type: 'text',
+            text: 'regular answer',
+          },
+        ],
+      } as any,
+    };
+
+    renderMessageItem(message);
+
+    expect(screen.queryByTestId('message-completion-footer')).toBeNull();
+    expect(screen.getByText('本次耗时')).toBeTruthy();
   });
 });

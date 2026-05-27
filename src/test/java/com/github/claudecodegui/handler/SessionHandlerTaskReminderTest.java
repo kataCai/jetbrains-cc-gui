@@ -1,6 +1,7 @@
 package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.remote.RemoteCollabService;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -283,6 +285,50 @@ public class SessionHandlerTaskReminderTest {
         }
     }
 
+    /**
+     * 验证 Codex 完成态已经不再走旧的 ClaudeNotifier.showSuccess 直发出口。
+     * 当前 completed 的视觉提醒应统一由 TaskReminderDispatcher 负责，这里只允许推进状态机
+     * 和触发前端 onTaskCompleted，不能再额外补发一条独立成功通知。
+     */
+    @Test
+    public void shouldNotTriggerLegacySuccessToastWhenCodexSendCompletes() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-codex-success-toast-test");
+        AtomicInteger legacySuccessCalls = new AtomicInteger();
+        ClaudeNotifier.setSuccessNotificationInterceptorForTest(
+            (project, title, message, playSound) -> legacySuccessCalls.incrementAndGet()
+        );
+        try {
+            RecordingClaudeSession session = new RecordingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-codex-complete", projectDir.toString());
+            session.setProvider("codex");
+
+            HandlerContext context = createContext(projectDir, session);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            boolean handled = handler.handle("send_message", "{\"text\":\"finish this task\"}");
+
+            assertTrue(handled);
+            assertTrue("dispatch timed out", dispatcher.awaitDispatchCount(2));
+            assertEquals(TaskState.RUNNING, dispatcher.states.get(0));
+            assertEquals(TaskState.COMPLETED, dispatcher.states.get(1));
+            assertEquals(0, legacySuccessCalls.get());
+        } finally {
+            ClaudeNotifier.setSuccessNotificationInterceptorForTest(null);
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
     private static HandlerContext createContext(Path projectDir, ClaudeSession session) {
         return createContext(projectDir, session, new RecordingJsCallback());
     }
@@ -371,6 +417,7 @@ public class SessionHandlerTaskReminderTest {
 
     private static class RecordingTaskReminderDispatcher extends TaskReminderDispatcher {
         private final CountDownLatch firstDispatchLatch = new CountDownLatch(1);
+        private final CountDownLatch secondDispatchLatch = new CountDownLatch(2);
         private final List<TaskState> states = new ArrayList<>();
         private final List<String> reasons = new ArrayList<>();
         private final List<String> latestUserMessagesAtDispatch = new ArrayList<>();
@@ -386,6 +433,7 @@ public class SessionHandlerTaskReminderTest {
             reasons.add(snapshot.getLatestEvent() != null ? snapshot.getLatestEvent().getReason() : null);
             latestUserMessagesAtDispatch.add(findLatestUserMessage(snapshot));
             firstDispatchLatch.countDown();
+            secondDispatchLatch.countDown();
         }
 
         @Override
@@ -395,10 +443,28 @@ public class SessionHandlerTaskReminderTest {
             latestUserMessagesAtDispatch.add(findLatestUserMessage(snapshot));
             preferredTaskSummaries.add(preferredTaskSummary);
             firstDispatchLatch.countDown();
+            secondDispatchLatch.countDown();
         }
 
         boolean awaitFirstDispatch() throws InterruptedException {
             return firstDispatchLatch.await(5, TimeUnit.SECONDS);
+        }
+
+        /**
+         * 等待至少出现指定次数的状态分发，便于验证同一轮 send 的完整生命周期。
+         *
+         * @param expectedCount 期望收到的最少 dispatch 次数；当前测试只覆盖 1 次或 2 次
+         * @return true 表示在超时前达到了目标次数
+         * @throws InterruptedException 等待过程中被中断
+         */
+        boolean awaitDispatchCount(int expectedCount) throws InterruptedException {
+            if (expectedCount <= 1) {
+                return awaitFirstDispatch();
+            }
+            if (expectedCount == 2) {
+                return secondDispatchLatch.await(5, TimeUnit.SECONDS);
+            }
+            throw new IllegalArgumentException("unsupported expectedCount: " + expectedCount);
         }
 
         private String findLatestUserMessage(TaskStateSnapshot snapshot) {

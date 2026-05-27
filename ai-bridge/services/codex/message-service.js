@@ -37,6 +37,62 @@ import {
   waitForRecoveryRetry,
 } from './codex-recovery-policy.js';
 
+/**
+ * 构建 completion fallback 的任务完成摘要。
+ * 当本轮真实完成但末尾没有自然语言总结时，统一补一条用户可见的结束说明，
+ * 避免界面只剩工具块与“本次耗时”，用户无法判断是否已经结束以及做了什么。
+ *
+ * @param {ReturnType<typeof createInitialEventState>} state Codex 事件流状态
+ * @return {string}
+ */
+function buildCompletionFallbackSummary(state) {
+  const summaryParts = ['本轮任务已完成，会话仍可继续。'];
+
+  if (state.fileChangeCount > 0) {
+    summaryParts.push(`已修改 ${state.fileChangeCount} 个文件`);
+  }
+  if (state.executedCommandCount > 0) {
+    summaryParts.push(`执行 ${state.executedCommandCount} 条命令`);
+  }
+
+  if (summaryParts.length === 1) {
+    summaryParts.push('本轮未生成最终自然语言总结。');
+  } else {
+    summaryParts.push('本轮未生成最终自然语言总结，以上为系统补充的结束说明。');
+  }
+
+  return summaryParts.join(' ');
+}
+
+/**
+ * 将 completion fallback 作为 task_notification 注入聊天区，
+ * 复用现有通知块样式，让用户一眼看出“本轮已完成”。
+ *
+ * @param {ReturnType<typeof createInitialEventState>} state Codex 事件流状态
+ * @param {(msg: unknown) => void} emitMessage 输出消息函数
+ * @return {string}
+ */
+function emitCompletionFallbackSummary(state, emitMessage) {
+  const summary = buildCompletionFallbackSummary(state);
+  const rawText = `<task-notification><status>completed</status><summary>${summary}</summary></task-notification>`;
+  emitMessage({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: rawText }],
+    },
+    raw: {
+      content: [{ type: 'text', text: rawText }],
+      origin: { kind: 'task-notification' },
+    },
+  });
+  state.completionSummaryReady = true;
+  state.completionSummarySource = state.fileChangeCount > 0 || state.executedCommandCount > 0
+    ? 'generated_from_activity'
+    : 'generic_fallback';
+  return summary;
+}
+
 // ---------------------------------------------------------------------------
 // sendMessage
 // ---------------------------------------------------------------------------
@@ -284,6 +340,19 @@ export async function sendMessage(
           }
         });
         state.finalResponse = noResponseMsg;
+        state.completionSummaryReady = true;
+        state.completionSummarySource = 'no_response_warning';
+      }
+
+      if (
+        !state.suppressNoResponseFallback &&
+        state.assistantText.length > 0 &&
+        !state.hasTrailingAssistantTextSummary
+      ) {
+        const completionFallbackSummary = emitCompletionFallbackSummary(state, emitMessage);
+        // 对外 result 保持用户最终可见的结束说明，而不是中途分析文本，
+        // 便于 Java/通知链路和后续日志判断本轮最终展示内容。
+        state.finalResponse = completionFallbackSummary;
       }
 
       state.messageEndObserved = true;

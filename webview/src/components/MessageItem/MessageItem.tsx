@@ -100,6 +100,27 @@ function formatDurationMs(durationMs: number): string {
   return `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
+/**
+ * 从 assistant 内容块中提取最后一条 completed task_notification 摘要。
+ * 这里只把真正标记为 completed 的任务通知视为“完成总结已就绪”，
+ * 避免把普通文本、工具块或其他状态的通知误判为可展示的完成 footer。
+ *
+ * @param blocks 当前消息的内容块数组
+ * @return 若存在 completed 总结则返回其 summary，否则返回 null
+ */
+function getCompletedTaskNotificationSummary(blocks: ClaudeContentBlock[]): string | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block.type !== 'task_notification') continue;
+    if (block.status !== 'completed') continue;
+    const summary = typeof block.summary === 'string' ? block.summary.trim() : '';
+    if (summary.length > 0) {
+      return summary;
+    }
+  }
+  return null;
+}
+
 function isToolBlockOfType(block: ClaudeContentBlock, toolNames: Set<string>): boolean {
   return block.type === 'tool_use' && isToolName(block.name, toolNames);
 }
@@ -358,6 +379,10 @@ export const MessageItem = memo(function MessageItem({
   }, [blocks, isMessageStreaming, manuallyExpandedThinking]);
 
   const groupedBlocks = useMemo(() => groupBlocks(blocks), [blocks]);
+  const completedTaskSummary = useMemo(
+    () => (message.type === 'assistant' ? getCompletedTaskNotificationSummary(blocks) : null),
+    [blocks, message.type],
+  );
 
   // Register user message DOM node for anchor navigation
   // Must be called before any early returns to satisfy React hooks rules
@@ -590,6 +615,13 @@ export const MessageItem = memo(function MessageItem({
       <div className="message-content">
         {renderGroupedBlocks()}
       </div>
+
+      {message.type === 'assistant' && !isMessageStreaming && completedTaskSummary && (
+        <div className="message-completion-footer" data-testid="message-completion-footer">
+          <span className="message-completion-badge">{t('common.completed')}</span>
+          <span className="message-completion-summary">{completedTaskSummary}</span>
+        </div>
+      )}
 
       {message.type === 'assistant' && !isMessageStreaming && typeof message.durationMs === 'number' && (
         <div className="message-duration">

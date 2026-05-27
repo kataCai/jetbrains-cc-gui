@@ -10,6 +10,7 @@ import com.github.claudecodegui.remote.RemotePendingRequest;
 import com.github.claudecodegui.remote.RemoteRequestRegistry;
 import com.github.claudecodegui.remote.RemoteRequestType;
 import com.github.claudecodegui.remote.RemoteTaskEvent;
+import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.taskstate.TaskStateEvent;
 import com.github.claudecodegui.taskstate.TaskStateService;
@@ -22,6 +23,7 @@ import com.intellij.openapi.project.Project;
 
 import javax.swing.*;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -702,8 +704,56 @@ public class PermissionHandler extends BaseMessageHandler {
                 return title;
             }
         }
+        String sessionTaskSummary = findLatestVisibleUserTaskSummary();
+        if (sessionTaskSummary != null) {
+            return sessionTaskSummary;
+        }
         TaskStateEvent latestEvent = snapshot.getLatestEvent();
         return latestEvent != null ? latestEvent.getReason() : null;
+    }
+
+    /**
+     * 从当前会话中提取最近一条用户可读任务摘要。
+     * 计划审批类远程事件在 payload 未显式提供 question/title 时，
+     * 应继续复用当前轮任务摘要，而不是把内部状态原因串直接暴露给远程协作端。
+     *
+     * @return 最近一条用户可读任务摘要；不存在时返回 null
+     */
+    private String findLatestVisibleUserTaskSummary() {
+        ClaudeSession session = context.getSession();
+        if (session == null) {
+            return null;
+        }
+        List<ClaudeSession.Message> messages = session.getMessages();
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ClaudeSession.Message message = messages.get(i);
+            if (message == null || message.type != ClaudeSession.Message.Type.USER) {
+                continue;
+            }
+            String visibleSummary = normalizeVisibleSummary(message.content);
+            if (visibleSummary != null) {
+                return visibleSummary;
+            }
+        }
+        String sessionSummary = normalizeVisibleSummary(session.getSummary());
+        return sessionSummary;
+    }
+
+    /**
+     * 过滤空白与 tool_result 占位，避免把内部占位文本发到远程事件摘要中。
+     *
+     * @param value 待归一化的原始文本
+     * @return 可展示摘要；不可展示时返回 null
+     */
+    private String normalizeVisibleSummary(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty() || "[tool_result]".equals(normalized)) {
+            return null;
+        }
+        return normalized;
     }
 
     private String readString(JsonObject payload, String key) {
@@ -714,4 +764,3 @@ public class PermissionHandler extends BaseMessageHandler {
         return value == null || value.trim().isEmpty() ? null : value;
     }
 }
-

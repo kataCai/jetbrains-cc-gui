@@ -23,6 +23,24 @@ import java.util.regex.Pattern;
  */
 public class ClaudeNotifier {
 
+    /**
+     * 测试专用的完成通知拦截器。
+     * 用于把 showSuccess 的副作用替换成可观测回调，避免单元测试真的弹系统通知或播放声音。
+     */
+    @FunctionalInterface
+    public interface SuccessNotificationInterceptor {
+        /**
+         * 拦截一次完成通知直发调用。
+         *
+         * @param project 当前项目
+         * @param title 通知标题
+         * @param message 通知正文
+         * @param playSound 是否原本会播放完成提示音
+         * @return 无返回值
+         */
+        void onShow(@NotNull Project project, @Nullable String title, String message, boolean playSound);
+    }
+
     // Pre-compiled patterns for {@link #condenseForToast}, reused across notifications.
     private static final Pattern CODE_FENCE_OPEN = Pattern.compile("```[a-zA-Z0-9_+\\-]*\\n");
     private static final Pattern CODE_FENCE_CLOSE = Pattern.compile("```");
@@ -32,6 +50,7 @@ public class ClaudeNotifier {
     // shows ~220 codepoints; processing the whole message (which can be tens of KB)
     // is wasteful and never adds visible content.
     private static final int CONDENSE_MAX_INPUT = 4096;
+    private static volatile SuccessNotificationInterceptor successNotificationInterceptor;
 
     public static void setThinking(@NotNull Project project) {
         update(project, "thinking", ClaudeCodeGuiBundle.message("notifier.thinking"));
@@ -89,6 +108,11 @@ public class ClaudeNotifier {
         String message,
         boolean playSound
     ) {
+        SuccessNotificationInterceptor interceptor = successNotificationInterceptor;
+        if (interceptor != null) {
+            interceptor.onShow(project, title, message, playSound);
+            return;
+        }
         show(project, "Claude [OK]", message, 5000);
         SystemNotificationService.getInstance().showVisualNotificationToast(project, title, message);
         if (playSound) {
@@ -134,6 +158,13 @@ public class ClaudeNotifier {
             if (messages == null || messages.isEmpty()) {
                 return fallback;
             }
+            String taskNotificationSummary = extractLatestTaskNotificationSummary(messages);
+            if (taskNotificationSummary != null && !taskNotificationSummary.isEmpty()) {
+                String preview = condenseForToast(taskNotificationSummary);
+                if (!preview.isEmpty()) {
+                    return preview;
+                }
+            }
             for (int i = messages.size() - 1; i >= 0; i--) {
                 ClaudeSession.Message m = messages.get(i);
                 if (m == null || m.type != ClaudeSession.Message.Type.ASSISTANT) {
@@ -161,6 +192,29 @@ public class ClaudeNotifier {
             return fallback;
         }
         return fallback;
+    }
+
+    /**
+     * 提取聊天区最近一条 task-notification 的 summary。
+     * 该摘要对应用户最终可见的统一结束说明，应优先用于系统通知预览，
+     * 避免聊天区显示“已完成摘要”，而系统通知仍回退到中途 assistant 分析文本。
+     *
+     * @param messages 当前会话消息列表
+     * @return 最近一条 task-notification 的 summary；不存在时返回 null
+     */
+    @Nullable
+    private static String extractLatestTaskNotificationSummary(@NotNull List<ClaudeSession.Message> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ClaudeSession.Message message = messages.get(i);
+            if (message == null || message.raw == null) {
+                continue;
+            }
+            String summary = extractTaskNotificationSummary(message.raw);
+            if (summary != null && !summary.isBlank()) {
+                return summary.trim();
+            }
+        }
+        return null;
     }
 
     /**
@@ -215,6 +269,85 @@ public class ClaudeNotifier {
         }
     }
 
+    /**
+     * 从 raw JSON 中提取 task-notification 的 summary。
+     * 兼容当前 Node 侧补发的 raw 结构：raw.origin.kind=task-notification，正文存放在 text block 内。
+     *
+     * @param raw 消息 raw JSON
+     * @return task-notification summary；不存在或不匹配时返回 null
+     */
+    @Nullable
+    private static String extractTaskNotificationSummary(@Nullable JsonObject raw) {
+        if (raw == null || !isTaskNotificationRaw(raw)) {
+            return null;
+        }
+        String text = extractLastTextBlock(raw);
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        int summaryStart = text.indexOf("<summary>");
+        int summaryEnd = text.indexOf("</summary>");
+        if (summaryStart < 0 || summaryEnd <= summaryStart) {
+            return null;
+        }
+        return text.substring(summaryStart + "<summary>".length(), summaryEnd).trim();
+    }
+
+    /**
+     * 判断当前 raw 是否为 task-notification。
+     * 仅在 origin.kind 明确为 task-notification 时才视为统一结束说明，
+     * 避免误把普通 user 文本中的 XML 片段识别为完成摘要。
+     *
+     * @param raw 消息 raw JSON
+     * @return true 表示该 raw 对应 task-notification
+     */
+    private static boolean isTaskNotificationRaw(@NotNull JsonObject raw) {
+        if (!raw.has("origin") || !raw.get("origin").isJsonObject()) {
+            return false;
+        }
+        JsonObject origin = raw.getAsJsonObject("origin");
+        return origin.has("kind")
+            && !origin.get("kind").isJsonNull()
+            && "task-notification".equals(origin.get("kind").getAsString());
+    }
+
+    /**
+     * 提取 raw.message.content 中最后一个 text block 的文本。
+     * 用于统一处理 assistant 最终文本与 task-notification XML 文本的读取逻辑。
+     *
+     * @param raw 消息 raw JSON
+     * @return 最后一个 text block 的文本；不存在时返回 null
+     */
+    @Nullable
+    private static String extractLastTextBlock(@NotNull JsonObject raw) {
+        if (!raw.has("message") || !raw.get("message").isJsonObject()) {
+            return null;
+        }
+        try {
+            JsonObject message = raw.getAsJsonObject("message");
+            if (!message.has("content") || !message.get("content").isJsonArray()) {
+                return null;
+            }
+            JsonArray contentArray = message.getAsJsonArray("content");
+            String lastText = null;
+            for (JsonElement element : contentArray) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject block = element.getAsJsonObject();
+                if (block.has("type")
+                    && "text".equals(block.get("type").getAsString())
+                    && block.has("text")
+                    && !block.get("text").isJsonNull()) {
+                    lastText = block.get("text").getAsString();
+                }
+            }
+            return lastText;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public static void showError(@NotNull Project project, String message) {
         show(project, "Claude [ERR]", message, 8000);
     }
@@ -236,6 +369,19 @@ public class ClaudeNotifier {
 
     public static void clearStatus(@NotNull Project project) {
         update(project, "ready", null);
+    }
+
+    /**
+     * 设置测试专用的完成通知拦截器。
+     * 正常运行时应保持为 null；单元测试可通过该入口观测旧完成通知出口是否仍被调用。
+     *
+     * @param interceptor 测试拦截器；传 null 表示恢复真实通知行为
+     * @return 无返回值
+     */
+    public static void setSuccessNotificationInterceptorForTest(
+        @Nullable SuccessNotificationInterceptor interceptor
+    ) {
+        successNotificationInterceptor = interceptor;
     }
 
     public static void setTokenUsage(@NotNull Project project, int usedTokens, int maxTokens) {

@@ -702,6 +702,12 @@ interface Window {
   __minAcceptedUpdateSequence?: number;
   /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
   __cancelPendingUpdateMessages?: () => void;
+  /**
+   * 当后端先发 onTaskCompleted、前端消息快照稍后才落地时，
+   * 暂存待发送的 completed 事件，确保聊天区结束说明优先可见。
+   */
+  __pendingTaskCompleted?: boolean;
+  __pendingTaskCompletedRaf?: number | null;
 
   /**
    * Rewind result callback - returns the result of a rewind operation

@@ -234,9 +234,13 @@ export function ContentBlockRenderer({
   if (block.type === 'task_notification') {
     // TypeScript narrows block to { type: 'task_notification'; icon: string; summary: string; status: string }
     const statusColor = TASK_STATUS_COLORS[block.status] || 'text';
+    const statusLabel = block.status === 'completed'
+      ? t('common.completed')
+      : block.status;
     return (
       <div className={`task-notification-block task-notification-${statusColor}`}>
         <span className="task-notification-icon">{block.icon}</span>
+        <span className="task-notification-badge">{statusLabel}</span>
         <span className="task-notification-summary">{block.summary}</span>
       </div>
     );

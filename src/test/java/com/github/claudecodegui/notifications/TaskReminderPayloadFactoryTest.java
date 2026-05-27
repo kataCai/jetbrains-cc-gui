@@ -82,6 +82,76 @@ public class TaskReminderPayloadFactoryTest {
         assertEquals("Task completed", payload.getMessage());
     }
 
+    /**
+     * 验证 completed 场景下如果聊天区已经补发了 completion task-notification summary，
+     * 提醒正文必须优先复用这条最终总结，而不是继续回退到旧的 user message 或 session summary。
+     * 这样可以保证聊天区和本地提醒描述的是同一轮任务的最终完成结果。
+     */
+    @Test
+    public void shouldPreferCompletionTaskNotificationSummaryForCompletedReminderMessage() {
+        ClaudeSession session = new ClaudeSession(null, null, null);
+        session.getState().setSummary("Session Summary Title");
+        session.getState().addMessage(new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "Old user task summary"
+        ));
+        session.getState().addMessage(new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "<task-notification><status>completed</status><summary>Completed summary from chat area</summary></task-notification>",
+            buildTaskNotificationRaw("completed", "Completed summary from chat area")
+        ));
+
+        HandlerContext context = createContext(session, createProject());
+        TaskReminderPayloadFactory factory = new TaskReminderPayloadFactory(
+            (project, sessionId) -> null
+        );
+
+        TaskReminderNotificationPayload payload = factory.create(
+            context,
+            snapshot(),
+            "Task completed"
+        );
+
+        assertEquals("Session Summary Title", payload.getNotificationTitle());
+        assertEquals("Completed summary from chat area", payload.getTaskSummary());
+        assertEquals("Completed summary from chat area", payload.getMessage());
+    }
+
+    /**
+     * 验证 completed 场景下即使上游显式传入了旧的 preferredTaskSummary，
+     * 只要聊天区已经存在最新的 completion task-notification summary，仍必须优先采用聊天区这条最终总结。
+     * 该场景用于覆盖 dispatcher 在前置状态缓存过旧摘要后，completed 阶段再次创建 payload 的优先级问题。
+     */
+    @Test
+    public void shouldPreferCompletionTaskNotificationSummaryOverPreferredTaskSummaryWhenCompleted() {
+        ClaudeSession session = new ClaudeSession(null, null, null);
+        session.getState().setSummary("Session Summary Title");
+        session.getState().addMessage(new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "Old user task summary"
+        ));
+        session.getState().addMessage(new ClaudeSession.Message(
+            ClaudeSession.Message.Type.USER,
+            "<task-notification><status>completed</status><summary>Completed summary from chat area</summary></task-notification>",
+            buildTaskNotificationRaw("completed", "Completed summary from chat area")
+        ));
+
+        HandlerContext context = createContext(session, createProject());
+        TaskReminderPayloadFactory factory = new TaskReminderPayloadFactory(
+            (project, sessionId) -> null
+        );
+
+        TaskReminderNotificationPayload payload = factory.create(
+            context,
+            snapshot(),
+            "Task completed",
+            "Cached summary from earlier state"
+        );
+
+        assertEquals("Completed summary from chat area", payload.getTaskSummary());
+        assertEquals("Completed summary from chat area", payload.getMessage());
+    }
+
     private static TaskStateSnapshot snapshot() {
         return new TaskStateSnapshot(
             TaskState.COMPLETED,
@@ -134,5 +204,33 @@ public class TaskReminderPayloadFactoryTest {
             return '\0';
         }
         return 0;
+    }
+
+    /**
+     * 构造最小 task-notification raw 数据，复用生产代码当前依赖的 origin/message/content 结构。
+     * 这里显式写入 completed 状态和 summary，便于测试提醒工厂能否正确解析聊天区最终完成摘要。
+     *
+     * @param status task-notification 状态
+     * @param summary task-notification summary 文本
+     * @return 可直接挂到 ClaudeSession.Message 上的 raw JSON
+     */
+    private static com.google.gson.JsonObject buildTaskNotificationRaw(String status, String summary) {
+        com.google.gson.JsonObject raw = new com.google.gson.JsonObject();
+        com.google.gson.JsonObject origin = new com.google.gson.JsonObject();
+        origin.addProperty("kind", "task-notification");
+        raw.add("origin", origin);
+
+        com.google.gson.JsonObject message = new com.google.gson.JsonObject();
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        com.google.gson.JsonObject block = new com.google.gson.JsonObject();
+        block.addProperty("type", "text");
+        block.addProperty(
+            "text",
+            "<task-notification><status>" + status + "</status><summary>" + summary + "</summary></task-notification>"
+        );
+        content.add(block);
+        message.add("content", content);
+        raw.add("message", message);
+        return raw;
     }
 }
