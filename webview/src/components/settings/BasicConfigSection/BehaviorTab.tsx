@@ -10,6 +10,8 @@ import {
   DEFAULT_TASK_REMINDER_CONFIG,
   TASK_REMINDER_CHANNEL_STATES,
 } from '../../../types/taskReminder';
+import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from '../../../utils/permissionDialogTimeout';
+import { PermissionDialogTimeoutSetting } from './PermissionDialogTimeoutSetting';
 
 /** Upward-opening custom select for sound selection (avoids JCEF clipping) */
 const SoundSelectUpward = ({
@@ -120,6 +122,8 @@ export interface BehaviorTabProps {
   onBrowseSound?: () => void;
   taskCompletionNotificationEnabled?: boolean;
   onTaskCompletionNotificationEnabledChange?: (enabled: boolean) => void;
+  permissionDialogTimeoutSeconds?: number;
+  onPermissionDialogTimeoutChange?: (seconds: number) => void;
 }
 
 /**
@@ -160,6 +164,8 @@ const BehaviorTab = ({
   onBrowseSound = () => {},
   taskCompletionNotificationEnabled = false,
   onTaskCompletionNotificationEnabledChange = () => {},
+  permissionDialogTimeoutSeconds = DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS,
+  onPermissionDialogTimeoutChange = () => {},
 }: BehaviorTabProps) => {
   const { t } = useTranslation();
 
@@ -239,6 +245,12 @@ const BehaviorTab = ({
         </div>
       </div>
 
+      <PermissionDialogTimeoutSetting
+        permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
+        onPermissionDialogTimeoutChange={onPermissionDialogTimeoutChange}
+      />
+
+      {/* Streaming configuration */}
       <div className={styles.streamingSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-sync" />

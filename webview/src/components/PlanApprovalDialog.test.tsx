@@ -5,9 +5,10 @@ import { resetLinkifyCapabilities, setLinkifyCapabilities } from '../utils/linki
 
 vi.mock('../hooks/useDialogResize', () => ({
   useDialogResize: () => ({
-    isResizing: false,
-    dialogSize: { width: 840, height: 620 },
-    handleMouseDown: vi.fn(),
+    dialogRef: { current: null },
+    dialogHeight: null,
+    setDialogHeight: vi.fn(),
+    handleResizeStart: vi.fn(),
   }),
 }));
 

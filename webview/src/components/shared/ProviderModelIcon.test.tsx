@@ -8,7 +8,8 @@ describe('ProviderModelIcon', () => {
       <ProviderModelIcon providerId="claude" modelId="mimo-v2.5-pro" colored />,
     );
 
-    expect(container.querySelector('[aria-label="XiaomiMiMo"]')).toBeTruthy();
-    expect(container.querySelector('title')?.textContent).toBe('XiaomiMiMo');
+    const icon = container.querySelector('[aria-label="XiaomiMiMo"]');
+    expect(icon).toBeTruthy();
+    expect(icon?.textContent).toContain('Mi');
   });
 });

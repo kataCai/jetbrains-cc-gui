@@ -23,6 +23,7 @@ import {
   NEW_SESSION_COMMANDS,
   PLAN_COMMANDS,
   RESUME_COMMANDS,
+  CONTEXT_COMMANDS,
 } from './hooks/useMessageSender';
 import { applyDiffTheme, getStoredDiffTheme } from './utils/diffTheme';
 import type { Attachment, ChatInputBoxHandle } from './components/ChatInputBox/types';
@@ -43,6 +44,7 @@ import { useUIState } from './contexts/UIStateContext';
 import { useDialogs } from './contexts/DialogContext';
 import { getComposerUsageMode } from './components/ChatInputBox/modeViewModel';
 import type { ToolResultBlock } from './types';
+import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from './utils/permissionDialogTimeout';
 
 /**
  * 仅允许弹出强提醒对话框的任务状态。
@@ -83,6 +85,9 @@ const App = () => {
     openPermissionDialog,
     openAskUserQuestionDialog,
     openPlanApprovalDialog,
+    openContextUsageDialog,
+    updateContextUsageData,
+    closeContextUsageDialog,
     setRewindDialogOpen,
     setCurrentRewindRequest,
     isRewinding,
@@ -124,6 +129,10 @@ const App = () => {
     setContextInfo,
   } = useUIState();
 
+  // ── Permission dialog timeout (synced with backend config) ──
+  const [permissionDialogTimeoutSeconds, setPermissionDialogTimeoutSeconds] = useState(DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS);
+
+  // ── Local refs (don't trigger re-render, kept in App.tsx) ──
   const isFirstMountRef = useRef(true);
   const chatInputRef = useRef<ChatInputBoxHandle>(null);
   const userCollapsedRef = useRef(false);
@@ -334,6 +343,7 @@ const App = () => {
     suppressNextStatusToastRef,
     createNewSession,
     forceCreateNewSession,
+    forceCreateNewSessionWithProvider,
     handleConfirmNewSession,
     handleCancelNewSession,
     handleConfirmInterrupt,
@@ -345,6 +355,7 @@ const App = () => {
     toggleFavoriteSession,
     updateHistoryTitle,
     syncCurrentTabTitle,
+    applyHistoryTitleLocal,
   } = useSessionManagement({
     messages,
     loading,
@@ -434,9 +445,14 @@ const App = () => {
     openPermissionDialog,
     openAskUserQuestionDialog,
     openPlanApprovalDialog,
+    openContextUsageDialog,
+    updateContextUsageData,
+    closeContextUsageDialog,
     customSessionTitleRef,
     currentSessionIdRef,
     updateHistoryTitle,
+    applyHistoryTitleLocal,
+    setPermissionDialogTimeoutSeconds,
   });
 
   const {
@@ -447,10 +463,10 @@ const App = () => {
   } = useMessageProcessing({ messages, currentSessionId, t });
 
   const wrappedHandleProviderSelect = useCallback((providerId: string) => {
-    setMessages([]);
     chatInputRef.current?.clear();
     handleProviderSelect(providerId);
-  }, [handleProviderSelect, setMessages]);
+    forceCreateNewSessionWithProvider(providerId);
+  }, [forceCreateNewSessionWithProvider, handleProviderSelect]);
 
   const {
     handleSubmit: hookHandleSubmit,
@@ -460,6 +476,7 @@ const App = () => {
     t,
     addToast,
     currentProvider,
+    selectedModel,
     permissionMode,
     selectedAgent,
     sdkStatusLoaded,
@@ -478,6 +495,9 @@ const App = () => {
     setCurrentView,
     forceCreateNewSession,
     handleModeSelect,
+    longContextEnabled,
+    openContextUsageDialog,
+    closeContextUsageDialog,
   });
 
   const {
@@ -520,6 +540,10 @@ const App = () => {
             'info',
           );
         }
+        return;
+      }
+      if (CONTEXT_COMMANDS.has(command)) {
+        hookHandleSubmit(content, attachments);
         return;
       }
     }
@@ -652,6 +676,8 @@ const App = () => {
           onSendShortcutChange={handleSendShortcutChange}
           autoOpenFileEnabled={autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
+          onPermissionDialogTimeoutChange={setPermissionDialogTimeoutSeconds}
         />
       ) : currentView === 'chat' ? (
         <ChatScreen
@@ -739,6 +765,7 @@ const App = () => {
         onRewindConfirm={handleRewindConfirm}
         onRewindCancel={handleRewindCancel}
         currentProvider={currentProvider}
+        permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
       />
 
       <TaskReminderDialog

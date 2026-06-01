@@ -15,7 +15,8 @@ import java.util.Set;
 
 /**
  * 校验 plugin.xml 中关键编辑器动作的菜单注册关系。
- * 这里同时覆盖当前主线新增的文件路径发送入口，以及上游补充的编辑器菜单动作顺序和图标约束。
+ * 这里同时覆盖当前主线新增的文件路径发送入口，以及 upstream v0.4.3 新增的会话模板动作，
+ * 避免并轨后因为 plugin.xml 冲突导致菜单入口缺失或顺序回退。
  */
 public class PluginActionRegistrationTest {
 
@@ -66,6 +67,28 @@ public class PluginActionRegistrationTest {
         Assert.assertEquals("/icons/cc-gui-icon.svg", sendSelectionAction.icon);
         Assert.assertEquals("/icons/cc-gui-icon.svg", copyReferenceAction.icon);
         Assert.assertEquals("/icons/cc-gui-icon.svg", quickFixAction.icon);
+    }
+
+    /**
+     * 校验会话模板相关动作已经注册到 plugin.xml。
+     * 这是 upstream v0.4.3 新增的入口，如果在并轨过程中被冲掉，
+     * 模板保存与从模板创建会在运行时直接失效。
+     *
+     * @throws Exception 当 plugin.xml 解析失败或动作缺失时抛出异常
+     */
+    @Test
+    public void sessionTemplateActionsAreRegistered() throws Exception {
+        ActionRegistration saveAsTemplateAction = getActionRegistration("ClaudeCodeGUI.SaveAsTemplateAction");
+        ActionRegistration createFromTemplateAction = getActionRegistration("ClaudeCodeGUI.CreateFromTemplateAction");
+
+        Assert.assertEquals(
+                "com.github.claudecodegui.action.SaveAsTemplateAction",
+                saveAsTemplateAction.actionClass
+        );
+        Assert.assertEquals(
+                "com.github.claudecodegui.action.CreateFromTemplateAction",
+                createFromTemplateAction.actionClass
+        );
     }
 
     /**
@@ -124,6 +147,14 @@ public class PluginActionRegistrationTest {
         private final List<AddToGroupRegistration> addToGroupRegistrations;
         private final int declarationIndex;
 
+        /**
+         * 构造动作注册信息对象。
+         *
+         * @param actionClass 动作实现类名
+         * @param icon 动作图标路径
+         * @param addToGroupRegistrations 挂载到的菜单组列表
+         * @param declarationIndex 动作在 plugin.xml 中的声明顺序
+         */
         private ActionRegistration(
                 String actionClass,
                 String icon,
@@ -173,6 +204,13 @@ public class PluginActionRegistrationTest {
         private final String anchor;
         private final String relativeToAction;
 
+        /**
+         * 构造菜单挂载信息对象。
+         *
+         * @param groupId 菜单组 ID
+         * @param anchor 锚点位置
+         * @param relativeToAction 相对动作 ID
+         */
         private AddToGroupRegistration(String groupId, String anchor, String relativeToAction) {
             this.groupId = groupId;
             this.anchor = anchor;

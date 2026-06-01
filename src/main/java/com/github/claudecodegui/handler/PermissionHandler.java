@@ -11,6 +11,7 @@ import com.github.claudecodegui.remote.RemoteRequestRegistry;
 import com.github.claudecodegui.remote.RemoteRequestType;
 import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.taskstate.TaskStateEvent;
 import com.github.claudecodegui.taskstate.TaskStateService;
@@ -20,6 +21,7 @@ import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.util.concurrency.AppExecutorUtil;
 
 import javax.swing.*;
 import java.util.ArrayList;
@@ -29,6 +31,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -40,15 +43,61 @@ public class PermissionHandler extends BaseMessageHandler {
 
     private static final Logger LOG = Logger.getInstance(PermissionHandler.class);
 
-    // Permission request timeout (5 minutes), consistent with Node-side PERMISSION_TIMEOUT_MS
-    private static final long PERMISSION_TIMEOUT_SECONDS = 300;
-
     private static final String[] SUPPORTED_TYPES = {
         "permission_decision",
         "ask_user_question_response",
         "plan_approval_response",
         "plan_approval_dialog_visibility"
     };
+
+    /**
+     * 仅记录 payload 长度，避免在日志中直接落完整敏感内容。
+     *
+     * @param value 原始 payload
+     * @return payload 字符串长度；为空时返回 0
+     */
+    private static int payloadLength(String value) {
+        return value == null ? 0 : value.length();
+    }
+
+    /**
+     * 提取统一的异常类型名，保证不同分支日志格式一致。
+     *
+     * @param error 异常对象
+     * @return 简短异常类型名
+     */
+    private static String errorClass(Exception error) {
+        return error.getClass().getSimpleName();
+    }
+
+    /**
+     * 表示可取消的兜底超时任务。
+     * 主要供测试注入与正常流程自动取消使用。
+     */
+    interface CancellableTask {
+        void cancel();
+    }
+
+    /**
+     * 权限/提问/审批对话框的 safety-net 调度器。
+     * 当 webview 不可达或前端回调丢失时，由它在超时后兜底完成 future。
+     */
+    interface SafetyNetScheduler {
+        CancellableTask schedule(Runnable task, long delaySeconds);
+    }
+
+    private static final SafetyNetScheduler DEFAULT_SAFETY_NET_SCHEDULER = (task, delaySeconds) -> {
+        ScheduledFuture<?> scheduledFuture = AppExecutorUtil.getAppScheduledExecutorService()
+                .schedule(task, delaySeconds, TimeUnit.SECONDS);
+        return () -> scheduledFuture.cancel(false);
+    };
+
+    /**
+     * 统一调度权限类弹窗的后端兜底超时。
+     * 这里不依赖前端倒计时结果，而是确保 webview 不可达、回调丢失或远程协作链路异常时，
+     * 仍然能在后端把对应 future 收口，避免请求永久悬挂。
+     */
+    private final SafetyNetScheduler safetyNetScheduler;
 
     // Permission request map
     private final Map<String, CompletableFuture<Integer>> pendingPermissionRequests = new ConcurrentHashMap<>();
@@ -115,11 +164,86 @@ public class PermissionHandler extends BaseMessageHandler {
         RemoteRequestRegistry remoteRequestRegistry,
         RemoteCollabService remoteCollabService
     ) {
+        this(
+            context,
+            taskStateService,
+            taskReminderDispatcher,
+            remoteRequestRegistry,
+            remoteCollabService,
+            DEFAULT_SAFETY_NET_SCHEDULER
+        );
+    }
+
+    /**
+     * 为测试和超时策略扩展提供可注入的 safety-net 调度器。
+     * 生产环境继续使用默认实现；测试环境可以注入同步调度器，
+     * 用于验证超时路径而不必真实等待数分钟。
+     *
+     * @param context handler 上下文
+     * @param taskStateService 任务状态聚合服务
+     * @param taskReminderDispatcher 任务提醒分发器
+     * @param remoteRequestRegistry 远程请求注册表
+     * @param remoteCollabService 远程协作服务
+     * @param safetyNetScheduler 可注入的后端兜底超时调度器
+     */
+    PermissionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher,
+        RemoteRequestRegistry remoteRequestRegistry,
+        RemoteCollabService remoteCollabService,
+        SafetyNetScheduler safetyNetScheduler
+    ) {
         super(context);
         this.taskStateService = taskStateService;
         this.taskReminderDispatcher = taskReminderDispatcher;
         this.remoteRequestRegistry = remoteRequestRegistry;
         this.remoteCollabService = remoteCollabService;
+        this.safetyNetScheduler = safetyNetScheduler == null
+            ? DEFAULT_SAFETY_NET_SCHEDULER
+            : safetyNetScheduler;
+    }
+
+    /**
+     * 读取权限弹窗 safety-net 的最终超时秒数。
+     * 真正展示给用户的倒计时由前端控制；后端仅额外叠加一个 buffer，
+     * 避免前端已在正常倒计时但后端更早判定超时。
+     *
+     * @return 带 safety-net buffer 的超时秒数
+     */
+    long getSafetyNetTimeoutSeconds() {
+        CodemossSettingsService settingsService = context.getSettingsService();
+        if (settingsService == null) {
+            return CodemossSettingsService.DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS
+                + CodemossSettingsService.PERMISSION_SAFETY_NET_BUFFER_SECONDS;
+        }
+        try {
+            return settingsService.getPermissionDialogTimeoutSeconds()
+                + CodemossSettingsService.PERMISSION_SAFETY_NET_BUFFER_SECONDS;
+        } catch (Exception e) {
+            LOG.warn(
+                "[PERM_SHOW] Failed to read permission dialog timeout for safety net; errorClass=" + errorClass(e),
+                e
+            );
+            return CodemossSettingsService.DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS
+                + CodemossSettingsService.PERMISSION_SAFETY_NET_BUFFER_SECONDS;
+        }
+    }
+
+    /**
+     * 为权限相关 future 注册统一的后端兜底超时任务。
+     * future 一旦通过前端响应、远程端回写或会话切换清理正常完成，
+     * 就会自动取消兜底任务，避免重复 completion。
+     *
+     * @param future 需要兜底保护的 future
+     * @param timeoutTask 超时后执行的兜底任务
+     */
+    void scheduleSafetyNet(CompletableFuture<?> future, Runnable timeoutTask) {
+        CancellableTask cancellableTask = safetyNetScheduler.schedule(
+            timeoutTask,
+            getSafetyNetTimeoutSeconds()
+        );
+        future.whenComplete((ignored, error) -> cancellableTask.cancel());
     }
 
     public void setPermissionDeniedCallback(PermissionDeniedCallback callback) {
@@ -194,17 +318,16 @@ public class PermissionHandler extends BaseMessageHandler {
                 context.executeJavaScriptOnEDT(jsCode);
             });
 
-            // Timeout handling (give users enough time to review the context)
-            CompletableFuture.delayedExecutor(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
-                if (!future.isDone()) {
-                    LOG.warn("[PERM_SHOW] Timeout! Removing pending request for channelId=" + channelId);
+            // 改为统一 safety-net：前端负责正常倒计时，后端仅在前端失联时兜底拒绝。
+            scheduleSafetyNet(future, () -> {
+                if (future.complete(PermissionService.PermissionResponse.DENY.getValue())) {
+                    LOG.warn("[PERM_SHOW] Safety-net timeout fired for channelId=" + channelId);
                     pendingPermissionRequests.remove(channelId);
-                    future.complete(PermissionService.PermissionResponse.DENY.getValue());
                 }
             });
 
         } catch (Exception e) {
-            LOG.error("[PERM_SHOW] ERROR: " + e.getMessage(), e);
+            LOG.error("[PERM_SHOW] ERROR: errorClass=" + errorClass(e), e);
             pendingPermissionRequests.remove(channelId);
             future.complete(PermissionService.PermissionResponse.DENY.getValue());
         }
@@ -421,16 +544,16 @@ public class PermissionHandler extends BaseMessageHandler {
                 context.executeJavaScriptOnEDT(jsCode);
             });
 
-            // Timeout handling (consistent with regular permission requests: 5 minutes)
-            CompletableFuture.delayedExecutor(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
+            // AskUserQuestion 也走统一 safety-net，避免会话切换或前端失联后一直卡在等待中。
+            scheduleSafetyNet(future, () -> {
                 if (!future.isDone()) {
-                    LOG.warn("[ASK_USER_QUESTION][SHOW_DIALOG] Timeout! Removing pending request for requestId=" + requestId);
+                    LOG.warn("[ASK_USER_QUESTION][SHOW_DIALOG] Safety-net timeout requestId=" + requestId);
                     completeRemotePendingRequest(requestId, new JsonObject(), pendingAskUserQuestionRequestIds);
                 }
             });
 
         } catch (Exception e) {
-            LOG.error("[ASK_USER_QUESTION][SHOW_DIALOG] ERROR: " + e.getMessage(), e);
+            LOG.error("[ASK_USER_QUESTION][SHOW_DIALOG] ERROR: errorClass=" + errorClass(e), e);
             removeRemotePendingRequest(requestId, pendingAskUserQuestionRequestIds);
             future.complete(new JsonObject());
         }
@@ -508,9 +631,9 @@ public class PermissionHandler extends BaseMessageHandler {
             });
 
             // Timeout handling (consistent with other permission requests: 5 minutes)
-            CompletableFuture.delayedExecutor(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
+            scheduleSafetyNet(future, () -> {
                 if (!future.isDone()) {
-                    LOG.warn("[PLAN_APPROVAL][SHOW_DIALOG] Timeout requestId=" + requestId);
+                    LOG.warn("[PLAN_APPROVAL][SHOW_DIALOG] Safety-net timeout requestId=" + requestId);
                     completeRemotePendingRequest(
                         requestId,
                         createPlanApprovalResult(false, "default", "Plan approval timed out"),
@@ -529,7 +652,7 @@ public class PermissionHandler extends BaseMessageHandler {
             });
 
         } catch (Exception e) {
-            LOG.error("[PLAN_APPROVAL][SHOW_DIALOG] ERROR: " + e.getMessage(), e);
+            LOG.error("[PLAN_APPROVAL][SHOW_DIALOG] ERROR: errorClass=" + errorClass(e), e);
             removeRemotePendingRequest(requestId, pendingPlanApprovalRequestIds);
             planApprovalDialogVisible = false;
             future.complete(createPlanApprovalResult(false, "default", "Error showing plan approval dialog"));

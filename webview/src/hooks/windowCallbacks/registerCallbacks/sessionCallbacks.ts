@@ -12,6 +12,18 @@ import { downloadJSON } from '../../../utils/exportMarkdown';
 import { releaseSessionTransition } from '../sessionTransition';
 import { drainAndRequestDependencyStatus } from '../settingsBootstrap';
 
+// Matches session-titles-service.cjs#updateTitle, which rejects longer titles.
+const CUSTOM_TITLE_MAX_LENGTH = 50;
+
+/**
+ * 注册会话相关与 SDK 状态相关的前端 bridge 回调。
+ * 这里同时承接当前主线的历史标题/Tab 标题修复，以及上游新增的 AI 长标题本地兜底逻辑，
+ * 目标是在历史回放、新建会话、AI 自动标题和 SDK 状态刷新之间维持同一套前端契约。
+ *
+ * @param options useWindowCallbacks 传入的完整状态与回调集合
+ * @param tRef 国际化函数引用，避免闭包拿到旧值
+ * @return 无返回值
+ */
 export function registerSessionAndSdkCallbacks(
   options: UseWindowCallbacksOptions,
   tRef: MutableRefObject<UseWindowCallbacksOptions['t']>,
@@ -28,6 +40,7 @@ export function registerSessionAndSdkCallbacks(
     customSessionTitleRef,
     currentSessionIdRef,
     updateHistoryTitle,
+    applyHistoryTitleLocal,
   } = options;
 
   window.setSessionId = (sessionId: string) => {
@@ -41,7 +54,14 @@ export function registerSessionAndSdkCallbacks(
     // Orphaned title entries are harmless and cleaned up on session deletion.
     const title = customSessionTitleRef.current;
     if (title && oldId !== sessionId) {
-      updateHistoryTitle(sessionId, title);
+      // AI-generated titles can exceed the backend limit. Fall back to
+      // local-only update so the UI keeps the title visible without a
+      // silent backend write failure.
+      if (title.length <= CUSTOM_TITLE_MAX_LENGTH) {
+        updateHistoryTitle(sessionId, title);
+      } else {
+        applyHistoryTitleLocal(sessionId, title);
+      }
     }
   };
 
@@ -126,8 +146,9 @@ export function registerSessionAndSdkCallbacks(
 
   /**
    * 统一兼容历史标题回放的两种前端调用签名。
-   * 1. 旧链路：`updateSessionTitle(title)`，仅在前端本地恢复标题，不做历史持久化回写。
-   * 2. 新链路：`updateSessionTitle(sessionId, title)`，要求 sessionId 与当前会话匹配，再同步标题与历史列表。
+   * 1. 旧链路：`updateSessionTitle(title)`，仅恢复当前前端标题状态，不写历史列表。
+   * 2. 新链路：`updateSessionTitle(sessionId, title)`，要求 sessionId 与当前会话匹配后，
+   *    再同步会话标题与历史列表；若标题过长，则走本地历史列表兜底，避免后端拒绝写入。
    *
    * @param sessionIdOrTitle 旧签名中的标题，或新签名中的 sessionId
    * @param maybeTitle 新签名中的标题；旧签名场景下为空
@@ -151,11 +172,15 @@ export function registerSessionAndSdkCallbacks(
     if (!normalizedSessionId) {
       return;
     }
-    // 仅当事件对应当前会话时才接收，避免陈旧异步回放覆盖错误窗口。
     if (currentSessionIdRef.current !== normalizedSessionId) {
       return;
     }
+
     setCustomSessionTitle(normalizedTitle);
-    updateHistoryTitle(normalizedSessionId, normalizedTitle);
+    if (normalizedTitle.length <= CUSTOM_TITLE_MAX_LENGTH) {
+      updateHistoryTitle(normalizedSessionId, normalizedTitle);
+    } else {
+      applyHistoryTitleLocal(normalizedSessionId, normalizedTitle);
+    }
   };
 }

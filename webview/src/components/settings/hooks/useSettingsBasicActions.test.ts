@@ -55,7 +55,9 @@ describe('useSettingsBasicActions merged settings behavior', () => {
     });
 
     const calls = (window.sendToJava as ReturnType<typeof vi.fn>).mock.calls;
-    const command = calls.findLast(([message]) => String(message).startsWith('set_task_reminder_config:'))?.[0];
+    const command = [...calls]
+      .reverse()
+      .find((call) => String(call[0]).startsWith('set_task_reminder_config:'))?.[0];
     expect(command).toBeTruthy();
 
     const payload = JSON.parse(String(command).slice('set_task_reminder_config:'.length));

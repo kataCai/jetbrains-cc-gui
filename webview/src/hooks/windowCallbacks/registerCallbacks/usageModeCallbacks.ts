@@ -1,17 +1,18 @@
-/**
- * usageModeCallbacks.ts
- *
- * Registers window bridge callbacks for usage statistics, permission modes, and
- * model/provider updates: onUsageUpdate, onModeChanged, onModeReceived,
- * onModelChanged, onModelConfirmed, updateActiveProvider, updateThinkingEnabled,
- * updateStreamingEnabled, updateSendShortcut, updateAutoOpenFileEnabled.
- */
-
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { PermissionMode, ReasoningEffort } from '../../../components/ChatInputBox/types';
 import { isValidPermissionMode, normalizeClaudeModelId } from '../../../components/ChatInputBox/types';
+import { clampPermissionDialogTimeoutSeconds } from '../../../utils/permissionDialogTimeout';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
+/**
+ * 注册使用量、权限模式、模型与基础设置相关的 window bridge 回调。
+ *
+ * 该函数是后端向 WebView 同步运行态设置的入口。并轨时必须同时保留
+ * 当前主线的 Codex 模型状态同步、provider 映射同步，以及上游新增的
+ * 权限弹窗超时时间同步，避免设置页和运行态出现不一致。
+ *
+ * @param options 注册回调所需的状态 setter、当前 provider 引用和模型同步工具。
+ */
 export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): void {
   const {
     setUsagePercentage,
@@ -32,6 +33,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setStreamingEnabledSetting,
     setSendShortcut,
     setAutoOpenFileEnabled,
+    setPermissionDialogTimeoutSeconds,
     currentProviderRef,
     shouldAdoptCodexDefaultModelRef,
     syncActiveProviderModelMapping,
@@ -40,47 +42,55 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
   window.onUsageUpdate = (json) => {
     try {
       const data = JSON.parse(json);
-      if (typeof data.percentage === 'number') {
-        const used =
-          typeof data.usedTokens === 'number'
-            ? data.usedTokens
-            : typeof data.totalTokens === 'number'
-              ? data.totalTokens
-              : undefined;
-        const max =
-          typeof data.maxTokens === 'number'
-            ? data.maxTokens
-            : typeof data.limit === 'number'
-              ? data.limit
-              : undefined;
-
-        if (used !== undefined && max !== undefined && used > max * 2) {
-          console.warn(
-            '[Frontend] Usage data may be incorrect: used=' + used + ', max=' + max,
-          );
-        }
-
-        const safePercentage = Math.max(0, Math.min(100, data.percentage));
-        setUsagePercentage(safePercentage);
-        setUsageUsedTokens(used);
-        setUsageMaxTokens(max);
+      if (typeof data.percentage !== 'number') {
+        return;
       }
+
+      const used =
+        typeof data.usedTokens === 'number'
+          ? data.usedTokens
+          : typeof data.totalTokens === 'number'
+            ? data.totalTokens
+            : undefined;
+      const max =
+        typeof data.maxTokens === 'number'
+          ? data.maxTokens
+          : typeof data.limit === 'number'
+            ? data.limit
+            : undefined;
+
+      if (used !== undefined && max !== undefined && used > max * 2) {
+        console.warn('[Frontend] Usage data may be incorrect: used=' + used + ', max=' + max);
+      }
+
+      setUsagePercentage(Math.max(0, Math.min(100, data.percentage)));
+      setUsageUsedTokens(used);
+      setUsageMaxTokens(max);
     } catch (error) {
       console.error('[Frontend] Failed to parse usage update:', error);
     }
   };
 
+  /**
+   * 同步 provider 维度的权限模式。
+   *
+   * Codex 不支持 plan 模式，因此后端误传 plan 时在前端降级为 default。
+   *
+   * @param mode 后端同步的权限模式。
+   * @param providerOverride 可选的 provider 覆盖值，用于处理 provider 切换期间的回调。
+   */
   const updateMode = (mode?: PermissionMode, providerOverride?: string) => {
     const activeProvider = providerOverride || currentProviderRef.current;
-    if (isValidPermissionMode(mode)) {
-      const nextMode: PermissionMode =
-        activeProvider === 'codex' && mode === 'plan' ? 'default' : mode;
-      setPermissionMode((prev) => (prev === nextMode ? prev : nextMode));
-      if (activeProvider === 'codex') {
-        setCodexPermissionMode((prev) => (prev === nextMode ? prev : nextMode));
-      } else {
-        setClaudePermissionMode((prev) => (prev === nextMode ? prev : nextMode));
-      }
+    if (!isValidPermissionMode(mode)) {
+      return;
+    }
+
+    const nextMode: PermissionMode = activeProvider === 'codex' && mode === 'plan' ? 'default' : mode;
+    setPermissionMode((prev) => (prev === nextMode ? prev : nextMode));
+    if (activeProvider === 'codex') {
+      setCodexPermissionMode((prev) => (prev === nextMode ? prev : nextMode));
+    } else {
+      setClaudePermissionMode((prev) => (prev === nextMode ? prev : nextMode));
     }
   };
 
@@ -104,13 +114,6 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     }
   };
 
-  /**
-   * 接收后端同步的 Codex 当前模型状态。
-   * 该回调会覆盖前端缓存中的默认模型、reasoning effort 以及 custom base URL 状态，
-   * 确保 GUI 展示与本地 `~/.codex/config.toml` 的真实运行态一致。
-   *
-   * @param jsonStr 后端序列化后的当前模型状态
-   */
   window.updateCodexModelState = (jsonStr: string) => {
     try {
       const data = JSON.parse(jsonStr) as {
@@ -119,6 +122,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         baseUrl?: string;
         usesCustomBaseUrl?: boolean;
       };
+
       if (typeof data.model === 'string' && data.model.trim().length > 0) {
         const normalizedModel = data.model.trim();
         setDefaultCodexModelFromConfig(normalizedModel);
@@ -126,6 +130,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
           setSelectedCodexModel(normalizedModel);
         }
       }
+
       if (
         data.reasoningEffort === 'low' ||
         data.reasoningEffort === 'medium' ||
@@ -134,6 +139,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       ) {
         setReasoningEffort(data.reasoningEffort);
       }
+
       setCodexBaseUrl(
         typeof data.baseUrl === 'string' && data.baseUrl.trim().length > 0
           ? data.baseUrl.trim()
@@ -201,6 +207,18 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setAutoOpenFileEnabled(data.autoOpenFileEnabled ?? false);
     } catch (error) {
       console.error('[Frontend] Failed to parse auto open file enabled:', error);
+    }
+  };
+
+  window.updatePermissionDialogTimeout = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      setPermissionDialogTimeoutSeconds(
+        clampPermissionDialogTimeoutSeconds(data.permissionDialogTimeoutSeconds),
+      );
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      console.error(`[Frontend] Failed to parse permission dialog timeout payload: ${errorName}`);
     }
   };
 

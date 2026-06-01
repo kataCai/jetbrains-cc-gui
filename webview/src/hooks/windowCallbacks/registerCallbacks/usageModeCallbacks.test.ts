@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerUsageModeCallbacks } from './usageModeCallbacks';
 
-vi.mock('../settingsBootstrap', () => ({
-  drainPendingSettings: vi.fn(),
-  startInitialSettingsRequest: vi.fn(),
-}));
+vi.mock('../settingsBootstrap', async () => {
+  const actual = await vi.importActual<typeof import('../settingsBootstrap')>('../settingsBootstrap');
+  return {
+    ...actual,
+    startInitialSettingsRequest: vi.fn(),
+  };
+});
 
 function createOptions(provider: 'claude' | 'codex' = 'claude') {
   return {

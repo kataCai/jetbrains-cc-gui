@@ -9,7 +9,9 @@
 
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { ClaudeMessage } from '../../../types';
+import type { ContextUsageData } from '../../../components/ContextUsageDialog';
 import { sendBridgeEvent } from '../../../utils/bridge';
+import { debugError } from '../../../utils/debug';
 import {
   appendOptimisticMessageIfMissing,
   ensureStreamingAssistantInList,
@@ -90,6 +92,8 @@ export function registerMessageCallbacks(
     findLastAssistantIndex,
     extractRawBlocks,
     patchAssistantForStreaming,
+    updateContextUsageData,
+    closeContextUsageDialog,
   } = options;
 
   const ensureStreamingAssistantPreserved = (prevList: ClaudeMessage[], resultList: ClaudeMessage[]): ClaudeMessage[] => {
@@ -119,7 +123,7 @@ export function registerMessageCallbacks(
   };
 
   if (window.__pendingUpdateRaf != null) {
-    cancelAnimationFrame(window.__pendingUpdateRaf);
+    clearTimeout(window.__pendingUpdateRaf);
     window.__pendingUpdateRaf = null;
     window.__pendingUpdateJson = null;
     window.__pendingUpdateSequence = null;
@@ -130,7 +134,7 @@ export function registerMessageCallbacks(
 
   const cancelPendingUpdateMessages = () => {
     if (pendingUpdateRaf !== null) {
-      cancelAnimationFrame(pendingUpdateRaf);
+      clearTimeout(pendingUpdateRaf);
     }
     pendingUpdateRaf = null;
     pendingUpdateJson = null;
@@ -347,7 +351,7 @@ export function registerMessageCallbacks(
       window.__pendingUpdateJson = json;
       window.__pendingUpdateSequence = sequence;
       if (pendingUpdateRaf === null) {
-        const rafId = requestAnimationFrame(() => {
+        const timerId = setTimeout(() => {
           pendingUpdateRaf = null;
           window.__pendingUpdateRaf = null;
           const latestJson = pendingUpdateJson;
@@ -359,9 +363,9 @@ export function registerMessageCallbacks(
           if (latestJson) {
             processUpdateMessages(latestJson, latestSequence);
           }
-        });
-        pendingUpdateRaf = rafId;
-        window.__pendingUpdateRaf = rafId;
+        }, 16);
+        pendingUpdateRaf = timerId as unknown as number;
+        window.__pendingUpdateRaf = timerId as unknown as number;
       }
       return;
     }
@@ -505,7 +509,7 @@ export function registerMessageCallbacks(
 
   window.clearMessages = () => {
     if (pendingUpdateRaf !== null) {
-      cancelAnimationFrame(pendingUpdateRaf);
+      clearTimeout(pendingUpdateRaf);
       pendingUpdateRaf = null;
       pendingUpdateJson = null;
       pendingUpdateSequence = null;
@@ -515,11 +519,37 @@ export function registerMessageCallbacks(
     }
     window.__deniedToolIds?.clear();
     resetTransientUiState();
+    closeContextUsageDialog();
     setMessages([]);
   };
 
   window.addErrorMessage = (message) => {
     addToast(message, 'error');
+  };
+
+  window.showContextUsageDialog = (json: string) => {
+    try {
+      const result = JSON.parse(json);
+      const requestId = typeof result.requestId === 'string' ? result.requestId : null;
+      const data: ContextUsageData = result.data || result;
+      if (result.success === false) {
+        if (closeContextUsageDialog(requestId)) {
+          addToast(result.error || 'Failed to get context usage', 'error');
+        }
+        return;
+      }
+      updateContextUsageData(requestId, data);
+    } catch (e) {
+      debugError('[ContextUsage] Failed to parse context usage result:', e);
+      closeContextUsageDialog();
+      addToast('Failed to parse context usage data', 'error');
+    }
+  };
+
+  window.onContextUsageError = (message: string, requestId?: string) => {
+    if (closeContextUsageDialog(requestId)) {
+      addToast(message, 'error');
+    }
   };
 
   window.addHistoryMessage = (message: ClaudeMessage) => {
@@ -549,7 +579,17 @@ export function registerMessageCallbacks(
       content: content || '',
       timestamp: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => {
+      // If the last message is an optimistic message with matching content,
+      // skip adding — the frontend already rendered the optimistic copy.
+      // Otherwise addUserMessage + optimistic create a brief duplicate until
+      // the next updateMessages deduplicates them.
+      const lastMsg = prev[prev.length - 1];
+      if (lastMsg?.isOptimistic && lastMsg.type === 'user' && lastMsg.content === content) {
+        return prev;
+      }
+      return [...prev, userMessage];
+    });
     userPausedRef.current = false;
     isUserAtBottomRef.current = true;
     requestAnimationFrame(() => {
