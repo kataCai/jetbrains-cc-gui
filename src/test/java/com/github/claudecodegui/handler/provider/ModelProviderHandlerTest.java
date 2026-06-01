@@ -48,6 +48,16 @@ public class ModelProviderHandlerTest {
      * 该场景覆盖接入第三方代理模型时的边界，避免把任意模型名都按 Claude 规则重写。
      */
     @Test
+    public void shouldIgnoreSmallFastModelForHaikuResolution() {
+        JsonObject env = new JsonObject();
+        env.addProperty("ANTHROPIC_SMALL_FAST_MODEL", "legacy-haiku-proxy");
+
+        String resolved = ModelProviderHandler.resolveConfiguredClaudeModel("claude-haiku-4-5", env);
+
+        assertEquals("claude-haiku-4-5", resolved);
+    }
+
+    @Test
     public void shouldNotApplySonnetMappingToAlreadyCustomModelIds() {
         JsonObject env = new JsonObject();
         env.addProperty("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7");

@@ -112,7 +112,16 @@
       "completed": "Completed",
       "final_error": "Needs attention"
     },
-    "totalDuration": "This reply took"
+    "totalDuration": "This reply took",
+    "compactSummary": {
+      "summarizedConversation": "Summarized conversation",
+      "compactSummary": "Compact summary",
+      "messagesUpTo": "Summarized {{count}} messages up to this point",
+      "messagesFrom": "Summarized {{count}} messages from this point",
+      "userContext": "Context: \"{{context}}\"",
+      "expand": "Expand summary",
+      "collapse": "Collapse summary"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -144,7 +153,8 @@
         "japanese": "日本語",
         "russian": "Русский",
         "korean": "한국어",
-        "portuguese": "Português (Brasil)"
+        "portuguese": "Português (Brasil)",
+        "followIde": "Follow IDE"
       },
       "nodePath": {
         "label": "Node.js Path",
@@ -305,6 +315,11 @@
         "balloonNotificationsHint": "Balloon visibility also depends on IDE Notifications settings: Settings | Appearance & Behavior | Notifications.",
         "testPopup": "Test popup",
         "testBalloon": "Test balloon"
+      },
+      "permissionDialogTimeout": {
+        "label": "Permission & Question Dialog Timeout",
+        "unit": "seconds",
+        "hint": "Set the timeout for Claude question dialogs and permission request dialogs (30~3600 seconds). After timeout, the dialog will close automatically and Claude will continue."
       }
     },
     "providers": "Provider Management",
@@ -401,6 +416,11 @@
         "label": "Code Review AI Additional Prompt",
         "placeholder": "This feature is under development, stay tuned...",
         "hint": "Code Review AI will help you automatically review code, identify potential issues, and provide improvement suggestions. You can configure review preferences and focus areas here."
+      },
+      "projectPrompt": {
+        "label": "Project-specific Additional Prompt",
+        "placeholder": "Add project-specific requirements here, e.g., scope must use module name, commit body should include impact scope, etc...",
+        "hint": "This prompt only applies to the current project and is appended together with the global additional prompt. When they conflict, the project prompt takes precedence. Different projects can be configured independently."
       }
     },
     "agents": "Agents",
@@ -705,7 +725,19 @@
         "cliLoginDisableMessage": "The plugin will stop reading ~/.codex/config.toml and auth.json.",
         "modelIdRequired": "Model ID is required",
         "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
-        "modelIdDuplicate": "Model ID already exists"
+        "modelIdDuplicate": "Model ID already exists",
+        "envVarsTitle": "Environment Variables",
+        "messageEnvLabel": "Message Environment Variables",
+        "messageEnvHint": "Custom environment variables injected into the Codex message subprocess",
+        "mcpEnvLabel": "MCP Environment Variables",
+        "mcpEnvHint": "Custom environment variables injected into the MCP tool discovery subprocess",
+        "envKeyPlaceholder": "ENV_KEY",
+        "envValuePlaceholder": "value",
+        "addEnvVar": "Add Variable",
+        "envKeyInvalid": "Invalid key name (must start with letter/underscore, alphanumeric only)",
+        "envKeyProtected": "Cannot set built-in variable: {{key}}",
+        "envKeyDuplicate": "Duplicate key: {{key}}",
+        "envValueTooLong": "Value too long (max {{max}} characters)"
       }
     },
     "agent": {
@@ -1010,7 +1042,8 @@
       "WebSearch": "Web Search",
       "WebFetch": "Fetch Web",
       "execute": "Execute {{toolName}}",
-      "readDirectory": "Read Directory"
+      "readDirectory": "Read Directory",
+      "timeoutWarning": "Please answer soon, dialog will close in {{seconds}} seconds"
     }
   },
   "askUserQuestion": {
@@ -1317,7 +1350,8 @@
     "bashGroupAllCompleted": "All Completed",
     "bashGroupFailed": "failed",
     "updatePlan": "Update Plan",
-    "applyPatch": "Apply Patch"
+    "applyPatch": "Apply Patch",
+    "promptLabel": "Prompt"
   },
   "todo": {
     "inProgress": "In Progress {{completed}}/{{total}} tasks",
@@ -1562,16 +1596,12 @@
     },
     "codex": {
       "gpt55": {
-        "label": "gpt-5.5",
-        "description": "Frontier model for complex coding, research, and real-world work."
+        "label": "GPT-5.5",
+        "description": "Latest frontier model with stronger capabilities."
       },
       "gpt53codex": {
         "label": "GPT-5.3-Codex",
         "description": "Latest frontier agentic coding model with enhanced capabilities."
-      },
-      "gpt55": {
-        "label": "GPT-5.5",
-        "description": "Latest frontier model with stronger capabilities."
       },
       "gpt54": {
         "label": "gpt-5.4",
@@ -1792,5 +1822,67 @@
     "retry": "Retry",
     "close": "Close",
     "later": "Later"
+  },
+  "contextUsage": {
+    "title": "Context Usage",
+    "loading": "Loading context usage...",
+    "autoCompactEnabled": "Auto-compact: enabled",
+    "autoCompactEnabledWithThreshold": "Auto-compact: enabled ({{threshold}}%)",
+    "notAvailable": "N/A",
+    "categories": {
+      "systemPrompt": "System prompt",
+      "systemTools": "System tools",
+      "mcpTools": "MCP tools",
+      "customAgents": "Custom agents",
+      "memoryFiles": "Memory files",
+      "skills": "Skills",
+      "messages": "Messages",
+      "autoCompactBuffer": "Autocompact buffer",
+      "freeSpace": "Free space"
+    },
+    "sections": {
+      "mcpTools": "MCP Tools ({{count}})",
+      "agents": "Agents ({{count}})",
+      "memoryFiles": "Memory Files ({{count}})",
+      "skills": "Skills ({{included}}/{{total}})"
+    },
+    "table": {
+      "tool": "Tool",
+      "server": "Server",
+      "tokens": "Tokens",
+      "agent": "Agent",
+      "source": "Source",
+      "type": "Type",
+      "path": "Path",
+      "skill": "Skill"
+    }
+  },
+  "errorDiagnostic": {
+    "copyCommand": "Copy",
+    "copied": "Copied",
+    "openDependencySettings": "Open Dependency Settings",
+    "recommended": "Recommended",
+    "codexThreadResume": {
+      "title": "Session thread is no longer valid",
+      "intro": "Creating a new session will resolve this issue. The thread ID for the current session no longer exists on the Codex server.",
+      "reason": "Codex clears old threads after a period of time, which can trigger this error when resuming a previous session."
+    },
+    "sdkNativeBinaryMissing": {
+      "title": "SDK installation incomplete — native binary missing",
+      "intro": "This is a known issue with the Taobao npm mirror (not a plugin bug). The mirror hasn't fully synchronized the platform-specific files. You can resolve it manually with either of the options below:",
+      "reason": "This issue will disappear automatically once the Taobao mirror finishes syncing — no further action needed.",
+      "solutions": {
+        "switchRegistry": {
+          "title": "Option 1: Temporarily switch to the official registry and reinstall",
+          "step0": "1. Run this in your terminal (switch to the official npm registry):",
+          "step1": "2. Open the plugin's Dependency Management settings and click Reinstall:",
+          "step2": "3. After the reinstall completes, switch back to the Taobao mirror:"
+        },
+        "downgrade": {
+          "title": "Option 2: Roll back to an older version",
+          "step0": "In Dependency Management, switch the SDK version to v0.2.112 or earlier. Restart IDEA after switching."
+        }
+      }
+    }
   }
 }

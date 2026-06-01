@@ -566,6 +566,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
         onClick={focusInput}
         ref={containerRef}
         style={containerStyle}
+        onMouseOver={handleMouseOver}
+        onMouseLeave={handleMouseLeave}
       >
         <ResizeHandles getHandleProps={getHandleProps} nudge={nudge} />
 
@@ -603,8 +605,6 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
         <div
           ref={editableWrapperRef}
           className="input-editable-wrapper"
-          onMouseOver={handleMouseOver}
-          onMouseLeave={handleMouseLeave}
           style={editableWrapperStyle}
         >
           <div

@@ -38,21 +38,28 @@ interface UseSessionManagementReturn {
   suppressNextStatusToastRef: React.MutableRefObject<boolean>;
   createNewSession: () => void;
   forceCreateNewSession: () => void;
+  forceCreateNewSessionWithProvider: (providerId: string) => void;
   handleConfirmNewSession: () => void;
   handleCancelNewSession: () => void;
   handleConfirmInterrupt: () => void;
   handleCancelInterrupt: () => void;
-  loadHistorySession: (sessionId: string) => void;
+  loadHistorySession: (sessionId: string, provider?: string) => void;
   deleteHistorySession: (sessionId: string) => void;
   deleteHistorySessions: (sessionIds: string[]) => void;
   exportHistorySession: (sessionId: string, title: string) => void;
   toggleFavoriteSession: (sessionId: string) => void;
   updateHistoryTitle: (sessionId: string, newTitle: string) => void;
   syncCurrentTabTitle: (newTitle: string) => void;
+  applyHistoryTitleLocal: (sessionId: string, newTitle: string) => void;
 }
 
 /**
- * Hook for managing session operations (create, load, delete, export, etc.)
+ * 负责会话创建、切换、删除、导出与标题同步等会话管理动作。
+ * 该 Hook 同时承接当前主线“会话切换保护”和上游新增的“本地历史标题兜底”能力，
+ * 以避免历史标题回放、AI 自动标题和窗口 Tab 标题在并轨后再次分叉。
+ *
+ * @param options 会话管理所需的状态、setter 与国际化能力
+ * @return 提供会话管理动作、确认框状态以及标题同步辅助方法
  */
 export function useSessionManagement({
   messages,
@@ -82,6 +89,15 @@ export function useSessionManagement({
   const transitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyDataRef = useRef(historyData);
   historyDataRef.current = historyData;
+
+  /**
+   * 统一控制“删除会话成功”提示的立即显示或延迟显示。
+   * 当删除的是当前会话时，会话切换会立即发生；此时先挂到 window 上，等切换完成后再展示，
+   * 避免 toast 在新旧会话切换过程中被清掉。
+   *
+   * @param afterSessionTransition 是否在会话切换完成后再展示提示
+   * @return 无返回值
+   */
   const showSessionDeletedToast = useCallback((afterSessionTransition = false) => {
     const toast = { message: t('history.sessionDeleted'), type: 'success' as const };
     if (afterSessionTransition) {
@@ -91,15 +107,20 @@ export function useSessionManagement({
     addToast(toast.message, toast.type);
   }, [addToast, t]);
 
+  /**
+   * 进入会话切换保护态，统一清理瞬时 UI 状态并设置超时释放。
+   * 该保护态用于避免历史回放、新建会话或切 provider 时，旧会话的流式回调继续污染新界面。
+   *
+   * @param nextSessionId 即将进入的新会话 ID；新建会话场景下可为空
+   * @param nextTitle 即将展示的标题；未知时可为空
+   * @return 无返回值
+   */
   const beginSessionTransition = useCallback((nextSessionId: string | null, nextTitle: string | null) => {
     window.__sessionTransitioning = true;
     window.__sessionTransitionToken = createSessionTransitionToken();
-    // Use the single cleanup entry point exposed by useWindowCallbacks.
-    // This clears both React state AND internal streaming refs in one shot.
     if (typeof window.__resetTransientUiState === 'function') {
       window.__resetTransientUiState();
     } else {
-      // Fallback if useWindowCallbacks hasn't mounted yet (e.g. during SSR/tests)
       clearToasts();
       setStatus('');
       setLoadingState(false);
@@ -113,12 +134,6 @@ export function useSessionManagement({
     setUsageUsedTokens(undefined);
     setUsageMaxTokens(undefined);
 
-    // FIX: Safety timeout to auto-release the session transition guard.
-    // If the backend's historyLoadComplete signal is lost (e.g., JCEF IPC failure
-    // during webview reload, or a backend error that prevents the callback),
-    // __sessionTransitioning would remain true permanently, silently dropping ALL
-    // message callbacks (updateMessages, onContentDelta, onStreamStart, etc.).
-    // This makes the webview appear "dead" while the backend continues working.
     if (transitionTimeoutRef.current !== null) {
       clearTimeout(transitionTimeoutRef.current);
     }
@@ -126,33 +141,38 @@ export function useSessionManagement({
     transitionTimeoutRef.current = setTimeout(() => {
       transitionTimeoutRef.current = null;
       if (window.__sessionTransitioning && window.__sessionTransitionToken === token) {
-        console.warn('[SessionManagement] Transition guard timed out — auto-releasing');
+        console.warn('[SessionManagement] Transition guard timed out - auto-releasing');
         window.__sessionTransitioning = false;
         window.__sessionTransitionToken = null;
       }
-    }, 15_000); // 15 seconds — generous enough for slow history loads
-  }, [clearToasts, setStatus, setLoadingState, setIsThinking, setStreamingActive, setMessages, setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens]);
+    }, 15_000);
+  }, [
+    clearToasts,
+    setStatus,
+    setLoadingState,
+    setIsThinking,
+    setStreamingActive,
+    setMessages,
+    setCurrentSessionId,
+    setCustomSessionTitle,
+    setUsagePercentage,
+    setUsageUsedTokens,
+    setUsageMaxTokens,
+  ]);
 
-  // Create new session
   const createNewSession = useCallback(() => {
-    // [FIX] Prioritize loading check - if AI is responding, must interrupt first
-    // This prevents creating new session without stopping the current conversation
     if (loading) {
-      // If loading (AI is responding), show interrupt confirmation
       pendingActionRef.current = 'newSession';
       setShowInterruptConfirm(true);
     } else if (messages.length > 0) {
-      // If there are messages but not loading, show new session confirmation
       pendingActionRef.current = 'newSession';
       setShowNewSessionConfirm(true);
     } else {
-      // If empty and not loading, directly create new session
       beginSessionTransition(null, null);
       sendBridgeEvent('create_new_session');
     }
   }, [beginSessionTransition, messages.length, loading]);
 
-  // Force create new session (no confirmation, used by /clear /new /reset commands)
   const forceCreateNewSession = useCallback(() => {
     if (loading) {
       sendBridgeEvent('interrupt_session');
@@ -161,10 +181,17 @@ export function useSessionManagement({
     sendBridgeEvent('create_new_session');
   }, [beginSessionTransition, loading]);
 
-  // Confirm new session
+  const forceCreateNewSessionWithProvider = useCallback((providerId: string) => {
+    if (loading) {
+      sendBridgeEvent('interrupt_session');
+    }
+    beginSessionTransition(null, null);
+    sendBridgeEvent('set_provider', providerId);
+    sendBridgeEvent('create_new_session');
+  }, [beginSessionTransition, loading]);
+
   const handleConfirmNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);
-    // [FIX] Safety check: if loading started while dialog was open, send interrupt first
     if (loading) {
       sendBridgeEvent('interrupt_session');
     }
@@ -173,80 +200,70 @@ export function useSessionManagement({
     pendingActionRef.current = null;
   }, [beginSessionTransition, loading]);
 
-  // Cancel new session
   const handleCancelNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);
     pendingActionRef.current = null;
   }, []);
 
-  // Confirm interrupt
   const handleConfirmInterrupt = useCallback(() => {
     setShowInterruptConfirm(false);
-    // Send interrupt signal and create new session
     sendBridgeEvent('interrupt_session');
     beginSessionTransition(null, null);
     sendBridgeEvent('create_new_session');
     pendingActionRef.current = null;
   }, [beginSessionTransition]);
 
-  // Cancel interrupt
   const handleCancelInterrupt = useCallback(() => {
     setShowInterruptConfirm(false);
     pendingActionRef.current = null;
   }, []);
 
-  // Load history session
-  const loadHistorySession = useCallback((sessionId: string) => {
-    // [FIX] Send interrupt signal if AI is responding
+  const loadHistorySession = useCallback((sessionId: string, provider?: string) => {
     if (loading) {
       sendBridgeEvent('interrupt_session');
     }
 
-    const session = historyDataRef.current?.sessions?.find(s => s.sessionId === sessionId);
+    const session = historyDataRef.current?.sessions?.find((item) => item.sessionId === sessionId);
     beginSessionTransition(sessionId, session?.title ?? null);
-    sendBridgeEvent('load_session', sessionId);
+    sendBridgeEvent('load_session', JSON.stringify({
+      sessionId,
+      provider: provider || session?.provider || 'claude',
+    }));
     setCurrentView('chat');
   }, [beginSessionTransition, loading, setCurrentView]);
 
-  // Delete history session
   const deleteHistorySession = useCallback((sessionId: string) => {
-    // Send delete request to Java backend
     sendBridgeEvent('delete_session', sessionId);
     let startedSessionTransition = false;
 
-    // Immediately update frontend state, remove session from history list
     if (historyData && historyData.sessions) {
-      setHistoryData(prevHistoryData => {
+      setHistoryData((prevHistoryData) => {
         if (!prevHistoryData?.sessions) {
           return prevHistoryData;
         }
 
-        const deletedSession = prevHistoryData.sessions.find(s => s.sessionId === sessionId);
+        const deletedSession = prevHistoryData.sessions.find((session) => session.sessionId === sessionId);
         return {
           ...prevHistoryData,
-          sessions: prevHistoryData.sessions.filter(s => s.sessionId !== sessionId),
-          total: Math.max(0, (prevHistoryData.total || 0) - (deletedSession?.messageCount || 0))
+          sessions: prevHistoryData.sessions.filter((session) => session.sessionId !== sessionId),
+          total: Math.max(0, (prevHistoryData.total || 0) - (deletedSession?.messageCount || 0)),
         };
       });
 
-      // If deleted session is current session, clear messages and reset state
       if (sessionId === currentSessionId) {
-        // [FIX] Send interrupt signal if AI is responding
         if (loading) {
           sendBridgeEvent('interrupt_session');
         }
         beginSessionTransition(null, null);
         startedSessionTransition = true;
-        // Set flag to suppress next updateStatus toast
         suppressNextStatusToastRef.current = true;
         sendBridgeEvent('create_new_session');
       }
-
     }
-    showSessionDeletedToast(startedSessionTransition);
-  }, [historyData, currentSessionId, loading, setHistoryData, setMessages, setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, showSessionDeletedToast]);
 
-  // Batch delete history sessions
+    showSessionDeletedToast(startedSessionTransition);
+  }, [historyData, currentSessionId, loading, setHistoryData, beginSessionTransition, showSessionDeletedToast]);
+
   const deleteHistorySessions = useCallback((sessionIds: string[]) => {
     const uniqueSessionIds = Array.from(new Set(sessionIds.filter(Boolean)));
     if (uniqueSessionIds.length === 0) {
@@ -258,7 +275,7 @@ export function useSessionManagement({
 
     if (historyData && historyData.sessions) {
       const deletedSessionIds = new Set(uniqueSessionIds);
-      setHistoryData(prevHistoryData => {
+      setHistoryData((prevHistoryData) => {
         if (!prevHistoryData?.sessions) {
           return prevHistoryData;
         }
@@ -269,8 +286,8 @@ export function useSessionManagement({
 
         return {
           ...prevHistoryData,
-          sessions: prevHistoryData.sessions.filter(session => !deletedSessionIds.has(session.sessionId)),
-          total: Math.max(0, (prevHistoryData.total || 0) - deletedMessageCount)
+          sessions: prevHistoryData.sessions.filter((session) => !deletedSessionIds.has(session.sessionId)),
+          total: Math.max(0, (prevHistoryData.total || 0) - deletedMessageCount),
         };
       });
 
@@ -283,31 +300,27 @@ export function useSessionManagement({
         suppressNextStatusToastRef.current = true;
         sendBridgeEvent('create_new_session');
       }
-
     }
+
     showSessionDeletedToast(startedSessionTransition);
   }, [historyData, currentSessionId, loading, setHistoryData, beginSessionTransition, showSessionDeletedToast]);
 
-  // Export history session
   const exportHistorySession = useCallback((sessionId: string, title: string) => {
     const exportData = JSON.stringify({ sessionId, title });
     sendBridgeEvent('export_session', exportData);
   }, []);
 
-  // Toggle favorite status
   const toggleFavoriteSession = useCallback((sessionId: string) => {
-    // Send favorite toggle request to backend
     sendBridgeEvent('toggle_favorite', sessionId);
 
-    // Immediately update frontend state
     if (historyData && historyData.sessions) {
-      const updatedSessions = historyData.sessions.map(session => {
+      const updatedSessions = historyData.sessions.map((session) => {
         if (session.sessionId === sessionId) {
           const isFavorited = !session.isFavorited;
           return {
             ...session,
             isFavorited,
-            favoritedAt: isFavorited ? Date.now() : undefined
+            favoritedAt: isFavorited ? Date.now() : undefined,
           };
         }
         return session;
@@ -315,11 +328,10 @@ export function useSessionManagement({
 
       setHistoryData({
         ...historyData,
-        sessions: updatedSessions
+        sessions: updatedSessions,
       });
 
-      // Show toast
-      const session = historyData.sessions.find(s => s.sessionId === sessionId);
+      const session = historyData.sessions.find((item) => item.sessionId === sessionId);
       if (session?.isFavorited) {
         addToast(t('history.unfavorited'), 'success');
       } else {
@@ -328,20 +340,25 @@ export function useSessionManagement({
     }
   }, [historyData, setHistoryData, addToast, t]);
 
-  // Update session title
+  /**
+   * 走后端标题更新接口，同时立即刷新前端历史列表。
+   * 该路径适用于用户显式改名或长度受控的标题更新场景。
+   *
+   * @param sessionId 目标会话 ID
+   * @param newTitle 新标题
+   * @return 无返回值
+   */
   const updateHistoryTitle = useCallback((sessionId: string, newTitle: string) => {
-    // Send update title request to backend
     const updateData = JSON.stringify({ sessionId, customTitle: newTitle });
     console.warn('[HistoryTitleSync][Frontend] send update_title', updateData);
     sendBridgeEvent('update_title', updateData);
 
-    // Immediately update frontend state
     if (historyData && historyData.sessions) {
-      const updatedSessions = historyData.sessions.map(session => {
+      const updatedSessions = historyData.sessions.map((session) => {
         if (session.sessionId === sessionId) {
           return {
             ...session,
-            title: newTitle
+            title: newTitle,
           };
         }
         return session;
@@ -349,22 +366,46 @@ export function useSessionManagement({
 
       setHistoryData({
         ...historyData,
-        sessions: updatedSessions
+        sessions: updatedSessions,
       });
 
-      // Show success toast
       addToast(t('history.titleUpdated'), 'success');
     }
   }, [historyData, setHistoryData, addToast, t]);
 
   /**
-   * 在当前会话尚未生成 sessionId 时，仅同步当前窗口的 Tab 标题。
-   * 该路径不触发历史会话标题持久化，只用于“新会话/临时会话”标题编辑后的当前窗口展示同步。
+   * 在当前会话尚未分配真实 sessionId 时，仅同步当前 IDE Tab 标题。
+   * 该入口不更新历史列表，也不回写后端标题持久化，只用于“新会话/临时会话”
+   * 的标题编辑场景，保证聊天头标题与当前窗口 Tab 标题一致。
+   *
+   * @param newTitle 需要同步到当前窗口 Tab 的标题
+   * @return 无返回值
    */
   const syncCurrentTabTitle = useCallback((newTitle: string) => {
     const payload = JSON.stringify({ title: newTitle });
     sendBridgeEvent('sync_current_tab_title', payload);
   }, []);
+
+  /**
+   * 仅在前端本地更新历史列表标题，不走后端 `customTitle` 写回链路。
+   * 该入口用于 AI 自动生成标题等可能超过后端长度限制的场景，避免后端拒绝写入后
+   * 历史列表显示回退成旧标题。
+   *
+   * @param sessionId 目标历史会话 ID
+   * @param newTitle 需要立即反映到历史列表的标题
+   * @return 无返回值
+   */
+  const applyHistoryTitleLocal = useCallback((sessionId: string, newTitle: string) => {
+    if (historyData && historyData.sessions) {
+      const updatedSessions = historyData.sessions.map((session) => (
+        session.sessionId === sessionId ? { ...session, title: newTitle } : session
+      ));
+      setHistoryData({
+        ...historyData,
+        sessions: updatedSessions,
+      });
+    }
+  }, [historyData, setHistoryData]);
 
   return {
     showNewSessionConfirm,
@@ -372,6 +413,7 @@ export function useSessionManagement({
     suppressNextStatusToastRef,
     createNewSession,
     forceCreateNewSession,
+    forceCreateNewSessionWithProvider,
     handleConfirmNewSession,
     handleCancelNewSession,
     handleConfirmInterrupt,
@@ -383,5 +425,6 @@ export function useSessionManagement({
     toggleFavoriteSession,
     updateHistoryTitle,
     syncCurrentTabTitle,
+    applyHistoryTitleLocal,
   };
 }

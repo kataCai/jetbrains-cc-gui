@@ -3,14 +3,17 @@ import { useWindowCallbacks } from './useWindowCallbacks.js';
 import type { UseWindowCallbacksOptions } from './useWindowCallbacks.js';
 import type { ClaudeMessage } from '../types/index.js';
 
-vi.mock('./windowCallbacks/settingsBootstrap', () => ({
-  drainPendingSettings: vi.fn(),
-  startInitialSettingsRequest: vi.fn(),
-  startActiveProviderRequest: vi.fn(),
-  startModeRequest: vi.fn(),
-  startThinkingEnabledRequest: vi.fn(),
-  drainAndRequestDependencyStatus: vi.fn(),
-}));
+vi.mock('./windowCallbacks/settingsBootstrap', async () => {
+  const actual = await vi.importActual<typeof import('./windowCallbacks/settingsBootstrap')>('./windowCallbacks/settingsBootstrap');
+  return {
+    ...actual,
+    startInitialSettingsRequest: vi.fn(),
+    startActiveProviderRequest: vi.fn(),
+    startModeRequest: vi.fn(),
+    startThinkingEnabledRequest: vi.fn(),
+    drainAndRequestDependencyStatus: vi.fn(),
+  };
+});
 
 /**
  * Integration tests for useWindowCallbacks — verifies the real window callback

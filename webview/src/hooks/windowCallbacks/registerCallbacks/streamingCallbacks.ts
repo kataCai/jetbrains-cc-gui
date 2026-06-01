@@ -320,10 +320,10 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     window.__turnStartedAt = undefined;
     const endedStreamingTurnId = streamingTurnIdRef.current;
     const endedStreamingMessageIndex = streamingMessageIndexRef.current;
-    const endedStreamingContent =
-      backendSnapshotContent && backendSnapshotContent.length > streamingContentRef.current.length
-        ? backendSnapshotContent
-        : streamingContentRef.current;
+    // FIX: Prioritize streaming content over backend snapshot to prevent digit loss
+    // Streaming content has all the latest deltas (including the final one just flushed).
+    // Backend snapshot might be from an earlier coalescer push and may be incomplete.
+    const endedStreamingContent = streamingContentRef.current || backendSnapshotContent || '';
     const endedBackendRaw = backendSnapshotRaw;
 
     type TextBlock = { type: 'text'; text: string };

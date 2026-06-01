@@ -1,11 +1,16 @@
+import type { ComponentProps } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import BehaviorTab from './BehaviorTab';
 import type { TaskReminderConfig } from '../../../types/taskReminder';
+import {
+  MAX_PERMISSION_DIALOG_TIMEOUT_SECONDS,
+  MIN_PERMISSION_DIALOG_TIMEOUT_SECONDS,
+} from '../../../utils/permissionDialogTimeout';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : _key),
+    t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
   }),
 }));
 
@@ -32,7 +37,6 @@ const defaultTaskReminderConfig: TaskReminderConfig = {
     states: ['waiting_confirm', 'final_error', 'completed'],
     onlyWhenIdeUnfocused: true,
   },
-  // 补齐恢复策略默认值，确保测试夹具覆盖新增配置字段并与运行时模型一致。
   recoveryPolicy: {
     enabled: true,
     recoverCompletedOnParseNoise: true,
@@ -42,22 +46,50 @@ const defaultTaskReminderConfig: TaskReminderConfig = {
   },
 };
 
+/**
+ * 构造 BehaviorTab 的完整默认 props，避免新增设置项后测试只传局部属性导致组件运行态失真。
+ *
+ * @param overrides 需要覆盖的局部 props
+ * @return 实际传入组件的 props，便于断言回调
+ */
+function renderBehaviorTab(overrides: Partial<ComponentProps<typeof BehaviorTab>> = {}) {
+  const props = {
+    streamingEnabled: true,
+    onStreamingEnabledChange: vi.fn(),
+    codexSandboxMode: 'workspace-write' as const,
+    onCodexSandboxModeChange: vi.fn(),
+    sendShortcut: 'enter' as const,
+    onSendShortcutChange: vi.fn(),
+    autoOpenFileEnabled: false,
+    onAutoOpenFileEnabledChange: vi.fn(),
+    commitGenerationEnabled: true,
+    onCommitGenerationEnabledChange: vi.fn(),
+    aiTitleGenerationEnabled: true,
+    onAiTitleGenerationEnabledChange: vi.fn(),
+    taskCompletionNotificationEnabled: false,
+    onTaskCompletionNotificationEnabledChange: vi.fn(),
+    permissionDialogTimeoutSeconds: 300,
+    onPermissionDialogTimeoutChange: vi.fn(),
+    taskReminderConfig: defaultTaskReminderConfig,
+    onTaskReminderEnabledChange: vi.fn(),
+    onTaskReminderStateToggle: vi.fn(),
+    onTaskReminderOnlyWhenIdeUnfocusedChange: vi.fn(),
+    onTaskReminderSelectedSoundChange: vi.fn(),
+    onTaskReminderCustomSoundPathChange: vi.fn(),
+    onSaveCustomSoundPath: vi.fn(),
+    onTestSound: vi.fn(),
+    onBrowseSound: vi.fn(),
+    ...overrides,
+  };
+
+  render(<BehaviorTab {...props} />);
+  return props;
+}
+
 describe('BehaviorTab task reminder section', () => {
   it('renders task reminder group and popup/balloon/sound/system sections', () => {
-    // 设置页应完整展示三类提醒渠道，确保新配置结构在 UI 层可见。
-    render(
-      <BehaviorTab
-        taskReminderConfig={defaultTaskReminderConfig}
-        onTaskReminderEnabledChange={vi.fn()}
-        onTaskReminderStateToggle={vi.fn()}
-        onTaskReminderOnlyWhenIdeUnfocusedChange={vi.fn()}
-        onTaskReminderSelectedSoundChange={vi.fn()}
-        onTaskReminderCustomSoundPathChange={vi.fn()}
-        onSaveCustomSoundPath={vi.fn()}
-        onTestSound={vi.fn()}
-        onBrowseSound={vi.fn()}
-      />
-    );
+    // 验证任务提醒四类渠道仍完整渲染，覆盖主线新增的 task reminder 设置区。
+    renderBehaviorTab();
 
     expect(screen.getByText(/Task Reminder|状态提醒/)).toBeTruthy();
     expect(screen.getByText('Popup')).toBeTruthy();
@@ -68,22 +100,9 @@ describe('BehaviorTab task reminder section', () => {
   });
 
   it('shows key toggles and state multi-select controls', () => {
-    // 多选状态和渠道开关都应可操作，并把变更透传到回调。
+    // 验证渠道开关、仅失焦提醒和状态多选仍向外透传变更。
     const onTaskReminderStateToggle = vi.fn();
-
-    render(
-      <BehaviorTab
-        taskReminderConfig={defaultTaskReminderConfig}
-        onTaskReminderEnabledChange={vi.fn()}
-        onTaskReminderStateToggle={onTaskReminderStateToggle}
-        onTaskReminderOnlyWhenIdeUnfocusedChange={vi.fn()}
-        onTaskReminderSelectedSoundChange={vi.fn()}
-        onTaskReminderCustomSoundPathChange={vi.fn()}
-        onSaveCustomSoundPath={vi.fn()}
-        onTestSound={vi.fn()}
-        onBrowseSound={vi.fn()}
-      />
-    );
+    renderBehaviorTab({ onTaskReminderStateToggle });
 
     expect(screen.getByLabelText('Popup enabled')).toBeTruthy();
     expect(screen.getByLabelText('Balloon enabled')).toBeTruthy();
@@ -99,19 +118,8 @@ describe('BehaviorTab task reminder section', () => {
   });
 
   it('limits popup state options to supported strong reminder states', () => {
-    render(
-      <BehaviorTab
-        taskReminderConfig={defaultTaskReminderConfig}
-        onTaskReminderEnabledChange={vi.fn()}
-        onTaskReminderStateToggle={vi.fn()}
-        onTaskReminderOnlyWhenIdeUnfocusedChange={vi.fn()}
-        onTaskReminderSelectedSoundChange={vi.fn()}
-        onTaskReminderCustomSoundPathChange={vi.fn()}
-        onSaveCustomSoundPath={vi.fn()}
-        onTestSound={vi.fn()}
-        onBrowseSound={vi.fn()}
-      />
-    );
+    // 验证强提醒弹窗只暴露允许打断用户流程的状态，避免 completed/recovered 误弹强提醒。
+    renderBehaviorTab();
 
     expect(screen.getByLabelText('Popup state waiting_confirm')).toBeTruthy();
     expect(screen.getByLabelText('Popup state final_error')).toBeTruthy();
@@ -127,29 +135,63 @@ describe('BehaviorTab task reminder section', () => {
   });
 
   it('renders popup and balloon test actions and triggers callbacks', () => {
+    // 验证测试按钮仍能触发对应后端预览动作，防止并轨时丢掉 task reminder 入口。
     const onTestPopup = vi.fn();
     const onTestBalloon = vi.fn();
 
-    render(
-      <BehaviorTab
-        taskReminderConfig={defaultTaskReminderConfig}
-        onTaskReminderEnabledChange={vi.fn()}
-        onTaskReminderStateToggle={vi.fn()}
-        onTaskReminderOnlyWhenIdeUnfocusedChange={vi.fn()}
-        onTaskReminderSelectedSoundChange={vi.fn()}
-        onTaskReminderCustomSoundPathChange={vi.fn()}
-        onSaveCustomSoundPath={vi.fn()}
-        onTestSound={vi.fn()}
-        onBrowseSound={vi.fn()}
-        onTestPopup={onTestPopup}
-        onTestBalloon={onTestBalloon}
-      />
-    );
+    renderBehaviorTab({ onTestPopup, onTestBalloon });
 
     fireEvent.click(screen.getByRole('button', { name: 'Test popup' }));
     fireEvent.click(screen.getByRole('button', { name: 'Test balloon' }));
 
     expect(onTestPopup).toHaveBeenCalledTimes(1);
     expect(onTestBalloon).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BehaviorTab permission dialog timeout', () => {
+  it('exposes the timeout number input with an accessible label', () => {
+    // 验证上游新增的权限对话框超时设置在行为页可见。
+    renderBehaviorTab();
+
+    expect(
+      screen.getByRole('spinbutton', { name: /settings.basic.permissionDialogTimeout.label/i }),
+    ).toBeTruthy();
+  });
+
+  it('exposes native HTML5 min/max attributes that mirror the clamp constants', () => {
+    // 浏览器原生 min/max 与 JS clamp 常量必须一致，避免 UI 提示和实际保存规则不一致。
+    renderBehaviorTab();
+
+    const input = screen.getByRole('spinbutton', {
+      name: /settings.basic.permissionDialogTimeout.label/i,
+    });
+
+    expect(input.getAttribute('min')).toBe(String(MIN_PERMISSION_DIALOG_TIMEOUT_SECONDS));
+    expect(input.getAttribute('max')).toBe(String(MAX_PERMISSION_DIALOG_TIMEOUT_SECONDS));
+  });
+
+  it('clamps low values on blur', () => {
+    // 低于最小值时，失焦应回调最小允许秒数。
+    const onPermissionDialogTimeoutChange = vi.fn();
+    renderBehaviorTab({ onPermissionDialogTimeoutChange });
+
+    const input = screen.getByRole('spinbutton', { name: /settings.basic.permissionDialogTimeout.label/i });
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
+
+    expect(onPermissionDialogTimeoutChange).toHaveBeenCalledWith(30);
+  });
+
+  it('clamps high values on Enter', () => {
+    // 高于最大值时，按 Enter 应回调最大允许秒数。
+    const onPermissionDialogTimeoutChange = vi.fn();
+    renderBehaviorTab({ onPermissionDialogTimeoutChange });
+
+    const input = screen.getByRole('spinbutton', { name: /settings.basic.permissionDialogTimeout.label/i });
+    fireEvent.change(input, { target: { value: '99999' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(onPermissionDialogTimeoutChange).toHaveBeenCalledWith(3600);
   });
 });

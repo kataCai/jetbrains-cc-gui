@@ -68,6 +68,16 @@ interface Window {
   addErrorMessage?: (message: string) => void;
 
   /**
+   * Context usage dialog callback - receives JSON string with context usage data to show in a dialog.
+   */
+  showContextUsageDialog?: (json: string) => void;
+
+  /**
+   * Context usage error callback - shows error toast.
+   */
+  onContextUsageError?: (message: string, requestId?: string) => void;
+
+  /**
    * Add single history message (used for Codex session loading)
    */
   addHistoryMessage?: (message: any) => void;
@@ -265,6 +275,11 @@ interface Window {
   updateCommitPrompt?: (json: string) => void;
 
   /**
+   * Update project-level commit AI prompt configuration
+   */
+  updateProjectCommitPrompt?: (json: string) => void;
+
+  /**
    * Update sound notification configuration
    */
   updateSoundNotificationConfig?: (json: string) => void;
@@ -295,6 +310,11 @@ interface Window {
   updateTaskCompletionNotificationEnabled?: (json: string) => void;
 
   /**
+   * Update permission dialog timeout setting
+   */
+  updatePermissionDialogTimeout?: (json: string) => void;
+
+  /**
    * Update current Claude config
    */
   updateCurrentClaudeConfig?: (json: string) => void;
@@ -323,6 +343,11 @@ interface Window {
    * Update linkify/navigation capabilities used by Markdown rendering.
    */
   updateLinkifyCapabilities?: (json: string) => void;
+
+  /**
+   * File path resolved callback - receives the resolved absolute path for a file link tooltip.
+   */
+  onFilePathResolved?: (json: string) => void;
 
   /**
    * Show success message
@@ -441,14 +466,16 @@ interface Window {
    */
   applyIdeaLanguageConfig?: (config: {
     language: string;
+    source?: string;
     ideaLocale?: string;
-  }) => void;
+  } | string) => void;
 
   /**
    * Pending language config before applyIdeaLanguageConfig is registered
    */
   __pendingLanguageConfig?: {
     language: string;
+    source?: string;
     ideaLocale?: string;
   };
 
@@ -813,6 +840,11 @@ interface Window {
    * Pending auto open file enabled status before React initialization
    */
   __pendingAutoOpenFileEnabled?: string;
+
+  /**
+   * Pending permission dialog timeout before React initialization
+   */
+  __pendingPermissionDialogTimeout?: string;
 
   __pendingPermissionDialogRequests?: string[];
 

@@ -11,6 +11,10 @@ import {
   DEFAULT_TASK_REMINDER_CONFIG,
   normalizeTaskReminderConfig,
 } from '../../../types/taskReminder';
+import {
+  DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS,
+  clampPermissionDialogTimeoutSeconds,
+} from '../../../utils/permissionDialogTimeout';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -25,6 +29,8 @@ export interface UseSettingsBasicActionsProps {
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabledProp?: boolean;
   onAutoOpenFileEnabledChangeProp?: (enabled: boolean) => void;
+  permissionDialogTimeoutSecondsProp?: number;
+  onPermissionDialogTimeoutChangeProp?: (seconds: number) => void;
 }
 
 export interface UseSettingsBasicActionsReturn {
@@ -52,6 +58,8 @@ export interface UseSettingsBasicActionsReturn {
   commitPrompt: string;
   savingCommitPrompt: boolean;
   taskReminderConfig: TaskReminderConfig;
+  projectCommitPrompt: string;
+  savingProjectCommitPrompt: boolean;
   diffExpandedByDefault: boolean;
   historyCompletionEnabled: boolean;
   commitGenerationEnabled: boolean;
@@ -92,10 +100,13 @@ export interface UseSettingsBasicActionsReturn {
   handleTestBalloon: () => void;
   handleBrowseSound: () => void;
   handleSaveCommitPrompt: () => void;
+  handleSaveProjectCommitPrompt: () => void;
   handleCommitGenerationEnabledChange: (enabled: boolean) => void;
   handleAiTitleGenerationEnabledChange: (enabled: boolean) => void;
   handleStatusBarWidgetEnabledChange: (enabled: boolean) => void;
   handleTaskCompletionNotificationEnabledChange: (enabled: boolean) => void;
+  permissionDialogTimeoutSeconds: number;
+  handlePermissionDialogTimeoutChange: (seconds: number) => void;
   handleCommitAiProviderChange: (provider: CommitAiProvider) => void;
   handleCommitAiModelChange: (model: string) => void;
   handleCommitAiResetToDefault: () => void;
@@ -119,39 +130,43 @@ export interface UseSettingsBasicActionsReturn {
       | undefined
   ) => void;
   setUiFontConfig: (config: UiFontConfig | undefined) => void;
-  setLocalStreamingEnabled: (enabled: boolean) => void;
-  setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
-  setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
-  setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
-  setCommitPrompt: (prompt: string) => void;
-  setSavingCommitPrompt: (saving: boolean) => void;
+  /** @internal */ setLocalStreamingEnabled: (enabled: boolean) => void;
+  /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
+  /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
+  /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
+  /** @internal */ setCommitPrompt: (prompt: string) => void;
+  /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
   setTaskReminderConfig: (
     config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
   ) => void;
-  setDiffExpandedByDefault: (expanded: boolean) => void;
-  setHistoryCompletionEnabled: (enabled: boolean) => void;
-  setCommitGenerationEnabled: (enabled: boolean) => void;
-  setAiTitleGenerationEnabled: (enabled: boolean) => void;
-  setStatusBarWidgetEnabled: (enabled: boolean) => void;
-  setTaskCompletionNotificationEnabled: (enabled: boolean) => void;
-  setCommitAiConfig: (config: CommitAiConfig) => void;
-  setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
+  setProjectCommitPrompt: (prompt: string) => void;
+  /** @internal */ setSavingProjectCommitPrompt: (saving: boolean) => void;
+  /** @internal */ setDiffExpandedByDefault: (expanded: boolean) => void;
+  /** @internal */ setHistoryCompletionEnabled: (enabled: boolean) => void;
+  /** @internal */ setCommitGenerationEnabled: (enabled: boolean) => void;
+  /** @internal */ setAiTitleGenerationEnabled: (enabled: boolean) => void;
+  /** @internal */ setStatusBarWidgetEnabled: (enabled: boolean) => void;
+  /** @internal */ setTaskCompletionNotificationEnabled: (enabled: boolean) => void;
+  /** @internal */ setCommitAiConfig: (config: CommitAiConfig) => void;
+  /** @internal */ setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
 }
 
 /**
  * 管理设置页基础行为配置。
- * 这里并轨后的关键原则是“保留主线 canonical taskReminder/remote collab 相关语义，
- * 同时接纳 upstream 的 UI 字体、Prompt Enhancer、Commit AI、AI title 和任务完成通知配置”。
  *
- * 对外仍暴露扁平的 state + handler + setter 结构，因为设置页窗口回调与页面组件都直接依赖这些字段。
+ * 并轨后该 Hook 同时承载本地主线的任务提醒配置、上游的权限弹窗超时配置，
+ * 以及 Commit AI / Prompt Enhancer / UI 字体等基础设置状态。对外仍保持
+ * 扁平返回结构，避免设置页组件和窗口回调调用方大范围改造。
  *
- * @param streamingEnabledProp 来自 App 的流式总开关
- * @param onStreamingEnabledChangeProp 来自 App 的流式切换回调
- * @param sendShortcutProp 来自 App 的发送快捷键
- * @param onSendShortcutChangeProp 来自 App 的发送快捷键回调
- * @param autoOpenFileEnabledProp 来自 App 的自动打开文件开关
- * @param onAutoOpenFileEnabledChangeProp 来自 App 的自动打开文件回调
- * @return 设置页基础行为状态与处理函数
+ * @param streamingEnabledProp 来自 App 的流式开关；存在时优先使用外部状态。
+ * @param onStreamingEnabledChangeProp 流式开关变更回调；存在时由 App 负责持久化。
+ * @param sendShortcutProp 来自 App 的发送快捷键；存在时优先使用外部状态。
+ * @param onSendShortcutChangeProp 发送快捷键变更回调；存在时由 App 负责持久化。
+ * @param autoOpenFileEnabledProp 来自 App 的自动打开文件开关；存在时优先使用外部状态。
+ * @param onAutoOpenFileEnabledChangeProp 自动打开文件开关变更回调；存在时由 App 负责持久化。
+ * @param permissionDialogTimeoutSecondsProp 来自 App 的权限弹窗超时时间；存在时优先使用外部状态。
+ * @param onPermissionDialogTimeoutChangeProp 权限弹窗超时时间变更回调；存在时由 App 负责持久化。
+ * @return 设置页基础行为状态、事件处理函数和供窗口回调使用的内部 setter。
  */
 export function useSettingsBasicActions({
   streamingEnabledProp,
@@ -160,6 +175,8 @@ export function useSettingsBasicActions({
   onSendShortcutChangeProp,
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
+  permissionDialogTimeoutSecondsProp,
+  onPermissionDialogTimeoutChangeProp,
 }: UseSettingsBasicActionsProps): UseSettingsBasicActionsReturn {
   const [nodePath, setNodePath] = useState('');
   const [nodeVersion, setNodeVersion] = useState<string | null>(null);
@@ -197,7 +214,9 @@ export function useSettingsBasicActions({
   const [taskReminderConfig, setTaskReminderConfigState] = useState<TaskReminderConfig>(
     DEFAULT_TASK_REMINDER_CONFIG,
   );
-
+  // Project-level commit AI prompt configuration
+  const [projectCommitPrompt, setProjectCommitPrompt] = useState('');
+  const [savingProjectCommitPrompt, setSavingProjectCommitPrompt] = useState(false);
   const [diffExpandedByDefault, setDiffExpandedByDefault] = useState<boolean>(() => {
     try {
       return localStorage.getItem('diffExpandedByDefault') === 'true';
@@ -205,23 +224,23 @@ export function useSettingsBasicActions({
       return false;
     }
   });
-
-  const [historyCompletionEnabled, setHistoryCompletionEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('historyCompletionEnabled');
-    return saved !== 'false';
-  });
-
-  const [commitGenerationEnabled, setCommitGenerationEnabled] = useState<boolean>(true);
-  const [aiTitleGenerationEnabled, setAiTitleGenerationEnabled] = useState<boolean>(true);
-  const [statusBarWidgetEnabled, setStatusBarWidgetEnabled] = useState<boolean>(true);
-  const [taskCompletionNotificationEnabled, setTaskCompletionNotificationEnabled] = useState<boolean>(false);
-
   const [commitAiConfig, setCommitAiConfig] = useState<CommitAiConfig>(
     DEFAULT_COMMIT_AI_CONFIG,
   );
   const [promptEnhancerConfig, setPromptEnhancerConfig] = useState<PromptEnhancerConfig>(
     DEFAULT_PROMPT_ENHANCER_CONFIG,
   );
+
+  const [historyCompletionEnabled, setHistoryCompletionEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('historyCompletionEnabled');
+    return saved !== 'false';
+  });
+  const [commitGenerationEnabled, setCommitGenerationEnabled] = useState<boolean>(true);
+  const [aiTitleGenerationEnabled, setAiTitleGenerationEnabled] = useState<boolean>(true);
+  const [statusBarWidgetEnabled, setStatusBarWidgetEnabled] = useState<boolean>(true);
+  const [taskCompletionNotificationEnabled, setTaskCompletionNotificationEnabled] = useState<boolean>(false);
+  const permissionDialogTimeoutSeconds =
+    permissionDialogTimeoutSecondsProp ?? DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS;
 
   useEffect(() => {
     try {
@@ -236,11 +255,8 @@ export function useSettingsBasicActions({
   }, [diffExpandedByDefault]);
 
   /**
-   * 对外暴露规范化后的 taskReminder setter。
-   * 无论数据来自本地交互还是窗口回调，都先做一次 normalize，
-   * 保证设置页组件树里看到的永远是完整、合法、可渲染的结构。
-   *
-   * @param nextConfig 新配置或基于旧配置的 updater
+   * 鐎电懓顦婚弳鎾苟鐟欏嫯瀵栭崠鏍ф倵閻?taskReminder setter閵?   * 閺冪姾顔戦弫鐗堝祦閺夈儴鍤滈張顒€婀存禍銈勭鞍鏉╂ɑ妲哥粣妤€褰涢崶鐐剁殶閿涘矂鍏橀崗鍫濅粵娑撯偓濞?normalize閿?   * 娣囨繆鐦夌拋鍓х枂妞ょ數绮嶆禒鑸电埐闁插瞼婀呴崚鎵畱濮樻瓕绻欓弰顖氱暚閺佹番鈧礁鎮庡▔鏇樷偓浣稿讲濞撳弶鐓嬮惃鍕波閺嬪嫨鈧?   *
+   * @param nextConfig 閺備即鍘ょ純顔藉灗閸╄桨绨弮褔鍘ょ純顔炬畱 updater
    */
   const setTaskReminderConfig: UseSettingsBasicActionsReturn['setTaskReminderConfig'] = useCallback((nextConfig) => {
     setTaskReminderConfigState((prev) => normalizeTaskReminderConfig(
@@ -249,11 +265,8 @@ export function useSettingsBasicActions({
   }, []);
 
   /**
-   * 本地乐观更新 + 异步写回 Java 的 taskReminder 通用桥接。
-   * 这样设置页切换可以立即反馈，后端后续回推时再做最终对齐。
-   *
-   * @param updater 基于旧配置生成新配置的函数
-   */
+   * 閺堫剙婀存稊鎰潎閺囧瓨鏌?+ 瀵倹顒為崘娆忔礀 Java 閻?taskReminder 闁氨鏁ゅ銉﹀复閵?   * 鏉╂瑦鐗辩拋鍓х枂妞ら潧鍨忛幑銏犲讲娴犮儳鐝涢崡鍐插冀妫ｅ牞绱濋崥搴ｎ伂閸氬海鐢婚崶鐐村腹閺冭泛鍟€閸嬫碍娓剁紒鍫濐嚠姒绘劑鈧?   *
+   * @param updater 閸╄桨绨弮褔鍘ょ純顔炬晸閹存劖鏌婇柊宥囩枂閻ㄥ嫬鍤遍弫?   */
   const updateAndPersistTaskReminder = useCallback((updater: (prev: TaskReminderConfig) => TaskReminderConfig) => {
     setTaskReminderConfigState((prev) => {
       const next = normalizeTaskReminderConfig(updater(prev));
@@ -383,7 +396,7 @@ export function useSettingsBasicActions({
   }, [updateAndPersistTaskReminder]);
 
   const handleTaskReminderCustomSoundPathChange = useCallback((path: string) => {
-    // 输入路径时先只更新本地草稿，避免每次敲字都立即写回后端。
+    // 自定义提示音路径只更新 sound 分支，不改动其他提醒配置字段。
     setTaskReminderConfigState((prev) => ({
       ...prev,
       sound: {
@@ -449,6 +462,15 @@ export function useSettingsBasicActions({
     setTaskCompletionNotificationEnabled(enabled);
     sendToJava(`set_task_completion_notification_enabled:${JSON.stringify({ taskCompletionNotificationEnabled: enabled })}`);
   }, []);
+
+  // Permission dialog timeout change handler
+  const handlePermissionDialogTimeoutChange = useCallback((seconds: number) => {
+    const clamped = clampPermissionDialogTimeoutSeconds(seconds);
+    // App.tsx owns the canonical state and provides the callback in production.
+    onPermissionDialogTimeoutChangeProp?.(clamped);
+    const payload = { permissionDialogTimeoutSeconds: clamped };
+    sendToJava(`set_permission_dialog_timeout:${JSON.stringify(payload)}`);
+  }, [onPermissionDialogTimeoutChangeProp]);
 
   const handleCommitAiProviderChange = useCallback((provider: CommitAiProvider) => {
     const providerAvailable = commitAiConfig.availability[provider];
@@ -553,6 +575,13 @@ export function useSettingsBasicActions({
     sendToJava(`set_commit_prompt:${JSON.stringify({ prompt: commitPrompt })}`);
   }, [commitPrompt]);
 
+  // Project-level commit AI prompt save handler
+  const handleSaveProjectCommitPrompt = useCallback(() => {
+    setSavingProjectCommitPrompt(true);
+    const payload = { prompt: projectCommitPrompt };
+    sendToJava(`set_project_commit_prompt:${JSON.stringify(payload)}`);
+  }, [projectCommitPrompt]);
+
   return {
     nodePath,
     setNodePath,
@@ -612,6 +641,11 @@ export function useSettingsBasicActions({
     handleTestBalloon,
     handleBrowseSound,
     handleSaveCommitPrompt,
+    projectCommitPrompt,
+    setProjectCommitPrompt,
+    savingProjectCommitPrompt,
+    setSavingProjectCommitPrompt,
+    handleSaveProjectCommitPrompt,
     commitGenerationEnabled,
     setCommitGenerationEnabled,
     handleCommitGenerationEnabledChange,
@@ -624,6 +658,8 @@ export function useSettingsBasicActions({
     taskCompletionNotificationEnabled,
     setTaskCompletionNotificationEnabled,
     handleTaskCompletionNotificationEnabledChange,
+    permissionDialogTimeoutSeconds,
+    handlePermissionDialogTimeoutChange,
     commitAiConfig,
     setCommitAiConfig,
     handleCommitAiProviderChange,

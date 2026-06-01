@@ -343,6 +343,12 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         AnAction forceRefreshTabAction =
                 ActionManager.getInstance()
                         .getAction("ClaudeCodeGUI.ForceRefreshTabAction");
+        com.intellij.openapi.actionSystem.AnAction saveAsTemplateAction =
+                com.intellij.openapi.actionSystem.ActionManager.getInstance()
+                        .getAction("ClaudeCodeGUI.SaveAsTemplateAction");
+        com.intellij.openapi.actionSystem.AnAction createFromTemplateAction =
+                com.intellij.openapi.actionSystem.ActionManager.getInstance()
+                        .getAction("ClaudeCodeGUI.CreateFromTemplateAction");
 
         DefaultActionGroup gearActions = new DefaultActionGroup();
         if (forceRefreshTabAction != null) {
@@ -353,6 +359,13 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         }
         if (detachTabAction != null) {
             gearActions.add(detachTabAction);
+        }
+        if (saveAsTemplateAction != null) {
+            gearActions.addSeparator();
+            gearActions.add(saveAsTemplateAction);
+        }
+        if (createFromTemplateAction != null) {
+            gearActions.add(createFromTemplateAction);
         }
         toolWindow.setAdditionalGearActions(gearActions);
         installTabPopupMenu(toolWindow, gearActions);
