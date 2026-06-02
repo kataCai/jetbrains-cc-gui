@@ -104,6 +104,22 @@ public class ModelProviderHandler {
         }
     }
 
+    public void handleSetSelectedCodexModel(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            String providerId = json != null && json.has("providerId") && !json.get("providerId").isJsonNull()
+                    ? json.get("providerId").getAsString()
+                    : "";
+            String modelId = json != null && json.has("modelId") && !json.get("modelId").isJsonNull()
+                    ? json.get("modelId").getAsString()
+                    : "";
+            // 只保存 CC-GUI 自有 selectedModel，不改写 Codex live config。
+            context.getSettingsService().setSelectedCodexModel(providerId, modelId);
+        } catch (Exception e) {
+            LOG.error("[ModelProviderHandler] Failed to persist selected Codex model: " + e.getMessage(), e);
+        }
+    }
+
     public void handleSetProvider(String content) {
         try {
             String provider = content;

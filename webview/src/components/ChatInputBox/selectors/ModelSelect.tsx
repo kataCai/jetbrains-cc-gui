@@ -23,6 +23,10 @@ const DROPDOWN_STYLE: React.CSSProperties = {
 const MODEL_OPTION_INFO_STYLE: React.CSSProperties = { display: 'flex', flexDirection: 'column', flex: 1 };
 const LONG_CONTEXT_OPTION_STYLE: React.CSSProperties = { justifyContent: 'space-between', cursor: 'default' };
 const LONG_CONTEXT_LABEL_STYLE: React.CSSProperties = { fontSize: '12px' };
+const EMPTY_MODEL_FALLBACK: ModelInfo = {
+  id: '__empty_model__',
+  label: 'No model configured',
+};
 
 interface ModelSelectProps {
   value: string;
@@ -171,7 +175,10 @@ export const ModelSelect = ({
 
   const strippedValue = strip1MContextSuffix(value);
   const normalizedValue = currentProvider === 'claude' ? normalizeClaudeModelId(strippedValue) : strippedValue;
-  const currentModel = models.find(m => m.id === normalizedValue) || models.find(m => m.id === strippedValue) || models[0];
+  const currentModel = models.find(m => m.id === normalizedValue)
+    || models.find(m => m.id === strippedValue)
+    || models[0]
+    || EMPTY_MODEL_FALLBACK;
   const modelMapping = readClaudeModelMapping();
   const normalizedDefaultCodexModel = typeof defaultCodexModelFromConfig === 'string'
     ? defaultCodexModelFromConfig.trim()

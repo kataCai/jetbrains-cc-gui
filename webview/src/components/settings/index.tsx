@@ -246,6 +246,7 @@ const SettingsView = ({
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleSwitchCodexProvider,
+    handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,
@@ -518,9 +519,10 @@ const SettingsView = ({
               codexProviders={codexProviders}
               codexLoading={codexLoading}
               onAddCodexProvider={handleAddCodexProvider}
-                onEditCodexProvider={handleEditCodexProvider}
-                onDeleteCodexProvider={handleDeleteCodexProvider}
-                onSwitchCodexProvider={handleSwitchCodexProvider}
+              onEditCodexProvider={handleEditCodexProvider}
+              onDeleteCodexProvider={handleDeleteCodexProvider}
+              onTestCodexProvider={handleTestCodexProvider}
+              onSwitchCodexProvider={handleSwitchCodexProvider}
                 onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
                 addToast={addToast}
               />

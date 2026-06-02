@@ -1,15 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { CodexProviderConfig } from '../types/provider';
+import type {
+  CodexAuthMode,
+  CodexCustomModel,
+  CodexProviderConfig,
+  CodexRequestMode,
+} from '../types/provider';
 
-const FORM_HEADER_STYLE: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
-const FORMAT_BUTTON_STYLE: React.CSSProperties = { padding: '4px 8px', fontSize: '12px' };
-const CODE_TEXTAREA_STYLE: React.CSSProperties = {
-  fontFamily: 'var(--idea-editor-font-family, monospace)',
-  fontSize: '12px',
-  lineHeight: '1.5',
-};
+const GRID_STYLE: React.CSSProperties = { display: 'grid', gap: '12px' };
 const FOOTER_ACTIONS_STYLE: React.CSSProperties = { marginLeft: 'auto' };
+const INLINE_ACTION_STYLE: React.CSSProperties = { display: 'flex', gap: '8px', alignItems: 'center' };
+
+const AUTH_MODE_OPTIONS: CodexAuthMode[] = ['api_key', 'api_key_env', 'codex_cli_login', 'proxy', 'oauth'];
+const REQUEST_MODE_OPTIONS: CodexRequestMode[] = ['codex_sdk', 'cc_switch_proxy', 'custom_adapter'];
+
+function maskApiKey(value?: string): string {
+  const trimmedValue = value?.trim() || '';
+  if (trimmedValue.length <= 8) {
+    return trimmedValue ? '******' : '';
+  }
+  return `${trimmedValue.slice(0, 4)}******${trimmedValue.slice(-4)}`;
+}
 
 interface CodexProviderDialogProps {
   isOpen: boolean;
@@ -30,57 +41,43 @@ export default function CodexProviderDialog({
   const isAdding = !provider;
 
   const [providerName, setProviderName] = useState('');
-  const [configTomlJson, setConfigTomlJson] = useState('');
-  const [authJson, setAuthJson] = useState('');
+  const [remark, setRemark] = useState('');
+  const [authMode, setAuthMode] = useState<CodexAuthMode>('api_key_env');
+  const [requestMode, setRequestMode] = useState<CodexRequestMode>('codex_sdk');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [apiKeyEnv, setApiKeyEnv] = useState('');
+  const [models, setModels] = useState<CodexCustomModel[]>([]);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   // Initialize form
   useEffect(() => {
     if (isOpen) {
       if (provider) {
-        // Edit mode - load existing data
+        // 修改原因：设置页改为直接维护 requests 运行态字段，不再编辑 ~/.codex 原始文件内容。
         setProviderName(provider.name || '');
-        setConfigTomlJson(provider.configToml || '');
-        setAuthJson(provider.authJson || '');
+        setRemark(provider.remark || '');
+        setAuthMode(provider.authMode || 'api_key_env');
+        setRequestMode(provider.requestMode || 'codex_sdk');
+        setBaseUrl(provider.baseUrl || '');
+        setApiKey(provider.apiKey || '');
+        setApiKeyEnv(provider.apiKeyEnv || '');
+        setModels(provider.models || provider.customModels || []);
+        setShowApiKey(false);
       } else {
-        // Add mode - reset with default template
+        // 修改原因：新增 provider 时直接生成 runtime profile 表单初始值，避免继续引导用户编辑 ~/.codex。
         setProviderName('');
-        setConfigTomlJson(`disable_response_storage = true
-model = "gpt-5.1-codex"
-model_reasoning_effort = "high"
-model_provider = "crs"
-
-[model_providers.crs]
-base_url = "https://api.example.com/v1"
-name = "crs"
-requires_openai_auth = true
-wire_api = "responses"`);
-        setAuthJson(`{
-  "OPENAI_API_KEY": ""
-}`);
+        setRemark('');
+        setAuthMode('api_key_env');
+        setRequestMode('codex_sdk');
+        setBaseUrl('');
+        setApiKey('');
+        setApiKeyEnv('');
+        setModels([]);
+        setShowApiKey(false);
       }
     }
   }, [isOpen, provider]);
-
-  // Format JSON
-  const handleFormatConfigJson = () => {
-    try {
-      const parsed = JSON.parse(configTomlJson);
-      setConfigTomlJson(JSON.stringify(parsed, null, 2));
-      addToast(t('settings.codexProvider.dialog.formatSuccess'), 'success');
-    } catch (e) {
-      addToast(t('settings.codexProvider.dialog.formatError'), 'error');
-    }
-  };
-
-  const handleFormatAuthJson = () => {
-    try {
-      const parsed = JSON.parse(authJson);
-      setAuthJson(JSON.stringify(parsed, null, 2));
-      addToast(t('settings.codexProvider.dialog.formatSuccess'), 'success');
-    } catch (e) {
-      addToast(t('settings.codexProvider.dialog.formatError'), 'error');
-    }
-  };
 
   // ESC key to close
   useEffect(() => {
@@ -95,28 +92,37 @@ wire_api = "responses"`);
     }
   }, [isOpen, onClose]);
 
+  const maskedApiKey = useMemo(() => maskApiKey(apiKey), [apiKey]);
+
   const handleSave = () => {
     if (!providerName.trim()) {
       addToast(t('settings.codexProvider.dialog.nameRequired'), 'error');
       return;
     }
-
-    // Validate auth.json format (must be valid JSON)
-    if (authJson.trim()) {
-      try {
-        JSON.parse(authJson);
-      } catch (e) {
-        addToast(t('settings.codexProvider.dialog.authJsonError'), 'error');
-        return;
-      }
+    if ((authMode === 'api_key_env' || authMode === 'proxy') && !apiKeyEnv.trim() && !apiKey.trim()) {
+      addToast(t('settings.codexProvider.dialog.apiKeyOrEnvRequired'), 'error');
+      return;
+    }
+    if (requestMode !== 'codex_sdk' && !baseUrl.trim()) {
+      addToast(t('settings.codexProvider.dialog.baseUrlRequired'), 'error');
+      return;
+    }
+    if (!models.length && authMode !== 'codex_cli_login') {
+      addToast(t('settings.codexProvider.dialog.modelsRequired'), 'error');
+      return;
     }
 
     const providerData: CodexProviderConfig = {
       id: provider?.id || (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString()),
       name: providerName.trim(),
+      remark: remark.trim() || undefined,
       createdAt: provider?.createdAt,
-      configToml: configTomlJson.trim(),
-      authJson: authJson.trim(),
+      authMode,
+      requestMode,
+      baseUrl: baseUrl.trim() || undefined,
+      apiKey: apiKey.trim() || undefined,
+      apiKeyEnv: apiKeyEnv.trim() || undefined,
+      models,
     };
 
     onSave(providerData);
@@ -147,78 +153,123 @@ wire_api = "responses"`);
               ? t('settings.codexProvider.dialog.addDescription')
               : t('settings.codexProvider.dialog.editDescription')}
           </p>
-
-          {/* Provider Name */}
-          <div className="form-group">
-            <label htmlFor="providerName">
-              {t('settings.codexProvider.dialog.providerName')}
-              <span className="required">{t('settings.provider.dialog.required')}</span>
-            </label>
-            <input
-              id="providerName"
-              type="text"
-              className="form-input"
-              placeholder={t('settings.codexProvider.dialog.providerNamePlaceholder')}
-              value={providerName}
-              onChange={(e) => setProviderName(e.target.value)}
-            />
-          </div>
-
-          {/* config.toml JSON */}
-          <div className="form-group">
-            <div style={FORM_HEADER_STYLE}>
-              <label htmlFor="configTomlJson">
-                config.toml {t('settings.codexProvider.dialog.configJson')}
+          <div style={GRID_STYLE}>
+            <div className="form-group">
+              <label htmlFor="providerName">
+                {t('settings.codexProvider.dialog.providerName')}
                 <span className="required">{t('settings.provider.dialog.required')}</span>
               </label>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={handleFormatConfigJson}
-                style={FORMAT_BUTTON_STYLE}
-              >
-                <span className="codicon codicon-symbol-namespace" />
-                {t('settings.codexProvider.dialog.formatJson')}
-              </button>
+              <input
+                id="providerName"
+                type="text"
+                className="form-input"
+                placeholder={t('settings.codexProvider.dialog.providerNamePlaceholder')}
+                value={providerName}
+                onChange={(e) => setProviderName(e.target.value)}
+              />
             </div>
-            <textarea
-              id="configTomlJson"
-              className="form-input code-input"
-              value={configTomlJson}
-              onChange={(e) => setConfigTomlJson(e.target.value)}
-              rows={15}
-              style={CODE_TEXTAREA_STYLE}
-            />
-            <small className="form-hint">{t('settings.codexProvider.dialog.configJsonHint')}</small>
-          </div>
 
-          {/* auth.json */}
-          <div className="form-group">
-            <div style={FORM_HEADER_STYLE}>
-              <label htmlFor="authJson">
-                auth.json {t('settings.codexProvider.dialog.authJsonLabel')}
-              </label>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={handleFormatAuthJson}
-                style={FORMAT_BUTTON_STYLE}
-              >
-                <span className="codicon codicon-symbol-namespace" />
-                {t('settings.codexProvider.dialog.formatJson')}
-              </button>
+            <div className="form-group">
+              <label htmlFor="providerRemark">{t('settings.provider.dialog.remark')}</label>
+              <input
+                id="providerRemark"
+                type="text"
+                className="form-input"
+                placeholder={t('settings.provider.dialog.remarkPlaceholder')}
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+              />
             </div>
-            <textarea
-              id="authJson"
-              className="form-input code-input"
-              value={authJson}
-              onChange={(e) => setAuthJson(e.target.value)}
-              rows={6}
-              style={CODE_TEXTAREA_STYLE}
-            />
-            <small className="form-hint">{t('settings.codexProvider.dialog.authJsonHint')}</small>
-          </div>
 
+            <div className="form-group">
+              <label htmlFor="authMode">{t('settings.codexProvider.dialog.authMode')}</label>
+              <select id="authMode" className="form-input" value={authMode} onChange={(e) => setAuthMode(e.target.value as CodexAuthMode)}>
+                {AUTH_MODE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {t(`settings.codexProvider.dialog.authModeOptions.${option}`)}
+                  </option>
+                ))}
+              </select>
+              <small className="form-hint">{t('settings.codexProvider.dialog.authModeHint')}</small>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="requestMode">{t('settings.codexProvider.dialog.requestMode')}</label>
+              <select id="requestMode" className="form-input" value={requestMode} onChange={(e) => setRequestMode(e.target.value as CodexRequestMode)}>
+                {REQUEST_MODE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {t(`settings.codexProvider.dialog.requestModeOptions.${option}`)}
+                  </option>
+                ))}
+              </select>
+              <small className="form-hint">{t('settings.codexProvider.dialog.requestModeHint')}</small>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="baseUrl">{t('settings.codexProvider.dialog.baseUrl')}</label>
+              <input
+                id="baseUrl"
+                type="text"
+                className="form-input"
+                placeholder={t('settings.codexProvider.dialog.baseUrlPlaceholder')}
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+              />
+              <small className="form-hint">{t('settings.codexProvider.dialog.baseUrlHint')}</small>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="apiKey">{t('settings.codexProvider.dialog.apiKey')}</label>
+              <div style={INLINE_ACTION_STYLE}>
+                <input
+                  id="apiKey"
+                  type={showApiKey ? 'text' : 'password'}
+                  className="form-input"
+                  placeholder={t('settings.codexProvider.dialog.apiKeyPlaceholder')}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowApiKey((value) => !value)}>
+                  {showApiKey ? t('settings.provider.dialog.hideApiKey') : t('settings.provider.dialog.showApiKey')}
+                </button>
+              </div>
+              {!showApiKey && maskedApiKey && (
+                <small className="form-hint">{t('settings.codexProvider.dialog.apiKeyMaskedHint', { masked: maskedApiKey })}</small>
+              )}
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="apiKeyEnv">{t('settings.codexProvider.dialog.apiKeyEnv')}</label>
+              <input
+                id="apiKeyEnv"
+                type="text"
+                className="form-input"
+                placeholder={t('settings.codexProvider.dialog.apiKeyEnvPlaceholder')}
+                value={apiKeyEnv}
+                onChange={(e) => setApiKeyEnv(e.target.value)}
+              />
+              <small className="form-hint">{t('settings.codexProvider.dialog.apiKeyEnvHint')}</small>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="models">{t('settings.codexProvider.dialog.models')}</label>
+              <textarea
+                id="models"
+                className="form-input code-input"
+                rows={8}
+                value={JSON.stringify(models, null, 2)}
+                onChange={(e) => {
+                  try {
+                    const parsed = JSON.parse(e.target.value) as CodexCustomModel[];
+                    setModels(Array.isArray(parsed) ? parsed : []);
+                  } catch {
+                    setModels([]);
+                  }
+                }}
+              />
+              <small className="form-hint">{t('settings.codexProvider.dialog.modelsHint')}</small>
+            </div>
+          </div>
         </div>
 
         <div className="dialog-footer">

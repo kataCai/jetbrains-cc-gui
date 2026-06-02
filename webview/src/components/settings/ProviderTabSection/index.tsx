@@ -28,6 +28,7 @@ interface ProviderTabSectionProps {
   onAddCodexProvider: () => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
+  onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onSwitchCodexProvider: (id: string) => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   // Shared
@@ -47,6 +48,7 @@ const ProviderTabSection = ({
   onAddCodexProvider,
   onEditCodexProvider,
   onDeleteCodexProvider,
+  onTestCodexProvider,
   onSwitchCodexProvider,
   onRevokeCodexLocalConfigAuthorization,
   addToast,
@@ -173,6 +175,7 @@ const ProviderTabSection = ({
           onAddCodexProvider={onAddCodexProvider}
           onEditCodexProvider={onEditCodexProvider}
           onDeleteCodexProvider={onDeleteCodexProvider}
+          onTestCodexProvider={onTestCodexProvider}
           onSwitchCodexProvider={onSwitchCodexProvider}
           onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
           showHeader={false}

@@ -9,6 +9,7 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Handles Codex provider CRUD operations and switching.
@@ -86,19 +87,19 @@ public class CodexProviderOperations {
 
             context.getSettingsService().updateCodexProvider(id, updates);
 
-            boolean syncedActiveProvider = false;
+            boolean refreshedActiveProvider = false;
             JsonObject activeProvider = context.getSettingsService().getActiveCodexProvider();
             if (activeProvider != null &&
                         activeProvider.has("id") &&
                         id.equals(activeProvider.get("id").getAsString())) {
-                context.getSettingsService().applyActiveProviderToCodexSettings();
-                syncedActiveProvider = true;
+                // Active provider 更新只影响 CC-GUI runtime，下次请求会重新解析 profile，不再默认写 ~/.codex。
+                refreshedActiveProvider = true;
             }
 
-            final boolean finalSynced = syncedActiveProvider;
+            final boolean finalRefreshed = refreshedActiveProvider;
             ApplicationManager.getApplication().invokeLater(() -> {
                 handleGetCodexProviders(); // Refresh list
-                if (finalSynced) {
+                if (finalRefreshed) {
                     handleGetActiveCodexProvider(); // Refresh active provider config
                 }
             });
@@ -172,14 +173,12 @@ public class CodexProviderOperations {
             }
 
             context.getSettingsService().switchCodexProvider(id);
-            context.getSettingsService().applyActiveProviderToCodexSettings();
 
             ApplicationManager.getApplication().invokeLater(() -> {
-                String successMsg = com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchSuccess")
-                        + com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("provider.switchSyncCodex");
+                // 切换只更新 ~/.codemoss/config.json，避免把 IDE 内 runtime provider 导出到 Codex live config。
+                String successMsg = com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchSuccess");
                 context.callJavaScript("window.showSwitchSuccess", context.escapeJs(successMsg));
                 handleGetCodexProviders(); // Refresh provider list
-                handleGetCurrentCodexConfig(); // Refresh Codex CLI config display
                 handleGetActiveCodexProvider(); // Refresh active provider config
             });
         } catch (Exception e) {
@@ -212,10 +211,8 @@ public class CodexProviderOperations {
             context.getSettingsService().setCodexLocalConfigAuthorized(false);
 
             if (wasCliLoginActive) {
+                // 撤销 CLI Login 后只切回 CC-GUI managed provider，不再把 fallback 写入 ~/.codex。
                 context.getSettingsService().switchCodexProvider(fallbackProviderId);
-                if (fallbackProviderId != null && !fallbackProviderId.isBlank()) {
-                    context.getSettingsService().applyActiveProviderToCodexSettings();
-                }
             }
 
             ApplicationManager.getApplication().invokeLater(() -> {
@@ -277,6 +274,74 @@ public class CodexProviderOperations {
             });
         } catch (Exception e) {
             LOG.error("[ProviderHandler] Failed to get active Codex provider: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 只验证 provider 的运行时必要字段，不发起真实模型请求。
+     */
+    public void handleTestCodexProvider(String content) {
+        try {
+            JsonObject data = content == null || content.isBlank()
+                    ? new JsonObject()
+                    : GSON.fromJson(content, JsonObject.class);
+            String providerId = data != null && data.has("id") && !data.get("id").isJsonNull()
+                    ? data.get("id").getAsString()
+                    : "";
+            if (providerId.isBlank()) {
+                throw new IllegalArgumentException("Missing provider id");
+            }
+
+            List<JsonObject> providers = context.getSettingsService().getCodexProviders();
+            JsonObject targetProvider = providers.stream()
+                    .filter(Objects::nonNull)
+                    .filter(provider -> provider.has("id") && providerId.equals(provider.get("id").getAsString()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerId));
+
+            String requestMode = targetProvider.has("requestMode") && !targetProvider.get("requestMode").isJsonNull()
+                    ? targetProvider.get("requestMode").getAsString()
+                    : "codex_sdk";
+            String authMode = targetProvider.has("authMode") && !targetProvider.get("authMode").isJsonNull()
+                    ? targetProvider.get("authMode").getAsString()
+                    : "api_key_env";
+            boolean hasModels = targetProvider.has("models")
+                    && targetProvider.get("models").isJsonArray()
+                    && targetProvider.getAsJsonArray("models").size() > 0;
+            boolean hasBaseUrl = targetProvider.has("baseUrl")
+                    && !targetProvider.get("baseUrl").isJsonNull()
+                    && !targetProvider.get("baseUrl").getAsString().trim().isEmpty();
+            boolean hasApiKey = targetProvider.has("apiKey")
+                    && !targetProvider.get("apiKey").isJsonNull()
+                    && !targetProvider.get("apiKey").getAsString().trim().isEmpty();
+            boolean hasApiKeyEnv = targetProvider.has("apiKeyEnv")
+                    && !targetProvider.get("apiKeyEnv").isJsonNull()
+                    && !targetProvider.get("apiKeyEnv").getAsString().trim().isEmpty();
+
+            if (!hasModels && !com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)) {
+                throw new IllegalStateException("No model configured for provider");
+            }
+            if (!"codex_cli_login".equals(authMode) && !hasApiKey && !hasApiKeyEnv) {
+                throw new IllegalStateException("No credential source configured");
+            }
+
+            String credentialSource = hasApiKeyEnv ? "env" : hasApiKey ? "local" : "cli_login";
+            StringBuilder message = new StringBuilder("Codex provider check passed");
+            message.append(": requestMode=").append(requestMode);
+            message.append(", authMode=").append(authMode);
+            message.append(", hasModels=").append(hasModels);
+            message.append(", hasBaseUrl=").append(hasBaseUrl);
+            message.append(", credentialSource=").append(credentialSource);
+            if (!"codex_sdk".equals(requestMode)) {
+                message.append(", note=request mode reserved for proxy or adapter");
+            }
+
+            ApplicationManager.getApplication().invokeLater(() ->
+                    context.callJavaScript("window.showSwitchSuccess", context.escapeJs(message.toString())));
+        } catch (Exception e) {
+            LOG.warn("[ProviderHandler] Codex provider check failed: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() ->
+                    context.callJavaScript("window.showError", context.escapeJs("Codex provider check failed: " + e.getMessage())));
         }
     }
 }

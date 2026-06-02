@@ -4,8 +4,10 @@ import type { ButtonAreaProps, ModelInfo, PermissionMode, ReasoningEffort } from
 import { ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
 import { CLAUDE_MODELS, CODEX_MODELS, createRuntimeModelInfo } from './types';
 import { STORAGE_KEYS, validateCodexCustomModels } from '../../types/provider';
-import type { CodexCustomModel } from '../../types/provider';
+import type { CodexCustomModel, CodexProviderConfig } from '../../types/provider';
 import { readClaudeModelMapping } from '../../utils/claudeModelMapping';
+import { sendBridgeEvent } from '../../utils/bridge';
+import { subscribeActiveCodexProvider } from '../../utils/runtimeProviderCapabilities';
 import {
   getChatExecutionMode,
   getComposerUsageMode,
@@ -89,6 +91,29 @@ function ensureSelectedModelVisible(models: ModelInfo[], selectedModel: string):
   return [runtimeModel, ...models];
 }
 
+function getProviderCodexModels(provider: CodexProviderConfig | null): ModelInfo[] {
+  const providerModels = provider?.models && provider.models.length > 0
+    ? provider.models
+    : provider?.customModels;
+  if (!providerModels || providerModels.length === 0) {
+    return [];
+  }
+  return providerModels
+    .filter((model): model is CodexCustomModel => !!model && typeof model.id === 'string' && model.id.trim().length > 0)
+    .map((model) => ({
+      id: model.id,
+      label: model.label || model.id,
+      description: model.description,
+    }));
+}
+
+function shouldShowCodexModelConfigHint(provider: CodexProviderConfig | null): boolean {
+  if (!provider || provider.id === '__codex_cli_login__') {
+    return false;
+  }
+  return getProviderCodexModels(provider).length === 0;
+}
+
 /**
  * ButtonArea - Bottom toolbar component
  * Contains mode selector, model selector, attachment button, prompt enhancer button, send/stop button
@@ -129,6 +154,7 @@ export const ButtonArea = ({
   // Track changes to custom models in localStorage
   // When localStorage changes, updating this version number triggers useMemo recalculation
   const [customModelsVersion, setCustomModelsVersion] = useState(0);
+  const [activeCodexProvider, setActiveCodexProvider] = useState<CodexProviderConfig | null>(null);
   // Plan 是产品层 usage mode，不是底层具体执行模式。
   // 切到 Plan 时仍要记住用户上一次真正选择的 chat execution mode，
   // 这样再切回 Chat 时可以恢复原选择，而不是粗暴丢回 default。
@@ -165,6 +191,25 @@ export const ButtonArea = ({
     }
   }, [permissionMode]);
 
+  useEffect(() => {
+    const unsubscribe = subscribeActiveCodexProvider((json) => {
+      try {
+        const provider = JSON.parse(json) as CodexProviderConfig;
+        setActiveCodexProvider(provider?.id ? provider : null);
+      } catch (error) {
+        console.error('[ButtonArea] Failed to parse active Codex provider:', error);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (currentProvider === 'codex') {
+      // Codex 模型列表来自 active provider，进入 Codex 时主动刷新，避免继续展示旧内置列表。
+      sendBridgeEvent('get_active_codex_provider');
+    }
+  }, [currentProvider]);
+
   /**
    * Apply model name mapping
    * Maps base model IDs to actual model names (e.g., versions with capacity suffixes)
@@ -193,7 +238,14 @@ export const ButtonArea = ({
   // customModelsVersion triggers recalculation when localStorage changes
   const availableModels = useMemo(() => {
     if (currentProvider === 'codex') {
-      // Merge built-in models and custom models
+      const providerModels = getProviderCodexModels(activeCodexProvider);
+      if (providerModels.length > 0) {
+        return ensureSelectedModelVisible(providerModels, selectedModel);
+      }
+      if (activeCodexProvider?.id) {
+        // 修改原因：managed provider 空模型时展示明确引导，避免回退内置列表掩盖配置缺口。
+        return [];
+      }
       const customModels = getCustomCodexModels();
       if (customModels.length === 0) {
         return ensureSelectedModelVisible(CODEX_MODELS, selectedModel);
@@ -228,7 +280,12 @@ export const ButtonArea = ({
     const customIds = new Set(customModels.map(m => m.id));
     const filteredBuiltIn = builtInModels.filter(m => !customIds.has(m.id));
     return [...customModels, ...filteredBuiltIn];
-  }, [currentProvider, applyModelMapping, customModelsVersion]);
+  }, [activeCodexProvider, currentProvider, selectedModel, applyModelMapping, customModelsVersion]);
+
+  const codexModelConfigHintVisible = useMemo(
+    () => currentProvider === 'codex' && shouldShowCodexModelConfigHint(activeCodexProvider),
+    [activeCodexProvider, currentProvider]
+  );
 
   /**
    * Handle submit button click
@@ -349,6 +406,11 @@ export const ButtonArea = ({
           longContextEnabled={currentProvider === 'claude' ? longContextEnabled : false}
           onLongContextChange={currentProvider === 'claude' ? onLongContextChange : undefined}
         />
+        {codexModelConfigHintVisible && (
+          <div className="toolbar-inline-hint" role="status">
+            {t('chat.codexModelConfigRequired')}
+          </div>
+        )}
         {currentProvider === 'codex' && (
           <ReasoningSelect
             value={reasoningEffort}

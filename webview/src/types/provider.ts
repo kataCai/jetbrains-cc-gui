@@ -171,6 +171,17 @@ export interface CodexCustomModel {
   label: string;
   /** Model description */
   description?: string;
+  /** Default reasoning effort for this model */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
+}
+
+export type CodexAuthMode = 'api_key' | 'api_key_env' | 'codex_cli_login' | 'proxy' | 'oauth';
+
+export type CodexRequestMode = 'codex_sdk' | 'cc_switch_proxy' | 'custom_adapter';
+
+export interface CodexSelectedModel {
+  providerId: string;
+  modelId: string;
 }
 
 /**
@@ -187,6 +198,20 @@ export interface CodexProviderConfig {
   createdAt?: number;
   /** Whether this is the currently active provider */
   isActive?: boolean;
+  /** Authentication mode used by request-level runtime resolution */
+  authMode?: CodexAuthMode;
+  /** Request path used by the runtime bridge */
+  requestMode?: CodexRequestMode;
+  /** Request-level endpoint for managed providers */
+  baseUrl?: string;
+  /** Local API key value, shown only as masked text in UI */
+  apiKey?: string;
+  /** Environment variable name used to resolve API key at send time */
+  apiKeyEnv?: string;
+  /** Runtime model list owned by this provider */
+  models?: CodexCustomModel[];
+  /** Optional masked API key preview used by UI */
+  apiKeyMasked?: string;
   /** config.toml content (raw string) */
   configToml?: string;
   /** auth.json content (raw string) */

@@ -285,6 +285,7 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
       shouldAdoptCodexDefaultModelRef.current = false;
       setSelectedCodexModel(resolvedCodexModelId);
       sendBridgeEvent('set_model', resolvedCodexModelId);
+      sendBridgeEvent('set_selected_codex_model', JSON.stringify({ modelId: resolvedCodexModelId }));
     }
   }, [
     currentProvider,

@@ -24,6 +24,21 @@ export interface UseCodexProviderManagementOptions {
   onSuccess?: (message: string) => void;
 }
 
+function buildCodexProviderPayload(providerData: CodexProviderConfig) {
+  const trimmedApiKey = providerData.apiKey?.trim() || '';
+  return {
+    id: providerData.id,
+    name: providerData.name,
+    remark: providerData.remark?.trim() || undefined,
+    authMode: providerData.authMode || 'api_key_env',
+    requestMode: providerData.requestMode || 'codex_sdk',
+    baseUrl: providerData.baseUrl?.trim() || undefined,
+    apiKey: trimmedApiKey || undefined,
+    apiKeyEnv: providerData.apiKeyEnv?.trim() || undefined,
+    models: providerData.models && providerData.models.length > 0 ? providerData.models : undefined,
+  };
+}
+
 export function useCodexProviderManagement(options: UseCodexProviderManagementOptions = {}) {
   const { t } = useTranslation();
   const { onSuccess } = options;
@@ -96,20 +111,15 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   const handleSaveCodexProvider = useCallback(
     (providerData: CodexProviderConfig) => {
       const isAdding = !codexProviderDialog.provider;
+      const payload = buildCodexProviderPayload(providerData);
 
       if (isAdding) {
-        sendToJava(`add_codex_provider:${JSON.stringify(providerData)}`);
+        sendToJava(`add_codex_provider:${JSON.stringify(payload)}`);
         onSuccess?.(t('toast.providerAdded'));
       } else {
         const updateData = {
           id: providerData.id,
-          updates: {
-            name: providerData.name,
-            remark: providerData.remark,
-            configToml: providerData.configToml,
-            authJson: providerData.authJson,
-            customModels: providerData.customModels,
-          },
+          updates: payload,
         };
         sendToJava(`update_codex_provider:${JSON.stringify(updateData)}`);
         onSuccess?.(t('toast.providerUpdated'));
@@ -121,7 +131,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
       setCodexProviderDialog({ isOpen: false, provider: null });
       setCodexLoading(true);
     },
-    [codexProviderDialog.provider, codexProviders, onSuccess]
+    [codexProviderDialog.provider, onSuccess, t]
   );
 
   // Switch Codex provider
@@ -138,6 +148,10 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     sendToJava(`revoke_codex_local_config_authorization:${JSON.stringify(data)}`);
     setCodexLoading(true);
     setCodexConfigLoading(true);
+  }, []);
+
+  const handleTestCodexProvider = useCallback((provider: CodexProviderConfig) => {
+    sendToJava(`test_codex_provider:${JSON.stringify({ id: provider.id })}`);
   }, []);
 
   // Delete Codex provider
@@ -178,6 +192,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleSwitchCodexProvider,
+    handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,

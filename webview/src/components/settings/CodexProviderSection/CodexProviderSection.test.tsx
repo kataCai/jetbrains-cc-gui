@@ -55,6 +55,7 @@ describe('CodexProviderSection', () => {
   const onAddCodexProvider = vi.fn();
   const onEditCodexProvider = vi.fn();
   const onDeleteCodexProvider = vi.fn();
+  const onTestCodexProvider = vi.fn();
   const onSwitchCodexProvider = vi.fn();
   const onRevokeCodexLocalConfigAuthorization = vi.fn();
 
@@ -76,6 +77,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />
@@ -110,6 +112,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />
@@ -138,6 +141,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />
@@ -172,6 +176,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />

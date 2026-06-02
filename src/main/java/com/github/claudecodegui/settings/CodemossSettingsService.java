@@ -1978,6 +1978,14 @@ public class CodemossSettingsService {
         codexProviderManager.saveProviderOrder(orderedIds);
     }
 
+    public JsonObject getSelectedCodexModel() {
+        return codexProviderManager.getSelectedModel();
+    }
+
+    public void setSelectedCodexModel(String providerId, String modelId) throws IOException {
+        codexProviderManager.setSelectedModel(providerId, modelId);
+    }
+
     private JsonObject ensureRemoteCollabConfig(JsonObject config) {
         if (migrateRemoteCollabConfig(config)) {
             // migration already updated the in-memory tree

@@ -25,4 +25,16 @@ describe('useCodexProviderManagement', () => {
     );
     expect(result.current.codexLoading).toBe(true);
   });
+
+  it('sends a test provider message', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleTestCodexProvider({ id: 'provider-1', name: 'Provider 1' });
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'test_codex_provider:{"id":"provider-1"}'
+    );
+  });
 });

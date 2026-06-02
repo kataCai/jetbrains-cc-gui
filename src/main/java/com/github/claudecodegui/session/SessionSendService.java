@@ -5,6 +5,8 @@ import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
+import com.github.claudecodegui.provider.codex.CodexRuntimeProfileResolver;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
@@ -190,6 +192,16 @@ public class SessionSendService {
 
         String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
         String finalInput = (input != null ? input : "") + contextAppend;
+        CodexRuntimeProfile runtimeProfile;
+        try {
+            // 每次发送前重新解析 runtime profile，避免 provider 切换后沿用旧 baseUrl/apiKey。
+            runtimeProfile = new CodexRuntimeProfileResolver(new CodemossSettingsService(), System::getenv)
+                    .resolve(state.getModel(), state.getReasoningEffort());
+            LOG.info("[Codex] Runtime profile resolved: " + runtimeProfile.toDiagnosticJson());
+        } catch (Exception e) {
+            handler.onError(e.getMessage());
+            return CompletableFuture.completedFuture(null);
+        }
 
         return codexSDKBridge.sendMessage(
                 channelId,
@@ -198,9 +210,10 @@ public class SessionSendService {
                 state.getCwd(),
                 attachments,
                 effectivePermissionMode,
-                state.getModel(),
+                runtimeProfile.getModel(),
                 agentPrompt,
-                state.getReasoningEffort(),
+                runtimeProfile.getReasoningEffort(),
+                runtimeProfile,
                 handler
         ).thenCompose(result -> {
             if (result != null) {

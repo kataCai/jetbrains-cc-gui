@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ButtonArea } from './ButtonArea';
 import {
@@ -117,5 +117,55 @@ describe('ButtonArea', () => {
     expect(within(dropdown as HTMLElement).getByText('Accept Edits')).toBeTruthy();
     expect(within(dropdown as HTMLElement).getByText('Bypass Permissions')).toBeTruthy();
     expect(within(dropdown as HTMLElement).queryByText('Plan')).toBeNull();
+  });
+
+  it('uses active Codex provider models before built-in models', () => {
+    const { container } = render(
+      <ButtonArea
+        hasInputContent
+        selectedModel="MiniMax-M2.7"
+        permissionMode="default"
+        currentProvider="codex"
+        onSubmit={() => {}}
+        onModelSelect={() => {}}
+      />
+    );
+
+    act(() => {
+      window.updateActiveCodexProvider?.(JSON.stringify({
+        id: 'minimax-cn',
+        name: 'MiniMax CN',
+        models: [{ id: 'MiniMax-M2.7', label: 'MiniMax M2.7', reasoningEffort: 'medium' }],
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /MiniMax/i }));
+    const dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    expect(within(dropdown as HTMLElement).getByText('MiniMax M2.7')).toBeTruthy();
+    expect(within(dropdown as HTMLElement).queryByText('GPT-5.4')).toBeNull();
+  });
+
+  it('shows config hint when active Codex provider has no models', () => {
+    render(
+      <ButtonArea
+        hasInputContent
+        selectedModel="gpt-5.4"
+        permissionMode="default"
+        currentProvider="codex"
+        onSubmit={() => {}}
+        onModelSelect={() => {}}
+      />
+    );
+
+    act(() => {
+      window.updateActiveCodexProvider?.(JSON.stringify({
+        id: 'managed-empty-provider',
+        name: 'Managed Empty Provider',
+        models: [],
+      }));
+    });
+
+    expect(screen.getByText('chat.codexModelConfigRequired')).toBeTruthy();
   });
 });

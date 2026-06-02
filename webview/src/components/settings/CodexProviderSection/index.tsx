@@ -15,6 +15,7 @@ interface CodexProviderSectionProps {
   onAddCodexProvider: () => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
+  onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onSwitchCodexProvider: (id: string) => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   showHeader?: boolean;
@@ -26,6 +27,7 @@ const CodexProviderSection = ({
   onAddCodexProvider,
   onEditCodexProvider,
   onDeleteCodexProvider,
+  onTestCodexProvider,
   onSwitchCodexProvider,
   onRevokeCodexLocalConfigAuthorization,
   showHeader = true,
@@ -255,6 +257,13 @@ const CodexProviderSection = ({
                     <div className={sharedStyles.divider} />
 
                     <div className={sharedStyles.actionButtons}>
+                      <button
+                        className={sharedStyles.iconBtn}
+                        onClick={() => onTestCodexProvider(provider)}
+                        title={t('settings.codexProvider.dialog.testProvider')}
+                      >
+                        <span className="codicon codicon-plug" />
+                      </button>
                       <button
                         className={sharedStyles.iconBtn}
                         onClick={() => onEditCodexProvider(provider)}
