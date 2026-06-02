@@ -104,6 +104,15 @@ public class ModelProviderHandler {
         }
     }
 
+    /**
+     * 持久化 Codex 模型下拉框的选中值。
+     * 这里的职责仅限于把 providerId/modelId 写入 CC-GUI 自有配置，
+     * 用于窗口重开、provider 切换后的前端状态恢复；不会修改会话内已生效的 runtime model，
+     * 也不会改写 `~/.codex/config.toml` 等 Codex live config。
+     *
+     * @param content 包含 providerId 与 modelId 的 JSON 字符串
+     * @return 无返回值
+     */
     public void handleSetSelectedCodexModel(String content) {
         try {
             JsonObject json = gson.fromJson(content, JsonObject.class);

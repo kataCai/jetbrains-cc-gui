@@ -107,6 +107,27 @@ function getProviderCodexModels(provider: CodexProviderConfig | null): ModelInfo
     }));
 }
 
+/**
+ * 合并插件级自定义模型与当前 provider 模型。
+ * 自定义模型代表用户在插件层显式补充的能力，应始终优先展示；若与 provider 模型同 id，
+ * 则保留自定义模型，避免聊天区下拉把设置页刚保存的配置覆盖掉。
+ *
+ * @param customModels 插件级自定义模型
+ * @param providerModels 当前 provider 返回的模型列表
+ * @return 去重后的模型列表，自定义模型排在前面
+ */
+function mergeCustomAndProviderCodexModels(
+  customModels: ModelInfo[],
+  providerModels: ModelInfo[],
+): ModelInfo[] {
+  if (customModels.length === 0) {
+    return providerModels;
+  }
+  const customIds = new Set(customModels.map(model => model.id));
+  const filteredProviderModels = providerModels.filter(model => !customIds.has(model.id));
+  return [...customModels, ...filteredProviderModels];
+}
+
 function shouldShowCodexModelConfigHint(provider: CodexProviderConfig | null): boolean {
   if (!provider || provider.id === '__codex_cli_login__') {
     return false;
@@ -240,7 +261,12 @@ export const ButtonArea = ({
     if (currentProvider === 'codex') {
       const providerModels = getProviderCodexModels(activeCodexProvider);
       if (providerModels.length > 0) {
-        return ensureSelectedModelVisible(providerModels, selectedModel);
+        const customModels = getCustomCodexModels();
+        // 插件级自定义模型不应因当前激活了托管 provider 就从模型下拉中消失。
+        return ensureSelectedModelVisible(
+          mergeCustomAndProviderCodexModels(customModels, providerModels),
+          selectedModel,
+        );
       }
       if (activeCodexProvider?.id) {
         // 修改原因：managed provider 空模型时展示明确引导，避免回退内置列表掩盖配置缺口。

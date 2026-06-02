@@ -3,8 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useModelProviderState } from './useModelProviderState';
 import { sendBridgeEvent } from '../utils/bridge';
 
+const runtimeProviderMock = vi.hoisted(() => {
+  const activeCodexProviderListeners = new Set<(json: string) => void>();
+  return {
+    subscribeActiveCodexProvider: (listener: (json: string) => void) => {
+      activeCodexProviderListeners.add(listener);
+      return () => {
+        activeCodexProviderListeners.delete(listener);
+      };
+    },
+    emitActiveCodexProvider: (provider: Record<string, unknown>) => {
+      const payload = JSON.stringify(provider);
+      activeCodexProviderListeners.forEach((listener) => listener(payload));
+    },
+  };
+});
+
 vi.mock('../utils/bridge', () => ({
   sendBridgeEvent: vi.fn(),
+}));
+
+vi.mock('../utils/runtimeProviderCapabilities', () => ({
+  subscribeActiveCodexProvider: runtimeProviderMock.subscribeActiveCodexProvider,
 }));
 
 describe('useModelProviderState', () => {
@@ -145,5 +165,37 @@ describe('useModelProviderState', () => {
 
     expect(result.current.selectedCodexModel).toBe('gpt-5.4');
     expect(result.current.defaultCodexModelFromConfig).toBeNull();
+  });
+
+  it('persists the selected codex model with the active codex provider id', () => {
+    // 持久化 Codex 下拉框选中值时，必须带上真实 active provider id，
+    // 否则 provider 切换后会把模型错误归属到当前瞬时 provider，导致恢复结果串味。
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'managed-openai',
+        name: 'Managed OpenAI',
+      });
+    });
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.handleModelSelect('gpt-5.5');
+    });
+
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'set_selected_codex_model',
+      JSON.stringify({
+        providerId: 'managed-openai',
+        modelId: 'gpt-5.5',
+      }),
+    );
   });
 });

@@ -559,6 +559,14 @@ if (typeof window !== 'undefined' && !window.onModeReceived) {
   };
 }
 
+if (typeof window !== 'undefined' && !window.updateCodexModelState) {
+  debugLog('[Main] Pre-registering updateCodexModelState placeholder');
+  window.updateCodexModelState = (json: string) => {
+    debugLog('[Main] Storing pending codex model state, length=' + (json ? json.length : 0));
+    window.__pendingCodexModelState = json;
+  };
+}
+
 if (typeof window !== 'undefined' && !window.showPermissionDialog) {
   debugLog('[Main] Pre-registering showPermissionDialog placeholder');
   window.showPermissionDialog = (json: string) => {

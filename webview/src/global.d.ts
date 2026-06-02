@@ -100,6 +100,11 @@ interface Window {
   addToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 
   /**
+   * Show Codex provider test result.
+   */
+  showTestResult?: (success: boolean, message: string) => void;
+
+  /**
    * Toast deferred until a session transition finishes, because backend
    * clearMessages resets transient UI state during new-session creation.
    */
@@ -378,6 +383,11 @@ interface Window {
    * Pending usage statistics before component mounts
    */
   __pendingUsageStatistics?: string;
+
+  /**
+   * Pending Codex model state before callback registration
+   */
+  __pendingCodexModelState?: string;
 
   /**
    * Update slash commands list (from SDK)

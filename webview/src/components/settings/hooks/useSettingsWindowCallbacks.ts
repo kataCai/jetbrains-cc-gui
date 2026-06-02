@@ -165,6 +165,14 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       d().showAlert('success', t('toast.switchSuccess'), message);
     };
 
+    window.showTestResult = (success: boolean, message: string) => {
+      d().showAlert(
+        success ? 'success' : 'error',
+        success ? t('toast.testResultPassed') : t('toast.testResultFailed'),
+        message
+      );
+    };
+
     window.updateNodePath = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -497,6 +505,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
       window.showError = undefined;
       window.showSwitchSuccess = undefined;
+      window.showTestResult = undefined;
       window.updateNodePath = undefined;
       window.updateWorkingDirectory = undefined;
       window.showSuccess = undefined;

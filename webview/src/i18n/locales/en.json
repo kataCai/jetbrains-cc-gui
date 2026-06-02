@@ -1079,6 +1079,8 @@
     "newSessionCreatedReady": "New session created, you can start asking questions",
     "providerSwitchSuccess": "Provider switched successfully!",
     "providerSwitchFailed": "Failed to switch provider",
+    "testResultPassed": "Test passed",
+    "testResultFailed": "Test failed",
     "operationSuccess": "Operation successful",
     "pleaseEnterProviderName": "Please enter provider name",
     "invalidJsonConfig": "Invalid JSON config format",

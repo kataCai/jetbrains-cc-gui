@@ -30,17 +30,47 @@ public class CodexRuntimeProfileResolver {
             throw new IllegalStateException("No active Codex provider configured");
         }
 
+        return resolveForProvider(activeProvider, sessionModel, sessionReasoningEffort);
+    }
+
+    /**
+     * 基于指定 provider 解析单次请求的 runtime profile。
+     * 该入口供测试连接和发送前预览复用，避免依赖当前 active provider。
+     *
+     * @param provider 目标 provider 配置
+     * @param sessionModel 会话显式指定模型
+     * @param sessionReasoningEffort 会话显式指定推理强度
+     * @return 解析后的请求级 profile
+     * @throws IOException 读取本地 Codex 默认配置失败时抛出
+     */
+    public CodexRuntimeProfile resolveForProvider(
+            JsonObject provider,
+            String sessionModel,
+            String sessionReasoningEffort
+    ) throws IOException {
+        JsonObject activeProvider = provider;
+        if (activeProvider == null || activeProvider.size() == 0) {
+            throw new IllegalStateException("No Codex provider configured");
+        }
+
         String providerId = readString(activeProvider, "id");
         if (CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)
                 || activeProvider.has("isCodexCliLoginProvider")) {
             return resolveCliLogin(providerId, sessionModel, sessionReasoningEffort);
         }
 
-        String model = firstNonBlank(sessionModel, readSelectedModel(providerId), readFirstModelId(activeProvider));
+        JsonObject localModelState = settingsService.getCurrentCodexModelState();
+        String model = firstNonBlank(
+                sessionModel,
+                readSelectedModel(providerId),
+                readFirstModelId(activeProvider)
+        );
         if (model.isEmpty()) {
             throw new IllegalStateException("No Codex model configured for provider: " + providerId);
         }
 
+        // ~/.codex/config.toml 里的 model / reasoningEffort 仅用于 GUI 展示当前本地 CLI 状态，
+        // 不能覆盖 CC-GUI 托管 provider 自身的选中模型与模型级推理强度。
         String reasoningEffort = firstNonBlank(
                 sessionReasoningEffort,
                 readModelReasoningEffort(activeProvider, model),
@@ -54,7 +84,7 @@ public class CodexRuntimeProfileResolver {
         return new CodexRuntimeProfile(
                 providerId,
                 model,
-                readString(activeProvider, "baseUrl"),
+                firstNonBlank(readString(activeProvider, "baseUrl"), readString(localModelState, "baseUrl")),
                 credential.apiKey,
                 authMode,
                 requestMode,

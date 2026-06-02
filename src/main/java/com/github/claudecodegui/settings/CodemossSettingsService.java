@@ -1838,6 +1838,17 @@ public class CodemossSettingsService {
         return codexProviderManager.getActiveCodexProvider();
     }
 
+    /**
+     * 按 id 读取指定的 Codex provider，只读不切换 current。
+     *
+     * @param providerId provider id
+     * @return provider 配置；不存在时返回 null
+     * @throws IOException 读取配置失败时抛出
+     */
+    public JsonObject getCodexProviderById(String providerId) throws IOException {
+        return codexProviderManager.getCodexProviderById(providerId);
+    }
+
     public void addCodexProvider(JsonObject provider) throws IOException {
         codexProviderManager.addCodexProvider(provider);
     }

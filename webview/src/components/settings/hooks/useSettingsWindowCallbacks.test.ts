@@ -291,4 +291,44 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
       fontFormat: 'truetype',
     }));
   });
+
+  /**
+   * 验证 provider 测试结果走独立回调，不再复用切换成功提示。
+   * 断言意图：测试成功与失败应分别映射到独立标题，避免与 switch toast 混淆。
+   */
+  it('shows dedicated alerts for codex provider test results', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showTestResult?.(true, 'provider ok');
+    window.showTestResult?.(false, 'provider failed');
+
+    expect(deps.showAlert).toHaveBeenNthCalledWith(
+      1,
+      'success',
+      'toast.testResultPassed',
+      'provider ok'
+    );
+    expect(deps.showAlert).toHaveBeenNthCalledWith(
+      2,
+      'error',
+      'toast.testResultFailed',
+      'provider failed'
+    );
+  });
+
+  /**
+   * 验证设置页卸载时会清理 provider 测试结果回调。
+   * 断言意图：避免旧页面闭包残留到下次挂载。
+   */
+  it('cleans up showTestResult callback on unmount', () => {
+    const deps = createDeps();
+    const { unmount } = renderHook(() => useSettingsWindowCallbacks(deps));
+
+    expect(window.showTestResult).toBeTypeOf('function');
+
+    unmount();
+
+    expect(window.showTestResult).toBeUndefined();
+  });
 });

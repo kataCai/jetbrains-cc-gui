@@ -378,6 +378,14 @@ public class CodexSDKBridge extends BaseSDKBridge {
      * Note: Codex supports images via local_image type (requires file path, not base64)
      * Note: Codex does not support system prompts, so agentPrompt is appended to user message
      */
+    /**
+     * 旧的 9 参数发送入口。
+     * 当前仅为兼容仍未迁移到 request-scoped runtime profile 的调用方而保留；
+     * 新代码应统一使用带 `CodexRuntimeProfile` 的重载，避免复用 bridge 实例上的 baseUrl/apiKey。
+     *
+     * @deprecated 待所有调用点迁移完成后移除，建议后续 major 版本删除。
+     */
+    @Deprecated(forRemoval = true)
     public CompletableFuture<SDKResult> sendMessage(
             String channelId,
             String message,

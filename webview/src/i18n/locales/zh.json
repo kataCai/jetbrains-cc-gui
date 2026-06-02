@@ -1084,6 +1084,8 @@
     "newSessionCreatedReady": "新会话已创建，可以开始提问",
     "providerSwitchSuccess": "供应商切换成功！",
     "providerSwitchFailed": "切换供应商失败",
+    "testResultPassed": "测试通过",
+    "testResultFailed": "测试失败",
     "operationSuccess": "操作成功",
     "pleaseEnterProviderName": "请输入供应商名称",
     "invalidJsonConfig": "配置 JSON 格式错误，请修正后再保存",

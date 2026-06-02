@@ -69,6 +69,81 @@ public class CodexRuntimeProfileResolverTest {
         assertEquals("", profile.getApiKey());
     }
 
+    @Test
+    public void shouldPreferSelectedModelOverDisplayOnlyLocalCodexStateForManagedProvider() throws Exception {
+        JsonObject provider = createManagedProvider();
+        TestSettingsService settings = new TestSettingsService(provider);
+        settings.setSelectedModel("minimax-cn", "selected-model");
+        settings.setCurrentCodexModelState("local-model", "high", "https://local.example.com/v1");
+        Map<String, String> env = new HashMap<>();
+        env.put("MINIMAX_CN_API_KEY", "secret-value");
+        CodexRuntimeProfileResolver resolver = new CodexRuntimeProfileResolver(settings, env::get);
+
+        CodexRuntimeProfile profile = resolver.resolve("", "");
+
+        /**
+         * 验证目标：
+         * ~/.codex/config.toml 里的 model / reasoningEffort 仅用于前端展示当前本地 CLI 状态，
+         * 不能反向覆盖 CC-GUI 托管 provider 已持久化的 selected model。
+         *
+         * 断言意图：
+         * 1. 托管 provider 真实请求仍使用当前 provider 归属的 selected model；
+         * 2. baseUrl 仍优先取 provider 自身配置，不被本地展示态配置污染。
+         */
+        assertEquals("selected-model", profile.getModel());
+        assertEquals("medium", profile.getReasoningEffort());
+        assertEquals("https://api.minimaxi.com/anthropic", profile.getBaseUrl());
+    }
+
+    @Test
+    public void shouldFallbackToLocalBaseUrlWhenProviderBaseUrlIsMissing() throws Exception {
+        JsonObject provider = createManagedProvider();
+        provider.remove("baseUrl");
+        TestSettingsService settings = new TestSettingsService(provider);
+        settings.setCurrentCodexModelState("local-model", "medium", "https://local.example.com/v1");
+        Map<String, String> env = new HashMap<>();
+        env.put("MINIMAX_CN_API_KEY", "secret-value");
+        CodexRuntimeProfileResolver resolver = new CodexRuntimeProfileResolver(settings, env::get);
+
+        CodexRuntimeProfile profile = resolver.resolveForProvider(provider, "", "");
+
+        /**
+         * 验证目标：
+         * 当 provider 自身缺少 baseUrl 时，可以回退使用本地 CLI 展示态同步过来的 baseUrl；
+         * 但模型本身仍应来自 provider 配置，而不是顺带把本地 model 一起带入真实请求。
+         */
+        assertEquals("MiniMax-M2.7", profile.getModel());
+        assertEquals("https://local.example.com/v1", profile.getBaseUrl());
+    }
+
+    @Test
+    public void shouldResolveForSpecifiedProviderWithoutActiveProviderSwitch() throws Exception {
+        JsonObject activeProvider = createManagedProvider();
+        JsonObject targetProvider = createManagedProvider();
+        targetProvider.addProperty("id", "target-provider");
+        targetProvider.addProperty("apiKeyEnv", "TARGET_CODEX_KEY");
+        JsonArray targetModels = new JsonArray();
+        JsonObject targetModel = new JsonObject();
+        targetModel.addProperty("id", "target-model");
+        targetModel.addProperty("label", "Target Model");
+        targetModel.addProperty("reasoningEffort", "low");
+        targetModels.add(targetModel);
+        targetProvider.add("models", targetModels);
+
+        TestSettingsService settings = new TestSettingsService(activeProvider);
+        Map<String, String> env = new HashMap<>();
+        env.put("MINIMAX_CN_API_KEY", "secret-value");
+        env.put("TARGET_CODEX_KEY", "target-secret");
+        CodexRuntimeProfileResolver resolver = new CodexRuntimeProfileResolver(settings, env::get);
+
+        CodexRuntimeProfile profile = resolver.resolveForProvider(targetProvider, "", "");
+
+        assertEquals("target-provider", profile.getProviderId());
+        assertEquals("target-model", profile.getModel());
+        assertEquals("target-secret", profile.getApiKey());
+        assertEquals("low", profile.getReasoningEffort());
+    }
+
     @Test(expected = IllegalStateException.class)
     public void shouldFailWhenApiKeyEnvIsMissing() throws Exception {
         TestSettingsService settings = new TestSettingsService(createManagedProvider());
@@ -97,6 +172,8 @@ public class CodexRuntimeProfileResolverTest {
 
     private static class TestSettingsService extends CodemossSettingsService {
         private final JsonObject activeProvider;
+        private JsonObject selectedModel = new JsonObject();
+        private JsonObject currentCodexModelState = new JsonObject();
 
         TestSettingsService(JsonObject activeProvider) {
             this.activeProvider = activeProvider;
@@ -109,7 +186,31 @@ public class CodexRuntimeProfileResolverTest {
 
         @Override
         public JsonObject getSelectedCodexModel() {
-            return new JsonObject();
+            return selectedModel.deepCopy();
+        }
+
+        @Override
+        public JsonObject getCurrentCodexModelState() {
+            return currentCodexModelState.deepCopy();
+        }
+
+        void setSelectedModel(String providerId, String modelId) {
+            selectedModel = new JsonObject();
+            selectedModel.addProperty("providerId", providerId);
+            selectedModel.addProperty("modelId", modelId);
+        }
+
+        void setCurrentCodexModelState(String model, String reasoningEffort, String baseUrl) {
+            currentCodexModelState = new JsonObject();
+            if (model != null) {
+                currentCodexModelState.addProperty("model", model);
+            }
+            if (reasoningEffort != null) {
+                currentCodexModelState.addProperty("reasoningEffort", reasoningEffort);
+            }
+            if (baseUrl != null) {
+                currentCodexModelState.addProperty("baseUrl", baseUrl);
+            }
         }
     }
 }

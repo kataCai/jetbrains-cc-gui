@@ -14,6 +14,7 @@ import { useCodexProvider } from './providers/useCodexProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
 import { useProviderSettings } from './providers/useProviderSettings';
 import { useModelStatePersistence } from './providers/useModelStatePersistence';
+import { subscribeActiveCodexProvider } from '../utils/runtimeProviderCapabilities';
 
 export type ViewMode = 'chat' | 'history' | 'settings';
 
@@ -106,6 +107,7 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   const [defaultCodexModelFromConfig, setDefaultCodexModelFromConfig] = useState<string | null>(null);
   const [codexBaseUrl, setCodexBaseUrl] = useState<string | null>(null);
   const [codexUsesCustomBaseUrl, setCodexUsesCustomBaseUrl] = useState(false);
+  const [activeCodexProviderId, setActiveCodexProviderId] = useState('');
 
   const currentProviderRef = useRef(currentProvider);
   currentProviderRef.current = currentProvider;
@@ -172,6 +174,22 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   useEffect(() => {
     activeProviderConfigRef.current = activeProviderConfig;
   }, [activeProviderConfig]);
+
+  useEffect(() => {
+    /**
+     * 跟踪当前激活的 Codex provider id。
+     * 持久化 selectedCodexModel 时需要把模型绑定到具体 provider，避免切换 provider 后恢复串味。
+     */
+    const unsubscribe = subscribeActiveCodexProvider((jsonStr: string) => {
+      try {
+        const provider = JSON.parse(jsonStr) as { id?: string | null };
+        setActiveCodexProviderId(typeof provider?.id === 'string' ? provider.id.trim() : '');
+      } catch {
+        setActiveCodexProviderId('');
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   const notifyCodexPlanDowngrade = useCallback(() => {
     addToast(
@@ -285,9 +303,13 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
       shouldAdoptCodexDefaultModelRef.current = false;
       setSelectedCodexModel(resolvedCodexModelId);
       sendBridgeEvent('set_model', resolvedCodexModelId);
-      sendBridgeEvent('set_selected_codex_model', JSON.stringify({ modelId: resolvedCodexModelId }));
+      sendBridgeEvent('set_selected_codex_model', JSON.stringify({
+        providerId: activeCodexProviderId,
+        modelId: resolvedCodexModelId,
+      }));
     }
   }, [
+    activeCodexProviderId,
     currentProvider,
     defaultCodexModelFromConfig,
     longContextEnabled,

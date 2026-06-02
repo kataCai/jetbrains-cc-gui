@@ -175,6 +175,47 @@ public class CodexProviderManager {
     }
 
     /**
+     * 按 providerId 读取 Codex provider 配置。
+     * 该方法只做只读查询，不会修改 current 状态，供测试连接和运行时预览复用。
+     *
+     * @param providerId 目标 provider id
+     * @return provider 深拷贝；不存在时返回 null
+     */
+    public JsonObject getCodexProviderById(String providerId) {
+        if (providerId == null || providerId.trim().isEmpty()) {
+            return null;
+        }
+
+        JsonObject config = configReader.apply(null);
+        if (!config.has(CODEX_KEY) || !config.get(CODEX_KEY).isJsonObject()) {
+            return null;
+        }
+
+        JsonObject codex = config.getAsJsonObject(CODEX_KEY);
+        if (CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)) {
+            if (!isCodexCliLoginAuthorized(config)) {
+                return null;
+            }
+            return createCodexCliLoginProviderObject(false);
+        }
+
+        if (!codex.has(PROVIDERS_KEY) || !codex.get(PROVIDERS_KEY).isJsonObject()) {
+            return null;
+        }
+
+        JsonObject providers = codex.getAsJsonObject(PROVIDERS_KEY);
+        if (!providers.has(providerId) || !providers.get(providerId).isJsonObject()) {
+            return null;
+        }
+
+        JsonObject provider = providers.getAsJsonObject(providerId).deepCopy();
+        if (!provider.has("id")) {
+            provider.addProperty("id", providerId);
+        }
+        return provider;
+    }
+
+    /**
      * Add a new Codex provider
      */
     public void addCodexProvider(JsonObject provider) throws IOException {

@@ -1,6 +1,10 @@
 package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
+import com.github.claudecodegui.provider.codex.CodexRuntimeProfileResolver;
+import com.github.claudecodegui.provider.common.MessageCallback;
+import com.github.claudecodegui.provider.common.SDKResult;
 
 import com.github.claudecodegui.model.DeleteResult;
 import com.google.gson.Gson;
@@ -8,8 +12,11 @@ import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
+import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Handles Codex provider CRUD operations and switching.
@@ -278,7 +285,12 @@ public class CodexProviderOperations {
     }
 
     /**
-     * 只验证 provider 的运行时必要字段，不发起真实模型请求。
+     * 测试指定 Codex provider 的真实请求链路。
+     * 这里会基于目标 provider 临时解析 runtime profile，并发起一次最小真实请求；
+     * 整个过程只读，不切换当前 active provider，也不会落盘修改本地配置。
+     *
+     * @param content 前端传入的 JSON，至少包含 provider id
+     * @return 无返回值；结果通过设置页独立 toast 回调反馈
      */
     public void handleTestCodexProvider(String content) {
         try {
@@ -291,57 +303,117 @@ public class CodexProviderOperations {
             if (providerId.isBlank()) {
                 throw new IllegalArgumentException("Missing provider id");
             }
-
-            List<JsonObject> providers = context.getSettingsService().getCodexProviders();
-            JsonObject targetProvider = providers.stream()
-                    .filter(Objects::nonNull)
-                    .filter(provider -> provider.has("id") && providerId.equals(provider.get("id").getAsString()))
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerId));
-
-            String requestMode = targetProvider.has("requestMode") && !targetProvider.get("requestMode").isJsonNull()
-                    ? targetProvider.get("requestMode").getAsString()
-                    : "codex_sdk";
-            String authMode = targetProvider.has("authMode") && !targetProvider.get("authMode").isJsonNull()
-                    ? targetProvider.get("authMode").getAsString()
-                    : "api_key_env";
-            boolean hasModels = targetProvider.has("models")
-                    && targetProvider.get("models").isJsonArray()
-                    && targetProvider.getAsJsonArray("models").size() > 0;
-            boolean hasBaseUrl = targetProvider.has("baseUrl")
-                    && !targetProvider.get("baseUrl").isJsonNull()
-                    && !targetProvider.get("baseUrl").getAsString().trim().isEmpty();
-            boolean hasApiKey = targetProvider.has("apiKey")
-                    && !targetProvider.get("apiKey").isJsonNull()
-                    && !targetProvider.get("apiKey").getAsString().trim().isEmpty();
-            boolean hasApiKeyEnv = targetProvider.has("apiKeyEnv")
-                    && !targetProvider.get("apiKeyEnv").isJsonNull()
-                    && !targetProvider.get("apiKeyEnv").getAsString().trim().isEmpty();
-
-            if (!hasModels && !com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)) {
-                throw new IllegalStateException("No model configured for provider");
-            }
-            if (!"codex_cli_login".equals(authMode) && !hasApiKey && !hasApiKeyEnv) {
-                throw new IllegalStateException("No credential source configured");
+            JsonObject targetProvider = context.getSettingsService().getCodexProviderById(providerId);
+            if (targetProvider == null || targetProvider.size() == 0) {
+                throw new IllegalArgumentException("Provider not found: " + providerId);
             }
 
-            String credentialSource = hasApiKeyEnv ? "env" : hasApiKey ? "local" : "cli_login";
-            StringBuilder message = new StringBuilder("Codex provider check passed");
-            message.append(": requestMode=").append(requestMode);
-            message.append(", authMode=").append(authMode);
-            message.append(", hasModels=").append(hasModels);
-            message.append(", hasBaseUrl=").append(hasBaseUrl);
-            message.append(", credentialSource=").append(credentialSource);
-            if (!"codex_sdk".equals(requestMode)) {
-                message.append(", note=request mode reserved for proxy or adapter");
-            }
+            CodexRuntimeProfile runtimeProfile = new CodexRuntimeProfileResolver(
+                    context.getSettingsService(),
+                    System::getenv
+            ).resolveForProvider(targetProvider, "", "");
 
-            ApplicationManager.getApplication().invokeLater(() ->
-                    context.callJavaScript("window.showSwitchSuccess", context.escapeJs(message.toString())));
+            String runtimeSummary = buildRuntimeProfileSummary(runtimeProfile);
+            CompletableFuture<SDKResult> testFuture = context.getCodexSDKBridge().sendMessage(
+                    "codex-provider-test-" + providerId,
+                    "Reply with OK only.",
+                    "codex-provider-test-thread-" + UUID.randomUUID(),
+                    context.getProject() != null && context.getProject().getBasePath() != null
+                            ? context.getProject().getBasePath()
+                            : "",
+                    Collections.emptyList(),
+                    "bypassPermissions",
+                    runtimeProfile.getModel(),
+                    "",
+                    runtimeProfile.getReasoningEffort(),
+                    runtimeProfile,
+                    createSilentTestCallback()
+            );
+
+            testFuture.whenComplete((result, throwable) -> {
+                if (throwable != null) {
+                    LOG.warn("[ProviderHandler] Codex provider live test failed: " + throwable.getMessage(), throwable);
+                    showTestResult(false, "Codex provider test failed: " + throwable.getMessage());
+                    return;
+                }
+
+                if (result == null || !result.success) {
+                    String errorMessage = result != null && result.error != null && !result.error.trim().isEmpty()
+                            ? result.error
+                            : "Unknown error";
+                    LOG.warn("[ProviderHandler] Codex provider live test failed: " + errorMessage);
+                    showTestResult(false, "Codex provider test failed: " + errorMessage);
+                    return;
+                }
+
+                showTestResult(true, "Codex provider test passed: " + runtimeSummary);
+            });
         } catch (Exception e) {
             LOG.warn("[ProviderHandler] Codex provider check failed: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() ->
-                    context.callJavaScript("window.showError", context.escapeJs("Codex provider check failed: " + e.getMessage())));
+            showTestResult(false, "Codex provider test failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * 构造测试连接结果摘要，明确展示最终生效的 runtime profile。
+     *
+     * @param runtimeProfile 已解析的请求级 profile
+     * @return 供 toast 展示的摘要字符串
+     */
+    private String buildRuntimeProfileSummary(CodexRuntimeProfile runtimeProfile) {
+        StringBuilder summary = new StringBuilder();
+        summary.append("model=").append(runtimeProfile.getModel());
+        summary.append(", baseUrl=").append(runtimeProfile.getBaseUrl().isEmpty() ? "<default>" : runtimeProfile.getBaseUrl());
+        summary.append(", authMode=").append(runtimeProfile.getAuthMode());
+        summary.append(", requestMode=").append(runtimeProfile.getRequestMode());
+        summary.append(", credentialSource=").append(runtimeProfile.getCredentialSource());
+        return summary.toString();
+    }
+
+    /**
+     * 为 provider 测试构造静默回调，只记录最终错误，不把测试流式消息注入聊天窗口。
+     *
+     * @return 测试专用消息回调
+     */
+    private MessageCallback createSilentTestCallback() {
+        AtomicReference<String> lastError = new AtomicReference<>("");
+        return new MessageCallback() {
+            @Override
+            public void onMessage(String type, String content) {
+                // 设置页测试只关心最终结果，不展示流式消息。
+            }
+
+            @Override
+            public void onError(String error) {
+                lastError.set(error == null ? "" : error);
+            }
+
+            @Override
+            public void onComplete(SDKResult result) {
+                if (result != null && (result.error == null || result.error.trim().isEmpty())) {
+                    result.error = lastError.get();
+                }
+            }
+        };
+    }
+
+    /**
+     * 统一通过设置页专用测试结果回调展示 provider 测试结果。
+     *
+     * @param success 是否测试成功
+     * @param message 展示消息
+     * @return 无返回值
+     */
+    protected void showTestResult(boolean success, String message) {
+        Runnable action = () -> context.callJavaScript(
+                "window.showTestResult",
+                success ? "true" : "false",
+                context.escapeJs(message)
+        );
+        if (ApplicationManager.getApplication() == null) {
+            action.run();
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(action);
     }
 }
