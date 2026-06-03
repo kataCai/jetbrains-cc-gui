@@ -34,6 +34,9 @@ interface ModelSelectProps {
   models?: ModelInfo[];
   currentProvider?: string;
   onAddModel?: () => void;
+  onOpenCodexProviderSettings?: () => void;
+  onOpenCodexProviderModelManagement?: () => void;
+  onOpenCodexModelAliasSettings?: () => void;
   defaultCodexModelFromConfig?: string | null;
   codexBaseUrl?: string | null;
   codexUsesCustomBaseUrl?: boolean;
@@ -162,6 +165,9 @@ export const ModelSelect = ({
   models = AVAILABLE_MODELS,
   currentProvider = 'claude',
   onAddModel,
+  onOpenCodexProviderSettings,
+  onOpenCodexProviderModelManagement,
+  onOpenCodexModelAliasSettings,
   defaultCodexModelFromConfig = null,
   codexBaseUrl = null,
   codexUsesCustomBaseUrl = false,
@@ -170,6 +176,7 @@ export const ModelSelect = ({
 }: ModelSelectProps) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
+  const [showCodexManagementActions, setShowCodexManagementActions] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -258,11 +265,15 @@ export const ModelSelect = ({
   const handleToggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(!isOpen);
+    if (isOpen) {
+      setShowCodexManagementActions(false);
+    }
   }, [isOpen]);
 
   const handleSelect = useCallback((modelId: string) => {
     onChange(modelId);
     setIsOpen(false);
+    setShowCodexManagementActions(false);
   }, [onChange]);
 
   useEffect(() => {
@@ -278,6 +289,7 @@ export const ModelSelect = ({
         !buttonRef.current.contains(e.target as Node)
       ) {
         setIsOpen(false);
+        setShowCodexManagementActions(false);
       }
     };
 
@@ -290,6 +302,25 @@ export const ModelSelect = ({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isOpen]);
+
+  /**
+   * Codex 的“添加模型”入口需要先显式区分动作语义。
+   * 这里不再直接触发旧的别名弹窗，而是先展示 provider 创建/管理/别名三个独立动作。
+   */
+  const handleOpenAddModelActions = useCallback(() => {
+    if (currentProvider === 'codex') {
+      setShowCodexManagementActions(true);
+      return;
+    }
+    onAddModel?.();
+    setIsOpen(false);
+  }, [currentProvider, onAddModel]);
+
+  const runCodexManagementAction = useCallback((action?: () => void) => {
+    action?.();
+    setShowCodexManagementActions(false);
+    setIsOpen(false);
+  }, []);
 
   return (
     <div style={RELATIVE_INLINE_BLOCK_STYLE}>
@@ -362,7 +393,7 @@ export const ModelSelect = ({
               </div>
             </div>
           )}
-          {models.map((model) => (
+          {!showCodexManagementActions && models.map((model) => (
             <div
               key={model.id}
               className={`selector-option ${isSelectedModel(model.id) ? 'selected' : ''}`}
@@ -392,6 +423,31 @@ export const ModelSelect = ({
               )}
             </div>
           ))}
+          {showCodexManagementActions && currentProvider === 'codex' && (
+            <>
+              <div
+                className="selector-option selector-option-add"
+                onClick={() => runCodexManagementAction(onOpenCodexProviderSettings)}
+              >
+                <span className="codicon codicon-cloud-upload selector-add-icon" />
+                <span>{t('chat.addCodexProviderAction')}</span>
+              </div>
+              <div
+                className="selector-option selector-option-add"
+                onClick={() => runCodexManagementAction(onOpenCodexProviderModelManagement)}
+              >
+                <span className="codicon codicon-settings-gear selector-add-icon" />
+                <span>{t('chat.manageCurrentCodexProviderModelsAction')}</span>
+              </div>
+              <div
+                className="selector-option selector-option-add"
+                onClick={() => runCodexManagementAction(onOpenCodexModelAliasSettings)}
+              >
+                <span className="codicon codicon-symbol-misc selector-add-icon" />
+                <span>{t('chat.addCodexModelAliasAction')}</span>
+              </div>
+            </>
+          )}
           {currentProvider === 'claude' && onLongContextChange && (
             <>
               <div className="selector-divider" />
@@ -415,10 +471,7 @@ export const ModelSelect = ({
               <div className="selector-divider" />
               <div
                 className="selector-option selector-option-add"
-                onClick={() => {
-                  onAddModel();
-                  setIsOpen(false);
-                }}
+                onClick={handleOpenAddModelActions}
               >
                 <span className="codicon codicon-add selector-add-icon" />
                 <span>{t('models.addModel')}</span>

@@ -7,12 +7,20 @@ import { DEFAULT_STATUS } from './MessagesContext';
 
 const LAST_SEEN_VERSION_KEY = 'lastSeenChangelogVersion';
 
+export type CodexProviderEntryIntent =
+  | 'idle'
+  | 'addProvider'
+  | 'editActiveProvider'
+  | 'addModelAlias';
+
 export interface UIStateContextValue {
   // Navigation
   currentView: ViewMode;
   setCurrentView: React.Dispatch<React.SetStateAction<ViewMode>>;
   settingsInitialTab: SettingsTab | undefined;
   setSettingsInitialTab: React.Dispatch<React.SetStateAction<SettingsTab | undefined>>;
+  codexProviderEntryIntent: CodexProviderEntryIntent;
+  setCodexProviderEntryIntent: React.Dispatch<React.SetStateAction<CodexProviderEntryIntent>>;
 
   // Toasts
   toasts: ToastMessage[];
@@ -47,6 +55,7 @@ const UIStateContext = createContext<UIStateContextValue | null>(null);
 export function UIStateProvider({ children }: { children: ReactNode }) {
   const [currentView, setCurrentView] = useState<ViewMode>('chat');
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
+  const [codexProviderEntryIntent, setCodexProviderEntryIntent] = useState<CodexProviderEntryIntent>('idle');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [addModelDialogOpen, setAddModelDialogOpen] = useState<boolean>(false);
   const [showChangelogDialog, setShowChangelogDialog] = useState<boolean>(() => {
@@ -79,6 +88,7 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
     () => ({
       currentView, setCurrentView,
       settingsInitialTab, setSettingsInitialTab,
+      codexProviderEntryIntent, setCodexProviderEntryIntent,
       toasts, addToast, dismissToast, clearToasts,
       addModelDialogOpen, setAddModelDialogOpen,
       showChangelogDialog, closeChangelogDialog, openChangelogDialog,
@@ -86,7 +96,7 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
       draftInput, setDraftInput,
     }),
     [
-      currentView, settingsInitialTab,
+      currentView, settingsInitialTab, codexProviderEntryIntent,
       toasts, addToast, dismissToast, clearToasts,
       addModelDialogOpen,
       showChangelogDialog, closeChangelogDialog, openChangelogDialog,

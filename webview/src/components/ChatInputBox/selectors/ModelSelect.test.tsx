@@ -216,4 +216,34 @@ describe('ModelSelect', () => {
       'gpt-5.1-codex-mini',
     ]);
   });
+  /**
+   * 验证 Codex 场景下点击“添加模型”后，不再直接触发旧的单一路径回调。
+   * 正确行为应先展开动作菜单，让用户区分“新增供应商配置”“管理当前供应商模型”和“添加模型别名（高级）”。
+   */
+  it('Codex 场景下应先展开模型管理动作菜单而不是直接触发添加回调', () => {
+    const onAddModel = vi.fn();
+    const model: ModelInfo = {
+      id: 'gpt-5.4',
+      label: 'gpt-5.4',
+      description: 'Strong model for everyday coding.',
+    };
+
+    render(
+      <ModelSelect
+        value={model.id}
+        onChange={vi.fn()}
+        models={[model]}
+        currentProvider="codex"
+        onAddModel={onAddModel}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(screen.getByText('models.addModel'));
+
+    expect(screen.getByText('chat.addCodexProviderAction')).toBeTruthy();
+    expect(screen.getByText('chat.manageCurrentCodexProviderModelsAction')).toBeTruthy();
+    expect(screen.getByText('chat.addCodexModelAliasAction')).toBeTruthy();
+    expect(onAddModel).not.toHaveBeenCalled();
+  });
 });

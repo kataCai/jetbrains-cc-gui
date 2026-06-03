@@ -151,6 +151,7 @@ const SettingsDialogs = ({
       <CodexProviderDialog
         isOpen={codexProviderDialog.isOpen}
         provider={codexProviderDialog.provider}
+        initialProviderData={codexProviderDialog.initialProviderData}
         onClose={onCloseCodexProviderDialog}
         onSave={onSaveCodexProvider}
         addToast={addToast}

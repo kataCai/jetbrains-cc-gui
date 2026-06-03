@@ -166,6 +166,9 @@ export const ButtonArea = ({
   onAgentSelect,
   onOpenAgentSettings,
   onAddModel,
+  onOpenCodexProviderSettings,
+  onOpenCodexProviderModelManagement,
+  onOpenCodexModelAliasSettings,
   longContextEnabled = true,
   onLongContextChange,
 }: ButtonAreaProps) => {
@@ -426,6 +429,9 @@ export const ButtonArea = ({
           models={availableModels}
           currentProvider={currentProvider}
           onAddModel={onAddModel}
+          onOpenCodexProviderSettings={onOpenCodexProviderSettings}
+          onOpenCodexProviderModelManagement={onOpenCodexProviderModelManagement}
+          onOpenCodexModelAliasSettings={onOpenCodexModelAliasSettings}
           defaultCodexModelFromConfig={currentProvider === 'codex' ? defaultCodexModelFromConfig : null}
           codexBaseUrl={currentProvider === 'codex' ? codexBaseUrl : null}
           codexUsesCustomBaseUrl={currentProvider === 'codex' ? codexUsesCustomBaseUrl : false}

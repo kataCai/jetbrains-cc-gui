@@ -198,4 +198,57 @@ describe('useModelProviderState', () => {
       }),
     );
   });
+
+  /**
+   * 验证 active Codex provider 切换后，后续模型选择会绑定到新的 provider id。
+   * 这个场景直接覆盖“provider 切换后模型归属不能串味”的核心约束：
+   * 即使前一个 provider 已经选过模型，新的选择事件也必须落到当前激活 provider 上，
+   * 否则恢复 selected model 或后端摘要时就会把模型错归到旧 provider。
+   */
+  it('uses the latest active codex provider id after provider switching', () => {
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+      });
+    });
+    act(() => {
+      result.current.handleModelSelect('gpt-5.4');
+    });
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-b',
+        name: 'Provider B',
+      });
+    });
+    act(() => {
+      result.current.handleModelSelect('gpt-5.5');
+    });
+
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'set_selected_codex_model',
+      JSON.stringify({
+        providerId: 'provider-a',
+        modelId: 'gpt-5.4',
+      }),
+    );
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'set_selected_codex_model',
+      JSON.stringify({
+        providerId: 'provider-b',
+        modelId: 'gpt-5.5',
+      }),
+    );
+    expect(sendBridgeEvent).toHaveBeenCalledWith('set_model', 'gpt-5.5');
+  });
 });

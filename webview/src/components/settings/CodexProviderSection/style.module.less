@@ -44,6 +44,28 @@
   flex-direction: column;
 }
 
+.providerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.providerMetaItem {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-tertiary, #3a3a3a) 82%, transparent);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .providerListHeader {
   display: flex;
   justify-content: space-between;

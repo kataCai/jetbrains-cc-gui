@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CodexProviderConfig } from '../../types/provider';
 import { ToastContainer } from '../Toast';
+import { useUIState } from '../../contexts/UIStateContext';
 
 // Import split-out components
 import SettingsHeader from './SettingsHeader';
@@ -66,6 +67,11 @@ const SettingsView = ({
   onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp
 }: SettingsViewProps) => {
   const { t } = useTranslation();
+  const {
+    codexProviderEntryIntent,
+    setCodexProviderEntryIntent,
+    setAddModelDialogOpen,
+  } = useUIState();
   const isCodexMode = currentProvider === 'codex';
   // Codex mode: align with Claude capabilities for settings tabs
   const disabledTabs = useMemo<SettingsTab[]>(
@@ -242,6 +248,7 @@ const SettingsView = ({
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
     handleAddCodexProvider,
+    handleAddCodexProviderWithDraft,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
@@ -417,6 +424,50 @@ const SettingsView = ({
     handleSaveCodexProvider(providerData);
   };
 
+  /**
+   * 承接聊天区跳转过来的 Codex 入口意图。
+   * 这里统一在设置页消费跳转状态，避免聊天区直接耦合具体弹窗实现。
+   */
+  useEffect(() => {
+    if (currentTab !== 'providers') {
+      return;
+    }
+    if (codexProviderEntryIntent === 'addProvider') {
+      handleAddCodexProvider();
+      setCodexProviderEntryIntent('idle');
+      return;
+    }
+    if (codexProviderEntryIntent === 'editActiveProvider') {
+      if (codexLoading) {
+        // Codex provider 列表仍在异步加载时先保留入口意图，避免误判为没有激活供应商。
+        return;
+      }
+      const activeProvider = codexProviders.find((provider) => provider.isActive);
+      if (activeProvider) {
+        handleEditCodexProvider(activeProvider);
+      } else {
+        addToast(t('settings.codexProvider.noActiveProviderForManage'), 'warning');
+      }
+      setCodexProviderEntryIntent('idle');
+      return;
+    }
+    if (codexProviderEntryIntent === 'addModelAlias') {
+      setAddModelDialogOpen(true);
+      setCodexProviderEntryIntent('idle');
+    }
+  }, [
+    addToast,
+    codexLoading,
+    codexProviderEntryIntent,
+    codexProviders,
+    currentTab,
+    handleAddCodexProvider,
+    handleEditCodexProvider,
+    setAddModelDialogOpen,
+    setCodexProviderEntryIntent,
+    t,
+  ]);
+
   // Save agent (wrapper function with validation logic)
   const handleSaveAgentFromDialog = (data: { name: string; prompt: string }) => {
     handleSaveAgent(data);
@@ -519,6 +570,7 @@ const SettingsView = ({
               codexProviders={codexProviders}
               codexLoading={codexLoading}
               onAddCodexProvider={handleAddCodexProvider}
+              onCreateCodexProviderFromAlias={handleAddCodexProviderWithDraft}
               onEditCodexProvider={handleEditCodexProvider}
               onDeleteCodexProvider={handleDeleteCodexProvider}
               onTestCodexProvider={handleTestCodexProvider}

@@ -20,6 +20,9 @@ const translations: Record<string, string> = {
   'settings.codexProvider.dialog.cliLoginAuthorizeDetail': 'Do not overwrite config.toml or auth.json.',
   'settings.codexProvider.dialog.cliLoginDisableTitle': 'Revoke Local Codex Config Authorization',
   'settings.codexProvider.dialog.cliLoginDisableMessage': 'Stop reading local Codex config files.',
+  'settings.codexProvider.providerTypeMeta': 'Preset: {{type}}',
+  'settings.codexProvider.baseUrlMeta': 'Base URL: {{baseUrl}}',
+  'settings.codexProvider.modelCountMeta': 'Models: {{count}}',
   'settings.provider.loading': 'Loading',
   'settings.provider.allProviders': 'All Providers',
   'settings.provider.authorizeAndEnable': 'Authorize and Enable',
@@ -188,5 +191,36 @@ describe('CodexProviderSection', () => {
     expect(providerListStyles).toMatch(
       /\.website\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*text-overflow:\s*ellipsis;[\s\S]*white-space:\s*nowrap;/
     );
+  });
+
+  it('shows structured provider metadata in the provider card summary', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-meta',
+            name: 'MiniMax',
+            presetId: 'minimax',
+            baseUrl: 'https://api.minimaxi.com/v1',
+            models: [
+              { id: 'MiniMax-M2.5', label: 'MiniMax-M2.5' },
+              { id: 'MiniMax-Text-01', label: 'MiniMax-Text-01' },
+            ],
+            isActive: false,
+          },
+        ]}
+        codexLoading={false}
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
+        onSwitchCodexProvider={onSwitchCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />
+    );
+
+    expect(screen.getByText('Preset: minimax')).toBeTruthy();
+    expect(screen.getByText('Base URL: https://api.minimaxi.com/v1')).toBeTruthy();
+    expect(screen.getByText('Models: 2')).toBeTruthy();
   });
 });

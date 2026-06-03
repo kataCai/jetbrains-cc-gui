@@ -215,4 +215,67 @@ describe('ButtonArea', () => {
     expect(within(dropdown as HTMLElement).getByText('MiniMax M2.7')).toBeTruthy();
     expect(renderedOptions[0]?.textContent).toContain('Custom Codex Model');
   });
+
+  it('refreshes the dropdown model list after active Codex provider switching', () => {
+    /**
+     * 验证目标：
+     * 当用户切换 active Codex provider 后，聊天区模型下拉必须立即切换到新 provider 的模型集合，
+     * 不能继续残留旧 provider 的模型项，否则用户看到的可选模型与实际请求 provider 会不一致。
+     *
+     * 断言意图：
+     * 1. 切到 provider A 时，只显示 provider A 的模型；
+     * 2. 再切到 provider B 后，下拉应改为显示 provider B 的模型，并移除 provider A 的模型。
+     */
+    const { container, rerender } = render(
+      <ButtonArea
+        hasInputContent
+        selectedModel="provider-a-model"
+        permissionMode="default"
+        currentProvider="codex"
+        onSubmit={() => {}}
+        onModelSelect={() => {}}
+      />
+    );
+
+    act(() => {
+      window.updateActiveCodexProvider?.(JSON.stringify({
+        id: 'provider-a',
+        name: 'Provider A',
+        models: [{ id: 'provider-a-model', label: 'Provider A Model' }],
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Provider A Model/i }));
+    let dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    expect(within(dropdown as HTMLElement).getByText('Provider A Model')).toBeTruthy();
+    expect(within(dropdown as HTMLElement).queryByText('Provider B Model')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Provider A Model/i }));
+    expect(container.querySelector('.selector-dropdown')).toBeNull();
+
+    rerender(
+      <ButtonArea
+        hasInputContent
+        selectedModel="provider-b-model"
+        permissionMode="default"
+        currentProvider="codex"
+        onSubmit={() => {}}
+        onModelSelect={() => {}}
+      />
+    );
+
+    act(() => {
+      window.updateActiveCodexProvider?.(JSON.stringify({
+        id: 'provider-b',
+        name: 'Provider B',
+        models: [{ id: 'provider-b-model', label: 'Provider B Model' }],
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Provider B Model/i }));
+    dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    expect(within(dropdown as HTMLElement).getByText('Provider B Model')).toBeTruthy();
+    expect(within(dropdown as HTMLElement).queryByText('Provider A Model')).toBeNull();
+  });
 });

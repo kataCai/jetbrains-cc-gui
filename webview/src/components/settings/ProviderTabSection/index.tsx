@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
+import type { ProviderConfig, CodexProviderConfig, CodexCustomModel } from '../../../types/provider';
 import { STORAGE_KEYS } from '../../../types/provider';
 import ProviderManageSection from '../ProviderManageSection';
 import CodexProviderSection from '../CodexProviderSection';
@@ -26,6 +26,7 @@ interface ProviderTabSectionProps {
   codexProviders: CodexProviderConfig[];
   codexLoading: boolean;
   onAddCodexProvider: () => void;
+  onCreateCodexProviderFromAlias?: (providerDraft: Partial<CodexProviderConfig>) => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
@@ -46,6 +47,7 @@ const ProviderTabSection = ({
   codexProviders,
   codexLoading,
   onAddCodexProvider,
+  onCreateCodexProviderFromAlias,
   onEditCodexProvider,
   onDeleteCodexProvider,
   onTestCodexProvider,
@@ -81,6 +83,36 @@ const ProviderTabSection = ({
   }, []);
 
   const activeModels = dialogTarget === 'claude' ? claudeModels : codexModels;
+  const isCodexDialogTarget = dialogTarget === 'codex';
+
+  /**
+   * 基于当前模型别名生成一个新的 Codex provider 草稿。
+   * 这里只预填 provider 名称和模型列表，不自动补齐 Base URL / API Key，
+   * 目的是把“历史别名”升级为真正可运行的配置，同时避免做不安全的自动迁移。
+   *
+   * @param model 当前选中的模型别名
+   */
+  const handleCreateCodexProviderFromAlias = useCallback((model: CodexCustomModel) => {
+    if (!onCreateCodexProviderFromAlias) {
+      return;
+    }
+    onCreateCodexProviderFromAlias({
+      name: model.label?.trim() || model.id,
+      providerType: 'custom_gateway',
+      presetId: 'custom_gateway',
+      authMode: 'api_key',
+      requestMode: 'codex_sdk',
+      models: [
+        {
+          id: model.id,
+          label: model.label?.trim() || model.id,
+          description: model.description,
+          reasoningEffort: model.reasoningEffort,
+        },
+      ],
+    });
+    closeModelDialog();
+  }, [closeModelDialog, onCreateCodexProviderFromAlias]);
 
   return (
     <div className={styles.providerTabSection}>
@@ -148,6 +180,31 @@ const ProviderTabSection = ({
 
       <div id="panel-codex-providers" role="tabpanel" style={activeTab === 'codex' ? BLOCK_STYLE : NONE_STYLE}>
         <div
+          className={styles.primaryEntryRow}
+          onClick={onAddCodexProvider}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onAddCodexProvider(); }}
+        >
+          <div className={styles.entryInfo}>
+            <span className="codicon codicon-cloud-upload" style={ICON_14_STYLE} />
+            <div className={styles.entryTextGroup}>
+              <span className={styles.pluginModelsLabel}>
+                {t('settings.codexProvider.quickCreateTitle')}
+              </span>
+              <span className={styles.entryDescription}>
+                {t('settings.codexProvider.quickCreateDescription')}
+              </span>
+            </div>
+          </div>
+          <button
+            className={styles.pluginModelsManageBtn}
+            onClick={(e) => { e.stopPropagation(); onAddCodexProvider(); }}
+          >
+            {t('common.add')}
+          </button>
+        </div>
+        <div
           className={styles.pluginModelsRow}
           onClick={() => openModelDialog('codex')}
           role="button"
@@ -155,9 +212,14 @@ const ProviderTabSection = ({
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('codex'); }}
         >
           <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
-          <span className={styles.pluginModelsLabel}>
-            {t('settings.pluginModels.title')}
-          </span>
+          <div className={styles.entryTextGroup}>
+            <span className={styles.pluginModelsLabel}>
+              {t('settings.codexProvider.aliasTitle')}
+            </span>
+            <span className={styles.entryDescription}>
+              {t('settings.codexProvider.aliasDescription')}
+            </span>
+          </div>
           {codexModels.models.length > 0 && (
             <span className={styles.pluginModelsBadge}>{codexModels.models.length}</span>
           )}
@@ -189,6 +251,9 @@ const ProviderTabSection = ({
         onModelsChange={activeModels.updateModels}
         onClose={closeModelDialog}
         initialAddMode={modelDialogAddMode}
+        title={isCodexDialogTarget ? t('settings.codexProvider.aliasTitle') : undefined}
+        description={isCodexDialogTarget ? t('settings.codexProvider.aliasDescription') : undefined}
+        onCreateProviderFromModel={isCodexDialogTarget ? handleCreateCodexProviderFromAlias : undefined}
       />
     </div>
   );

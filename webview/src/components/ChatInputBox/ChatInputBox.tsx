@@ -94,6 +94,9 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onOpenAgentSettings,
       onOpenPromptSettings,
       onOpenModelSettings,
+      onOpenCodexProviderSettings,
+      onOpenCodexProviderModelManagement,
+      onOpenCodexModelAliasSettings,
       hasMessages = false,
       onRewind,
       statusPanelExpanded = true,
@@ -703,6 +706,9 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           onAgentSelect={(agent) => onAgentSelect?.(agent)}
           onOpenAgentSettings={onOpenAgentSettings}
           onAddModel={onOpenModelSettings}
+          onOpenCodexProviderSettings={onOpenCodexProviderSettings}
+          onOpenCodexProviderModelManagement={onOpenCodexProviderModelManagement}
+          onOpenCodexModelAliasSettings={onOpenCodexModelAliasSettings}
           onClearAgent={() => onAgentSelect?.(null)}
           longContextEnabled={longContextEnabled}
           onLongContextChange={onLongContextChange}

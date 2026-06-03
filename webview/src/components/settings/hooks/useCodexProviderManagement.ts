@@ -12,6 +12,7 @@ const sendToJava = (message: string) => {
 export interface CodexProviderDialogState {
   isOpen: boolean;
   provider: CodexProviderConfig | null;
+  initialProviderData?: Partial<CodexProviderConfig> | null;
 }
 
 export interface DeleteCodexConfirmState {
@@ -35,6 +36,10 @@ function buildCodexProviderPayload(providerData: CodexProviderConfig) {
     baseUrl: providerData.baseUrl?.trim() || undefined,
     apiKey: trimmedApiKey || undefined,
     apiKeyEnv: providerData.apiKeyEnv?.trim() || undefined,
+    providerType: providerData.providerType?.trim() || undefined,
+    presetId: providerData.presetId?.trim() || undefined,
+    websiteUrl: providerData.websiteUrl?.trim() || undefined,
+    apiKeyApplyUrl: providerData.apiKeyApplyUrl?.trim() || undefined,
     models: providerData.models && providerData.models.length > 0 ? providerData.models : undefined,
   };
 }
@@ -45,7 +50,8 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
 
   // Codex provider list state
   const [codexProviders, setCodexProviders] = useState<CodexProviderConfig[]>([]);
-  const [codexLoading, setCodexLoading] = useState(false);
+  // 设置页挂载后会立即请求 provider 列表，初始值保持 loading 可避免入口意图在列表回传前被误消费。
+  const [codexLoading, setCodexLoading] = useState(true);
 
   // Codex configuration (reserved for future display)
   const [_codexConfig, setCodexConfig] = useState<any>(null);
@@ -55,6 +61,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   const [codexProviderDialog, setCodexProviderDialog] = useState<CodexProviderDialogState>({
     isOpen: false,
     provider: null,
+    initialProviderData: null,
   });
 
   // Codex provider delete confirmation state
@@ -94,17 +101,32 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
 
   // Open add Codex provider dialog
   const handleAddCodexProvider = useCallback(() => {
-    setCodexProviderDialog({ isOpen: true, provider: null });
+    setCodexProviderDialog({ isOpen: true, provider: null, initialProviderData: null });
+  }, []);
+
+  /**
+   * 使用模型别名预填一个新的 Codex provider 草稿。
+   * 该入口用于把历史“模型别名”升级为真正可运行的 provider 配置，
+   * 但仍然要求用户补齐 Base URL、鉴权等关键字段，避免做错误的自动迁移。
+   *
+   * @param providerDraft 仅用于初始化表单的 provider 草稿
+   */
+  const handleAddCodexProviderWithDraft = useCallback((providerDraft: Partial<CodexProviderConfig>) => {
+    setCodexProviderDialog({
+      isOpen: true,
+      provider: null,
+      initialProviderData: providerDraft,
+    });
   }, []);
 
   // Open edit Codex provider dialog
   const handleEditCodexProvider = useCallback((provider: CodexProviderConfig) => {
-    setCodexProviderDialog({ isOpen: true, provider });
+    setCodexProviderDialog({ isOpen: true, provider, initialProviderData: null });
   }, []);
 
   // Close Codex provider dialog
   const handleCloseCodexProviderDialog = useCallback(() => {
-    setCodexProviderDialog({ isOpen: false, provider: null });
+    setCodexProviderDialog({ isOpen: false, provider: null, initialProviderData: null });
   }, []);
 
   // Save Codex provider
@@ -112,9 +134,13 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     (providerData: CodexProviderConfig) => {
       const isAdding = !codexProviderDialog.provider;
       const payload = buildCodexProviderPayload(providerData);
+      const shouldAutoActivate = providerData.autoActivate === true;
 
       if (isAdding) {
         sendToJava(`add_codex_provider:${JSON.stringify(payload)}`);
+        if (shouldAutoActivate) {
+          sendToJava(`switch_codex_provider:${JSON.stringify({ id: providerData.id })}`);
+        }
         onSuccess?.(t('toast.providerAdded'));
       } else {
         const updateData = {
@@ -122,13 +148,16 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
           updates: payload,
         };
         sendToJava(`update_codex_provider:${JSON.stringify(updateData)}`);
+        if (shouldAutoActivate) {
+          sendToJava(`switch_codex_provider:${JSON.stringify({ id: providerData.id })}`);
+        }
         onSuccess?.(t('toast.providerUpdated'));
       }
 
       // Custom models are now plugin-level, managed by PluginCustomModels in ProviderTabSection.
       // No longer sync provider-level customModels to localStorage.
 
-      setCodexProviderDialog({ isOpen: false, provider: null });
+      setCodexProviderDialog({ isOpen: false, provider: null, initialProviderData: null });
       setCodexLoading(true);
     },
     [codexProviderDialog.provider, onSuccess, t]
@@ -188,6 +217,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
     handleAddCodexProvider,
+    handleAddCodexProviderWithDraft,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,

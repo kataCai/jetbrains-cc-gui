@@ -9,6 +9,34 @@ import styles from './style.module.less';
 
 const ICON_MR_8_STYLE: React.CSSProperties = { marginRight: '8px' };
 
+/**
+ * 生成 Codex provider 卡片上的元信息展示项。
+ * 这些字段来自结构化 provider 创建表单，用于在列表层快速确认当前配置的模板、请求地址和模型数量；
+ * 不参与运行时解析，也不改变保存结构，只作为用户检查配置是否选错的只读摘要。
+ *
+ * @param provider Codex provider 配置对象
+ * @param t i18n 翻译函数
+ * @return 可展示的元信息文本数组；无可用信息时返回空数组
+ */
+function buildProviderMetaItems(
+  provider: CodexProviderConfig,
+  t: (key: string, options?: Record<string, string | number>) => string
+): string[] {
+  const metaItems: string[] = [];
+  const providerType = provider.presetId || provider.providerType;
+  if (providerType) {
+    metaItems.push(t('settings.codexProvider.providerTypeMeta', { type: providerType }));
+  }
+  if (provider.baseUrl) {
+    metaItems.push(t('settings.codexProvider.baseUrlMeta', { baseUrl: provider.baseUrl }));
+  }
+  const modelCount = provider.models?.length || provider.customModels?.length || 0;
+  if (modelCount > 0) {
+    metaItems.push(t('settings.codexProvider.modelCountMeta', { count: modelCount }));
+  }
+  return metaItems;
+}
+
 interface CodexProviderSectionProps {
   codexProviders: CodexProviderConfig[];
   codexLoading: boolean;
@@ -207,81 +235,91 @@ const CodexProviderSection = ({
 
             {/* Regular providers (drag-sortable) */}
             {localProviders.length > 0 ? (
-              localProviders.map((provider) => (
-                <div
-                  key={provider.id}
-                  className={[
-                    sharedStyles.card,
-                    provider.isActive && sharedStyles.active,
-                    draggedProviderId === provider.id && styles.dragging,
-                    dragOverProviderId === provider.id && styles.dragOver,
-                  ].filter(Boolean).join(' ')}
-                  data-drag-sort-id={provider.id}
-                  draggable={true}
-                  onDragStart={(e) => handleDragStart(e, provider.id)}
-                  onDragOver={(e) => handleDragOver(e, provider.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, provider.id)}
-                  onDragEnd={handleDragEnd}
-                >
+              localProviders.map((provider) => {
+                const metaItems = buildProviderMetaItems(provider, t);
+                return (
                   <div
-                    className={sharedStyles.dragHandle}
-                    title={t('settings.provider.dragToSort')}
-                    onPointerDown={(e) => handlePointerDown(e, provider.id, e.currentTarget.closest<HTMLElement>('[data-drag-sort-id]'))}
+                    key={provider.id}
+                    className={[
+                      sharedStyles.card,
+                      provider.isActive && sharedStyles.active,
+                      draggedProviderId === provider.id && styles.dragging,
+                      dragOverProviderId === provider.id && styles.dragOver,
+                    ].filter(Boolean).join(' ')}
+                    data-drag-sort-id={provider.id}
+                    draggable={true}
+                    onDragStart={(e) => handleDragStart(e, provider.id)}
+                    onDragOver={(e) => handleDragOver(e, provider.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, provider.id)}
+                    onDragEnd={handleDragEnd}
                   >
-                    <span className="codicon codicon-gripper" />
-                  </div>
-                  <div className={sharedStyles.cardInfo}>
-                    <div className={sharedStyles.name}>{provider.name}</div>
-                    {provider.remark && (
-                      <div className={sharedStyles.website}>{provider.remark}</div>
-                    )}
-                  </div>
+                    <div
+                      className={sharedStyles.dragHandle}
+                      title={t('settings.provider.dragToSort')}
+                      onPointerDown={(e) => handlePointerDown(e, provider.id, e.currentTarget.closest<HTMLElement>('[data-drag-sort-id]'))}
+                    >
+                      <span className="codicon codicon-gripper" />
+                    </div>
+                    <div className={sharedStyles.cardInfo}>
+                      <div className={sharedStyles.name}>{provider.name}</div>
+                      {provider.remark && (
+                        <div className={sharedStyles.website}>{provider.remark}</div>
+                      )}
+                      {metaItems.length > 0 && (
+                        <div className={styles.providerMeta}>
+                          {metaItems.map((item) => (
+                            <span key={item} className={styles.providerMetaItem}>{item}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
-                  <div className={sharedStyles.cardActions}>
-                    {provider.isActive ? (
-                      <div className={sharedStyles.activeBadge}>
-                        <span className="codicon codicon-check" />
-                        {t('settings.provider.inUse')}
+                    <div className={sharedStyles.cardActions}>
+                      {provider.isActive ? (
+                        <div className={sharedStyles.activeBadge}>
+                          <span className="codicon codicon-check" />
+                          {t('settings.provider.inUse')}
+                        </div>
+                      ) : (
+                        <button
+                          className={sharedStyles.useButton}
+                          onClick={() => onSwitchCodexProvider(provider.id)}
+                        >
+                          <span className="codicon codicon-play" />
+                          {t('settings.provider.enable')}
+                        </button>
+                      )}
+
+                      <div className={sharedStyles.divider} />
+
+                      <div className={sharedStyles.actionButtons}>
+                        <button
+                          className={sharedStyles.iconBtn}
+                          onClick={() => onTestCodexProvider(provider)}
+                          title={t('settings.codexProvider.dialog.testProvider')}
+                        >
+                          <span className="codicon codicon-plug" />
+                        </button>
+                        <button
+                          className={sharedStyles.iconBtn}
+                          onClick={() => onEditCodexProvider(provider)}
+                          title={t('common.edit')}
+                        >
+                          <span className="codicon codicon-edit" />
+                        </button>
+                        <button
+                          className={sharedStyles.iconBtn}
+                          onClick={() => onDeleteCodexProvider(provider)}
+                          title={t('common.delete')}
+                        >
+                          <span className="codicon codicon-trash" />
+                        </button>
                       </div>
-                    ) : (
-                      <button
-                        className={sharedStyles.useButton}
-                        onClick={() => onSwitchCodexProvider(provider.id)}
-                      >
-                        <span className="codicon codicon-play" />
-                        {t('settings.provider.enable')}
-                      </button>
-                    )}
-
-                    <div className={sharedStyles.divider} />
-
-                    <div className={sharedStyles.actionButtons}>
-                      <button
-                        className={sharedStyles.iconBtn}
-                        onClick={() => onTestCodexProvider(provider)}
-                        title={t('settings.codexProvider.dialog.testProvider')}
-                      >
-                        <span className="codicon codicon-plug" />
-                      </button>
-                      <button
-                        className={sharedStyles.iconBtn}
-                        onClick={() => onEditCodexProvider(provider)}
-                        title={t('common.edit')}
-                      >
-                        <span className="codicon codicon-edit" />
-                      </button>
-                      <button
-                        className={sharedStyles.iconBtn}
-                        onClick={() => onDeleteCodexProvider(provider)}
-                        title={t('common.delete')}
-                      >
-                        <span className="codicon codicon-trash" />
-                      </button>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : !cliLoginProvider ? (
               <div className={sharedStyles.emptyState}>
                 <span className="codicon codicon-info" />

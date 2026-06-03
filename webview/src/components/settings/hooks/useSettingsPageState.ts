@@ -92,6 +92,17 @@ export function useSettingsPageState({
     }
   }, [isCodexMode, disabledTabs, currentTab]);
 
+  useEffect(() => {
+    if (!initialTab) {
+      return;
+    }
+    if (isCodexMode && disabledTabs.includes(initialTab)) {
+      setCurrentTab('basic');
+      return;
+    }
+    setCurrentTab(initialTab);
+  }, [disabledTabs, initialTab, isCodexMode]);
+
   const handleTabChange = useCallback(
     (tab: SettingsTab) => {
       if (isCodexMode && disabledTabs.includes(tab)) {

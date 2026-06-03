@@ -192,8 +192,16 @@ export interface CodexProviderConfig {
   id: string;
   /** Provider name */
   name: string;
+  /** Provider type used to distinguish preset source or custom gateway type */
+  providerType?: string;
+  /** Preset identifier selected in the structured creation form */
+  presetId?: string;
   /** Remark */
   remark?: string;
+  /** Provider official website */
+  websiteUrl?: string;
+  /** API key application page */
+  apiKeyApplyUrl?: string;
   /** Creation timestamp (milliseconds) */
   createdAt?: number;
   /** Whether this is the currently active provider */
@@ -218,6 +226,8 @@ export interface CodexProviderConfig {
   authJson?: string;
   /** Custom model list */
   customModels?: CodexCustomModel[];
+  /** Whether to auto-activate after saving */
+  autoActivate?: boolean;
 }
 
 // ============ Provider Presets ============
