@@ -1,7 +1,13 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CodexProviderConfig } from '../../../types/provider';
-import { SPECIAL_PROVIDER_IDS } from '../../../types/provider';
+import {
+  getCodexRuntimeSourceTranslationKey,
+  hasCodexRuntimeSourceDiagnostics,
+  isCodexRequestModeImplemented,
+  resolveCodexRuntimeSource,
+  SPECIAL_PROVIDER_IDS,
+} from '../../../types/provider';
 import { sendToJava } from '../../../utils/bridge';
 import { useDragSort } from '../hooks/useDragSort';
 import sharedStyles from '../ProviderList/style.module.less';
@@ -34,12 +40,22 @@ function buildProviderMetaItems(
   if (modelCount > 0) {
     metaItems.push(t('settings.codexProvider.modelCountMeta', { count: modelCount }));
   }
+  if (hasCodexRuntimeSourceDiagnostics(provider)) {
+    const runtimeSource = resolveCodexRuntimeSource(provider);
+    metaItems.push(t('settings.codexProvider.runtimeSourceLabel', {
+      source: t(`settings.codexProvider.runtimeSource.${getCodexRuntimeSourceTranslationKey(runtimeSource)}`),
+    }));
+  }
+  if (!isCodexRequestModeImplemented(provider.requestMode)) {
+    metaItems.push(t('settings.codexProvider.requestModeUnavailableBadge'));
+  }
   return metaItems;
 }
 
 interface CodexProviderSectionProps {
   codexProviders: CodexProviderConfig[];
   codexLoading: boolean;
+  testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
@@ -52,6 +68,7 @@ interface CodexProviderSectionProps {
 const CodexProviderSection = ({
   codexProviders,
   codexLoading,
+  testingCodexProviderId,
   onAddCodexProvider,
   onEditCodexProvider,
   onDeleteCodexProvider,
@@ -237,6 +254,7 @@ const CodexProviderSection = ({
             {localProviders.length > 0 ? (
               localProviders.map((provider) => {
                 const metaItems = buildProviderMetaItems(provider, t);
+                const requestModeUnavailable = !isCodexRequestModeImplemented(provider.requestMode);
                 return (
                   <div
                     key={provider.id}
@@ -285,6 +303,10 @@ const CodexProviderSection = ({
                         <button
                           className={sharedStyles.useButton}
                           onClick={() => onSwitchCodexProvider(provider.id)}
+                          disabled={requestModeUnavailable}
+                          title={requestModeUnavailable
+                            ? t('settings.codexProvider.requestModeUnavailableTooltip')
+                            : undefined}
                         >
                           <span className="codicon codicon-play" />
                           {t('settings.provider.enable')}
@@ -297,9 +319,16 @@ const CodexProviderSection = ({
                         <button
                           className={sharedStyles.iconBtn}
                           onClick={() => onTestCodexProvider(provider)}
-                          title={t('settings.codexProvider.dialog.testProvider')}
+                          title={requestModeUnavailable
+                            ? t('settings.codexProvider.requestModeUnavailableTooltip')
+                            : testingCodexProviderId === provider.id
+                            ? t('settings.provider.loading')
+                            : t('settings.codexProvider.dialog.testProvider')}
+                          disabled={testingCodexProviderId === provider.id || requestModeUnavailable}
                         >
-                          <span className="codicon codicon-plug" />
+                          <span className={testingCodexProviderId === provider.id
+                            ? 'codicon codicon-loading codicon-modifier-spin'
+                            : 'codicon codicon-plug'} />
                         </button>
                         <button
                           className={sharedStyles.iconBtn}

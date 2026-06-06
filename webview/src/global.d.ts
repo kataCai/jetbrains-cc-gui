@@ -102,7 +102,7 @@ interface Window {
   /**
    * Show Codex provider test result.
    */
-  showTestResult?: (success: boolean, message: string) => void;
+  showTestResult?: (payloadOrSuccess: string | boolean, message?: string) => void;
 
   /**
    * Toast deferred until a session transition finishes, because backend

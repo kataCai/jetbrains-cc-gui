@@ -335,11 +335,17 @@ public class EnvironmentConfigurator {
         }
 
         try {
-            String accessMode = new CodemossSettingsService().getCodexRuntimeAccessMode();
+            String accessMode = getCodexRuntimeAccessMode();
             if (CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE.equals(accessMode)) {
                 LOG.debug("[Codex] Skipping env_key sync from ~/.codex/config.toml: local access is not authorized");
                 return;
             }
+            if (!CodemossSettingsService.CODEX_RUNTIME_ACCESS_CLI_LOGIN.equals(accessMode)) {
+                LOG.info("[Codex] Skipping env_key sync from ~/.codex/config.toml: current runtime access mode is "
+                        + accessMode + ", only cli_login is allowed");
+                return;
+            }
+            LOG.info("[Codex] Enabling env_key sync from ~/.codex/config.toml because runtime access mode is cli_login");
 
             // 1. Find all env_key names from ~/.codex/config.toml
             Set<String> envKeyNames = parseCodexConfigEnvKeys();
@@ -374,11 +380,23 @@ public class EnvironmentConfigurator {
     }
 
     /**
+     * 读取当前 Codex 运行时访问模式。
+     * 将该逻辑抽为可覆写方法，便于单元测试在不依赖真实配置文件的前提下，
+     * 精确验证 `inactive / managed / cli_login` 三种模式下的环境注入边界。
+     *
+     * @return 当前 Codex 运行时访问模式
+     * @throws IOException 读取配置失败时抛出
+     */
+    protected String getCodexRuntimeAccessMode() throws IOException {
+        return new CodemossSettingsService().getCodexRuntimeAccessMode();
+    }
+
+    /**
      * Parse ~/.codex/config.toml to extract all env_key values.
      *
      * @return Set of environment variable names referenced by env_key
      */
-    private Set<String> parseCodexConfigEnvKeys() {
+    protected Set<String> parseCodexConfigEnvKeys() {
         Set<String> envKeys = new HashSet<>();
         String home = PlatformUtils.getHomeDirectory();
         if (home == null || home.isEmpty()) {
@@ -421,7 +439,7 @@ public class EnvironmentConfigurator {
      * @param envName Environment variable name
      * @return Value or null if not found
      */
-    private String resolveEnvValue(String envName) {
+    protected String resolveEnvValue(String envName) {
         // 1. Try System.getenv first (might already be inherited)
         String value = System.getenv(envName);
         if (value != null && !value.isEmpty()) {

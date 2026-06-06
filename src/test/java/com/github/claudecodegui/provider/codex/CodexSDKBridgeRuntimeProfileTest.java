@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 /**
  * Codex bridge 请求级 profile 测试。
@@ -31,7 +32,17 @@ public class CodexSDKBridgeRuntimeProfileTest {
         assertEquals("medium", stdin.get("reasoningEffort").getAsString());
         assertEquals("https://api.minimaxi.com/anthropic", stdin.get("baseUrl").getAsString());
         assertEquals("secret-value", stdin.get("apiKey").getAsString());
+        assertEquals("minimax-cn", stdin.get("providerId").getAsString());
+        assertEquals("api_key_env", stdin.get("authMode").getAsString());
         assertEquals("codex_sdk", stdin.get("requestMode").getAsString());
+        assertEquals("apiKeyEnv:MINIMAX_CN_API_KEY", stdin.get("credentialSource").getAsString());
+        assertEquals("provider", stdin.get("baseUrlSource").getAsString());
+        assertEquals("codemoss_managed_provider", stdin.get("effectiveConfigSource").getAsString());
+        assertFalse(stdin.get("fallbackDetected").getAsBoolean());
+        assertEquals("codemoss_managed_provider", stdin.get("forcedModelProvider").getAsString());
+        assertEquals("", stdin.get("localCodexModelProvider").getAsString());
+        assertFalse(stdin.get("localConfigConflictDetected").getAsBoolean());
+        assertEquals("codemoss_managed_provider", stdin.get("finalModelProvider").getAsString());
     }
 
     @Test

@@ -30,10 +30,17 @@ const translations: Record<string, string> = {
   'settings.provider.enable': 'Enable',
   'settings.provider.inUse': 'In Use',
   'settings.provider.dragToSort': 'Drag to sort',
+  'settings.codexProvider.requestModeUnavailableBadge': '开发中',
+  'settings.codexProvider.requestModeUnavailableTooltip': '当前请求模式尚未落地，暂不可测试或启用',
   'common.add': 'Add',
   'common.cancel': 'Cancel',
   'common.edit': 'Edit',
   'common.delete': 'Delete',
+  'settings.codexProvider.runtimeSourceLabel': 'Runtime Source: {{source}}',
+  'settings.codexProvider.runtimeSource.managedProvider': 'Managed Provider',
+  'settings.codexProvider.runtimeSource.codexLocalConfig': 'Codex Local Config',
+  'settings.codexProvider.runtimeSource.sdkDefault': 'SDK Default',
+  'settings.codexProvider.runtimeSource.proxyFallback': 'Proxy Fallback',
 };
 
 vi.mock('react-i18next', () => ({
@@ -222,5 +229,63 @@ describe('CodexProviderSection', () => {
     expect(screen.getByText('Preset: minimax')).toBeTruthy();
     expect(screen.getByText('Base URL: https://api.minimaxi.com/v1')).toBeTruthy();
     expect(screen.getByText('Models: 2')).toBeTruthy();
+  });
+
+  it('shows runtime source summary for the active managed provider card', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-runtime-source',
+            name: 'MiniMax',
+            isActive: true,
+            effectiveConfigSource: 'codemoss_managed_provider',
+            fallbackDetected: false,
+            endpointSource: 'provider',
+          },
+        ]}
+        codexLoading={false}
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
+        onSwitchCodexProvider={onSwitchCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />
+    );
+
+    expect(screen.getByText('Runtime Source: Managed Provider')).toBeTruthy();
+  });
+
+  it('disables test and enable actions for providers using unimplemented request modes', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'legacy-proxy-provider',
+            name: 'Legacy Proxy',
+            requestMode: 'cc_switch_proxy',
+            isActive: false,
+            models: [{ id: 'legacy-model', label: 'Legacy Model' }],
+          },
+        ]}
+        codexLoading={false}
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
+        onSwitchCodexProvider={onSwitchCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />
+    );
+
+    expect(screen.getByText('开发中')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Enable' }) as HTMLButtonElement).disabled).toBe(true);
+
+    const unavailableButtons = screen.getAllByTitle('当前请求模式尚未落地，暂不可测试或启用') as HTMLButtonElement[];
+    expect(unavailableButtons).toHaveLength(2);
+    unavailableButtons.forEach((button) => {
+      expect(button.disabled).toBe(true);
+    });
   });
 });

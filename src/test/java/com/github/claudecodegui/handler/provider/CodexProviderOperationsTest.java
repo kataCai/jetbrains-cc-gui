@@ -2,10 +2,12 @@ package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.junit.Test;
 
@@ -36,8 +38,9 @@ public class CodexProviderOperationsTest {
         operations.handleTestCodexProvider("{\"id\":\"missing-provider\"}");
 
         assertEquals("window.showTestResult", jsCallback.lastFunctionName);
-        assertEquals("false", jsCallback.lastArgs.get(0));
-        assertTrue(jsCallback.lastArgs.get(1).contains("Provider not found"));
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(false, payload.get("success").getAsBoolean());
+        assertTrue(payload.get("message").getAsString().contains("Provider not found"));
     }
 
     @Test
@@ -51,8 +54,9 @@ public class CodexProviderOperationsTest {
         operations.handleTestCodexProvider("{\"id\":\"managed-provider\"}");
 
         assertEquals("window.showTestResult", jsCallback.lastFunctionName);
-        assertEquals("false", jsCallback.lastArgs.get(0));
-        assertTrue(jsCallback.lastArgs.get(1).contains("API key env is not set"));
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(false, payload.get("success").getAsBoolean());
+        assertTrue(payload.get("message").getAsString().contains("API key env is not set"));
     }
 
     @Test
@@ -62,6 +66,7 @@ public class CodexProviderOperationsTest {
         JsonObject localModelState = new JsonObject();
         localModelState.addProperty("model", "local-model");
         localModelState.addProperty("reasoningEffort", "high");
+        localModelState.addProperty("modelProvider", "LocalOpenAI");
         TestSettingsService settingsService = new TestSettingsService(provider, localModelState) {
             @Override
             public JsonObject getCodexProviderById(String providerId) {
@@ -80,8 +85,9 @@ public class CodexProviderOperationsTest {
         operations.handleTestCodexProvider("{\"id\":\"managed-provider\"}");
 
         assertEquals("window.showTestResult", jsCallback.lastFunctionName);
-        assertEquals("true", jsCallback.lastArgs.get(0));
-        assertTrue(jsCallback.lastArgs.get(1).contains("Codex provider test passed"));
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(true, payload.get("success").getAsBoolean());
+        assertTrue(payload.get("message").getAsString().contains("Codex provider test passed"));
         /**
          * 验证目标：
          * provider 连通性测试应基于被测 provider 自身的 runtime profile，
@@ -90,8 +96,110 @@ public class CodexProviderOperationsTest {
          * 断言意图：
          * 成功摘要里展示的 model 必须来自 provider 自身配置，便于用户判断“被测的是谁”。
          */
-        assertTrue(jsCallback.lastArgs.get(1).contains("model=provider-model"));
-        assertTrue(jsCallback.lastArgs.get(1).contains("authMode=api_key_env"));
+        assertEquals("provider-model", payload.get("model").getAsString());
+        assertEquals("api_key_env", payload.get("authMode").getAsString());
+        assertEquals("managed-provider", payload.get("providerId").getAsString());
+        assertEquals("codex_sdk", payload.get("requestMode").getAsString());
+        assertEquals("codemoss_managed_provider", payload.get("forcedModelProvider").getAsString());
+        assertEquals("LocalOpenAI", payload.get("localCodexModelProvider").getAsString());
+        assertEquals(true, payload.get("localConfigConflictDetected").getAsBoolean());
+        assertEquals("codemoss_managed_provider", payload.get("finalModelProvider").getAsString());
+    }
+
+    @Test
+    public void shouldExposeRuntimeDiagnosticsWhenFetchingActiveCodexProvider() throws Exception {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createManagedProvider();
+        TestSettingsService settingsService = new TestSettingsService(provider, new JsonObject()) {
+            @Override
+            public JsonObject getCurrentCodexModelState() {
+                JsonObject localState = new JsonObject();
+                localState.addProperty("model", "local-model");
+                localState.addProperty("reasoningEffort", "medium");
+                return localState;
+            }
+        };
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback)
+        );
+
+        operations.handleGetActiveCodexProvider();
+
+        assertEquals("window.updateActiveCodexProvider", jsCallback.lastFunctionName);
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals("managed-provider", payload.get("id").getAsString());
+        assertEquals("codemoss_managed_provider", payload.get("effectiveConfigSource").getAsString());
+        /**
+         * 断言意图：
+         * 当前这条测试数据本身已经包含 provider.baseUrl，因此轻量诊断摘要应判定运行时 endpoint 直接命中托管 provider，
+         * 不应误报为回退到本地 Codex 配置或 SDK 默认值。
+         */
+        assertEquals(false, payload.get("fallbackDetected").getAsBoolean());
+        assertEquals("provider", payload.get("endpointSource").getAsString());
+        assertEquals("codemoss_managed_provider", payload.get("forcedModelProvider").getAsString());
+        assertEquals("", payload.get("localCodexModelProvider").getAsString());
+        assertEquals(false, payload.get("localConfigConflictDetected").getAsBoolean());
+        assertEquals("codemoss_managed_provider", payload.get("finalModelProvider").getAsString());
+    }
+
+    @Test
+    public void shouldIgnoreLocalCodexEndpointWhenActiveManagedProviderHasNoBaseUrl() throws Exception {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createManagedProvider();
+        provider.remove("baseUrl");
+        TestSettingsService settingsService = new TestSettingsService(provider, new JsonObject()) {
+            @Override
+            public JsonObject getCurrentCodexModelState() {
+                JsonObject localState = new JsonObject();
+                localState.addProperty("model", "local-model");
+                localState.addProperty("reasoningEffort", "medium");
+                localState.addProperty("baseUrl", "https://local.example.com/v1");
+                localState.addProperty("modelProvider", "LocalOpenAI");
+                return localState;
+            }
+        };
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback)
+        );
+
+        operations.handleGetActiveCodexProvider();
+
+        JsonObject payload = jsCallback.getLastPayload();
+        /**
+         * 验证目标：
+         * 即使本地 ~/.codex/config.toml 中存在 endpoint，设置页轻量诊断也必须保持与真实发送链路一致，
+         * 对托管 provider 只能显示 provider 自身 endpoint 或 SDK 默认值，不能误报为命中本地配置。
+         */
+        assertEquals("sdk_default", payload.get("endpointSource").getAsString());
+        assertEquals(true, payload.get("fallbackDetected").getAsBoolean());
+        assertEquals("codemoss_managed_provider", payload.get("forcedModelProvider").getAsString());
+        assertEquals("LocalOpenAI", payload.get("localCodexModelProvider").getAsString());
+        assertEquals(true, payload.get("localConfigConflictDetected").getAsBoolean());
+        assertEquals("codemoss_managed_provider", payload.get("finalModelProvider").getAsString());
+    }
+
+    @Test
+    public void shouldNotReportManagedConflictForCliLoginActiveProviderDiagnostics() throws Exception {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = new JsonObject();
+        provider.addProperty("id", com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID);
+        provider.addProperty("name", "Codex CLI Login");
+        provider.addProperty("isCodexCliLoginProvider", true);
+        JsonObject localModelState = new JsonObject();
+        localModelState.addProperty("modelProvider", "LocalOpenAI");
+        TestSettingsService settingsService = new TestSettingsService(provider, localModelState);
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback)
+        );
+
+        operations.handleGetActiveCodexProvider();
+
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals("codex_cli_login", payload.get("effectiveConfigSource").getAsString());
+        assertEquals("", payload.get("forcedModelProvider").getAsString());
+        assertEquals("LocalOpenAI", payload.get("localCodexModelProvider").getAsString());
+        assertEquals(false, payload.get("localConfigConflictDetected").getAsBoolean());
+        assertEquals("LocalOpenAI", payload.get("finalModelProvider").getAsString());
     }
 
     private static HandlerContext createContext(
@@ -198,6 +306,14 @@ public class CodexProviderOperationsTest {
         @Override
         public String escapeJs(String str) {
             return str;
+        }
+
+        JsonObject getLastPayload() {
+            if (lastArgs.isEmpty()) {
+                return new JsonObject();
+            }
+            JsonElement parsed = com.google.gson.JsonParser.parseString(lastArgs.get(0));
+            return parsed.getAsJsonObject();
         }
     }
 }

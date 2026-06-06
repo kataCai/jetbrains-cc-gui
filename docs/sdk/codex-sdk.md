@@ -290,6 +290,32 @@ The action emits the last Codex message through the `final-message` output. Map 
 
 ### Troubleshooting
 
+## CC-GUI Managed Provider Notes
+
+### Responsibility boundary between managed provider and local `~/.codex/config.toml`
+
+- CC-GUI managed provider is request-scoped runtime configuration. It should decide the provider, endpoint, model, and credentials used by the current GUI request.
+- Local `~/.codex/config.toml` belongs to standalone Codex CLI usage. It can remain customized for terminal workflows, but it should not silently take over a GUI managed-provider request.
+- For `Codex CLI Login` mode, CC-GUI is expected to reuse the local `~/.codex/config.toml` and `auth.json` state. This is the only mode where local Codex config is intentionally part of runtime routing.
+- For managed provider mode, CC-GUI should inject request-scoped `model_provider` overrides so the underlying Codex CLI does not keep using the local default provider from `~/.codex/config.toml`.
+
+### How to tell whether a request hit the GUI provider or the local CLI provider
+
+1. Check the runtime source shown in the settings UI or provider test result.
+   - `Managed Provider` means the request stayed on the CC-GUI managed-provider path.
+   - `Codex Local Config` means the request is using local Codex CLI configuration semantics.
+   - `SDK Default` means no explicit provider endpoint was injected and the SDK default path is being used.
+   - `Proxy Fallback` means runtime diagnostics detected a fallback path and the request may not be using the intended managed-provider route.
+2. Check the structured diagnostics fields in logs or provider test results.
+   - `forcedModelProvider` shows the request-scoped provider that CC-GUI injected.
+   - `localCodexModelProvider` shows the local default provider declared in `~/.codex/config.toml`.
+   - `finalModelProvider` shows the provider that should win after request-scoped overrides are applied.
+   - `localConfigConflictDetected=true` means the GUI managed provider and local Codex CLI default provider differ, so the local config would have been a takeover risk without request-scoped overrides.
+3. Compare the final request endpoint.
+   - If the request is expected to use a managed provider such as MiniMax, `baseUrl` should resolve to that provider endpoint, not a local proxy endpoint from `~/.codex/config.toml`.
+4. For `Codex CLI Login` mode, do not treat local provider usage as a conflict.
+   - In this mode, `forcedModelProvider` is expected to be empty and `finalModelProvider` can legitimately match `localCodexModelProvider`.
+
 - **Only one of prompt or prompt-file may be specified** — remove the duplicate input so exactly one source remains.
 - **responses-api-proxy did not write server info** — confirm the API key is present and valid; the proxy only starts when `openai-api-key` is set.
 - **Expected sudo to be disabled, but sudo succeeded** — ensure no earlier step re-enabled `sudo` and that the runner OS is Linux or macOS. Re-run with a fresh job.

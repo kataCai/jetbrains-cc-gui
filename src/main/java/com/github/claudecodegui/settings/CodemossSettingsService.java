@@ -6,6 +6,7 @@ import com.github.claudecodegui.model.ConflictStrategy;
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.model.PromptScope;
 import com.github.claudecodegui.dependency.DependencyManager;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -1995,6 +1996,115 @@ public class CodemossSettingsService {
 
     public void setSelectedCodexModel(String providerId, String modelId) throws IOException {
         codexProviderManager.setSelectedModel(providerId, modelId);
+    }
+
+    /**
+     * 保存 Codex 会话绑定元数据。
+     * 该映射把 session/thread id 与当时命中的 provider/model/requestMode 绑定，
+     * 用于历史恢复后继续发送时保持运行时一致性，避免误用当前 active provider。
+     *
+     * @param sessionId Codex 会话或 thread id
+     * @param binding 待保存的绑定元数据；传入 null 或空绑定时会删除旧记录
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void saveCodexSessionBinding(String sessionId, CodexSessionBinding binding) throws IOException {
+        String normalizedSessionId = normalizeSessionBindingSessionId(sessionId);
+        if (normalizedSessionId == null) {
+            return;
+        }
+
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject sessionBindings = ensureCodexSessionBindingsObject(codex);
+        if (binding == null || !binding.isMeaningful()) {
+            sessionBindings.remove(normalizedSessionId);
+        } else {
+            sessionBindings.add(normalizedSessionId, binding.toJson());
+        }
+        writeConfig(config);
+    }
+
+    /**
+     * 读取指定 Codex 会话的绑定元数据。
+     *
+     * @param sessionId Codex 会话或 thread id
+     * @return 已保存的绑定元数据；不存在时返回 null
+     * @throws IOException 配置读取失败时抛出
+     */
+    public CodexSessionBinding getCodexSessionBinding(String sessionId) throws IOException {
+        String normalizedSessionId = normalizeSessionBindingSessionId(sessionId);
+        if (normalizedSessionId == null) {
+            return null;
+        }
+
+        JsonObject config = readConfig();
+        if (!config.has("codex") || !config.get("codex").isJsonObject()) {
+            return null;
+        }
+        JsonObject codex = config.getAsJsonObject("codex");
+        if (!codex.has("sessionBindings") || !codex.get("sessionBindings").isJsonObject()) {
+            return null;
+        }
+        JsonObject sessionBindings = codex.getAsJsonObject("sessionBindings");
+        if (!sessionBindings.has(normalizedSessionId) || !sessionBindings.get(normalizedSessionId).isJsonObject()) {
+            return null;
+        }
+        return CodexSessionBinding.fromJson(sessionBindings.getAsJsonObject(normalizedSessionId));
+    }
+
+    /**
+     * 删除指定 Codex 会话的绑定元数据。
+     *
+     * @param sessionId Codex 会话或 thread id
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void deleteCodexSessionBinding(String sessionId) throws IOException {
+        saveCodexSessionBinding(sessionId, null);
+    }
+
+    /**
+     * 规范化 Codex 会话绑定使用的 sessionId。
+     *
+     * @param sessionId 原始 sessionId
+     * @return 去空白后的 sessionId；为空时返回 null
+     */
+    private String normalizeSessionBindingSessionId(String sessionId) {
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            return null;
+        }
+        return sessionId.trim();
+    }
+
+    /**
+     * 确保 codex 根配置对象存在。
+     *
+     * @param config 整体配置对象
+     * @return 可写入的 codex 配置对象
+     */
+    private JsonObject ensureCodexConfigObject(JsonObject config) {
+        if (config.has("codex") && config.get("codex").isJsonObject()) {
+            return config.getAsJsonObject("codex");
+        }
+        JsonObject codex = new JsonObject();
+        codex.addProperty("current", "");
+        codex.add("providers", new JsonObject());
+        config.add("codex", codex);
+        return codex;
+    }
+
+    /**
+     * 确保 codex.sessionBindings 对象存在。
+     *
+     * @param codex codex 根配置对象
+     * @return 可直接写入的 sessionBindings 对象
+     */
+    private JsonObject ensureCodexSessionBindingsObject(JsonObject codex) {
+        if (codex.has("sessionBindings") && codex.get("sessionBindings").isJsonObject()) {
+            return codex.getAsJsonObject("sessionBindings");
+        }
+        JsonObject sessionBindings = new JsonObject();
+        codex.add("sessionBindings", sessionBindings);
+        return sessionBindings;
     }
 
     private JsonObject ensureRemoteCollabConfig(JsonObject config) {

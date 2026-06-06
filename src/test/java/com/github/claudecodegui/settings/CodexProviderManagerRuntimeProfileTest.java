@@ -56,6 +56,79 @@ public class CodexProviderManagerRuntimeProfileTest {
     }
 
     @Test
+    public void shouldPreserveCcSwitchProxySchemaFields() throws Exception {
+        AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
+        CodexProviderManager manager = createManager(configRef, new RecordingCodexSettingsManager());
+        JsonObject provider = createManagedProvider("proxy-provider", "Proxy Provider");
+        provider.addProperty("requestMode", "cc_switch_proxy");
+        provider.remove("baseUrl");
+        provider.remove("apiKeyEnv");
+        provider.addProperty("authMode", "proxy");
+        JsonObject ccSwitchProxy = new JsonObject();
+        ccSwitchProxy.addProperty("proxyEndpoint", "http://127.0.0.1:15721");
+        ccSwitchProxy.addProperty("providerRoute", "minimax");
+        ccSwitchProxy.addProperty("requestPath", "/v1/responses");
+        JsonObject requestHeaders = new JsonObject();
+        requestHeaders.addProperty("x-route", "minimax");
+        ccSwitchProxy.add("requestHeaders", requestHeaders);
+        provider.add("ccSwitchProxy", ccSwitchProxy);
+
+        manager.addCodexProvider(provider);
+
+        JsonObject saved = configRef.get()
+                .getAsJsonObject("codex")
+                .getAsJsonObject("providers")
+                .getAsJsonObject("proxy-provider");
+        assertEquals("cc_switch_proxy", saved.get("requestMode").getAsString());
+        assertTrue(saved.has("ccSwitchProxy"));
+        assertEquals(
+                "http://127.0.0.1:15721",
+                saved.getAsJsonObject("ccSwitchProxy").get("proxyEndpoint").getAsString()
+        );
+        assertEquals(
+                "minimax",
+                saved.getAsJsonObject("ccSwitchProxy").get("providerRoute").getAsString()
+        );
+    }
+
+    @Test
+    public void shouldPreserveCustomAdapterSchemaFields() throws Exception {
+        AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
+        CodexProviderManager manager = createManager(configRef, new RecordingCodexSettingsManager());
+        JsonObject provider = createManagedProvider("adapter-provider", "Adapter Provider");
+        provider.addProperty("requestMode", "custom_adapter");
+        provider.remove("baseUrl");
+        JsonObject customAdapter = new JsonObject();
+        customAdapter.addProperty("adapterId", "minimax-adapter");
+        customAdapter.addProperty("adapterEndpoint", "http://127.0.0.1:8080/adapter/codex");
+        JsonObject adapterHeaders = new JsonObject();
+        adapterHeaders.addProperty("Authorization", "Bearer adapter");
+        customAdapter.add("adapterHeaders", adapterHeaders);
+        JsonObject adapterExtras = new JsonObject();
+        adapterExtras.addProperty("provider", "minimax");
+        adapterExtras.addProperty("mode", "responses");
+        customAdapter.add("adapterExtras", adapterExtras);
+        provider.add("customAdapter", customAdapter);
+
+        manager.addCodexProvider(provider);
+
+        JsonObject saved = configRef.get()
+                .getAsJsonObject("codex")
+                .getAsJsonObject("providers")
+                .getAsJsonObject("adapter-provider");
+        assertEquals("custom_adapter", saved.get("requestMode").getAsString());
+        assertTrue(saved.has("customAdapter"));
+        assertEquals(
+                "minimax-adapter",
+                saved.getAsJsonObject("customAdapter").get("adapterId").getAsString()
+        );
+        assertEquals(
+                "http://127.0.0.1:8080/adapter/codex",
+                saved.getAsJsonObject("customAdapter").get("adapterEndpoint").getAsString()
+        );
+    }
+
+    @Test
     public void shouldPersistSelectedCodexModel() throws Exception {
         AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
         CodexProviderManager manager = createManager(configRef, new RecordingCodexSettingsManager());

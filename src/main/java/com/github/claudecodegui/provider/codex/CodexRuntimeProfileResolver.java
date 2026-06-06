@@ -54,12 +54,13 @@ public class CodexRuntimeProfileResolver {
         }
 
         String providerId = readString(activeProvider, "id");
+        JsonObject localCodexState = settingsService.getCurrentCodexModelState();
+        String localCodexModelProvider = readString(localCodexState, "modelProvider");
         if (CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)
                 || activeProvider.has("isCodexCliLoginProvider")) {
-            return resolveCliLogin(providerId, sessionModel, sessionReasoningEffort);
+            return resolveCliLogin(providerId, sessionModel, sessionReasoningEffort, localCodexModelProvider);
         }
 
-        JsonObject localModelState = settingsService.getCurrentCodexModelState();
         String model = firstNonBlank(
                 sessionModel,
                 readSelectedModel(providerId),
@@ -80,20 +81,54 @@ public class CodexRuntimeProfileResolver {
         String authMode = firstNonBlank(readString(activeProvider, "authMode"), "api_key_env");
         String requestMode = firstNonBlank(readString(activeProvider, "requestMode"), DEFAULT_REQUEST_MODE);
         Credential credential = resolveCredential(activeProvider, authMode);
+        String providerBaseUrl = readString(activeProvider, "baseUrl");
+        // 托管 provider 的 endpoint 只能来自当前 provider 自身配置；
+        // 若未配置，则显式回退到 SDK 默认值，禁止再透传 ~/.codex/config.toml 中的本地 endpoint。
+        String resolvedBaseUrl = providerBaseUrl;
+        String baseUrlSource = !providerBaseUrl.isEmpty()
+                ? "provider"
+                : "sdk_default";
+        boolean fallbackDetected = !"provider".equals(baseUrlSource);
+        String forcedModelProvider = CodexRuntimeProfile.MANAGED_PROVIDER_FORCED_MODEL_PROVIDER;
+        boolean localConfigConflictDetected = !localCodexModelProvider.isEmpty()
+                && !forcedModelProvider.equalsIgnoreCase(localCodexModelProvider);
 
         return new CodexRuntimeProfile(
                 providerId,
                 model,
-                firstNonBlank(readString(activeProvider, "baseUrl"), readString(localModelState, "baseUrl")),
+                resolvedBaseUrl,
                 credential.apiKey,
                 authMode,
                 requestMode,
                 reasoningEffort,
-                credential.source
+                credential.source,
+                baseUrlSource,
+                CodexRuntimeProfile.CONFIG_SOURCE_MANAGED_PROVIDER,
+                fallbackDetected,
+                forcedModelProvider,
+                localCodexModelProvider,
+                localConfigConflictDetected,
+                forcedModelProvider
         );
     }
 
-    private CodexRuntimeProfile resolveCliLogin(String providerId, String sessionModel, String sessionReasoningEffort) {
+    /**
+     * 解析 Codex CLI Login 模式的请求级 profile。
+     * CLI Login 语义下底层本就应继续遵循本地 ~/.codex 配置，因此这里保留本地 model_provider 诊断值，
+     * 同时显式关闭 managed provider 冲突标记，避免设置页把合法的本地直连误报成风险。
+     *
+     * @param providerId CLI Login 虚拟 provider id
+     * @param sessionModel 会话级显式模型
+     * @param sessionReasoningEffort 会话级显式推理强度
+     * @param localCodexModelProvider 本地 ~/.codex/config.toml 中声明的 model_provider
+     * @return CLI Login 模式下的请求级 profile
+     */
+    private CodexRuntimeProfile resolveCliLogin(
+            String providerId,
+            String sessionModel,
+            String sessionReasoningEffort,
+            String localCodexModelProvider
+    ) {
         return new CodexRuntimeProfile(
                 providerId,
                 firstNonBlank(sessionModel, readSelectedModel(providerId)),
@@ -102,7 +137,14 @@ public class CodexRuntimeProfileResolver {
                 CodexRuntimeProfile.AUTH_MODE_CLI_LOGIN,
                 DEFAULT_REQUEST_MODE,
                 firstNonBlank(sessionReasoningEffort, DEFAULT_REASONING_EFFORT),
-                "codex_cli_login"
+                "codex_cli_login",
+                "codex_cli_login",
+                CodexRuntimeProfile.CONFIG_SOURCE_CLI_LOGIN,
+                false,
+                "",
+                localCodexModelProvider,
+                false,
+                localCodexModelProvider
         );
     }
 

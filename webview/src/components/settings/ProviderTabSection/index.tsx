@@ -25,6 +25,7 @@ interface ProviderTabSectionProps {
   // Codex provider props
   codexProviders: CodexProviderConfig[];
   codexLoading: boolean;
+  testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
   onCreateCodexProviderFromAlias?: (providerDraft: Partial<CodexProviderConfig>) => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
@@ -46,6 +47,7 @@ const ProviderTabSection = ({
   onSwitchProvider,
   codexProviders,
   codexLoading,
+  testingCodexProviderId,
   onAddCodexProvider,
   onCreateCodexProviderFromAlias,
   onEditCodexProvider,
@@ -234,6 +236,7 @@ const ProviderTabSection = ({
         <CodexProviderSection
           codexProviders={codexProviders}
           codexLoading={codexLoading}
+          testingCodexProviderId={testingCodexProviderId}
           onAddCodexProvider={onAddCodexProvider}
           onEditCodexProvider={onEditCodexProvider}
           onDeleteCodexProvider={onDeleteCodexProvider}

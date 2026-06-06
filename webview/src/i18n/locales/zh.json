@@ -52,6 +52,13 @@
     "addCodexProviderAction": "新增 Codex 供应商配置...",
     "manageCurrentCodexProviderModelsAction": "管理当前供应商模型...",
     "addCodexModelAliasAction": "添加模型别名（高级）...",
+    "codexRuntimeSourceLabel": "运行时来源：{{source}}",
+    "codexRuntimeSource": {
+      "managedProvider": "托管供应商",
+      "codexLocalConfig": "Codex 本地配置",
+      "sdkDefault": "SDK 默认值",
+      "proxyFallback": "代理回退"
+    },
     "removeAttachment": "移除附件",
     "closePreview": "关闭预览",
     "loadingDropdown": "加载中...",
@@ -687,6 +694,17 @@
     "providerTypeMeta": "模板：{{type}}",
     "baseUrlMeta": "Base URL：{{baseUrl}}",
     "modelCountMeta": "模型数：{{count}}",
+    "runtimeSourceLabel": "运行时来源：{{source}}",
+    "runtimeSource": {
+      "managedProvider": "托管供应商",
+      "codexLocalConfig": "Codex 本地配置",
+      "sdkDefault": "SDK 默认值",
+      "proxyFallback": "代理回退"
+    },
+    "testResult": {
+      "guiProviderConfirmed": "当前请求已命中 GUI 托管 provider：{{provider}}",
+      "localConfigConflict": "本地 Codex CLI 默认 provider 仍可能造成冲突：{{provider}}"
+    },
     "deleteConfirmTitle": "确认删除",
       "deleteConfirmMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。",
       "dialog": {
@@ -706,7 +724,9 @@
         "authMode": "鉴权模式",
         "authModeHint": "区分 CC-GUI 请求级配置与 Codex CLI 本地登录态的来源。",
         "requestMode": "请求模式",
-        "requestModeHint": "定义当前 provider 的请求链路；非 codex_sdk 模式用于后续代理或适配器扩展。",
+        "requestModeHint": "定义当前 provider 的请求链路；非 codex_sdk 模式目前仅作后续代理或适配器扩展预留。",
+        "requestModeUnavailableHint": "当前模式暂未落地，请先切换到 Codex SDK。",
+        "requestModeUnavailableOptionSuffix": "（开发中）",
         "baseUrl": "Base URL",
         "baseUrlPlaceholder": "例如：https://api.openai.com/v1",
         "baseUrlHint": "请求级 endpoint，仅在当前 provider 发送消息时生效。",
@@ -757,6 +777,8 @@
           "custom_adapter": "Custom Adapter"
         },
         "testProvider": "测试连接",
+        "requestModeUnavailableBadge": "开发中",
+        "requestModeUnavailableTooltip": "当前请求模式尚未落地，暂不可测试或启用",
         "modelIdRequired": "请输入模型 ID",
         "modelIdInvalid": "模型 ID 格式无效（仅允许字母、数字、点、连字符、下划线、斜杠和冒号）",
         "modelIdDuplicate": "模型 ID 已存在"

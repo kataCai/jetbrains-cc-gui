@@ -21,8 +21,19 @@ vi.mock('react-i18next', async (importOriginal) => {
   return {
     ...actual,
     useTranslation: () => ({
-      t: (key: string, options?: { defaultValue?: string } | string) => {
-        if (translatedText[key]) return translatedText[key];
+      t: (key: string, options?: { defaultValue?: string; [key: string]: string | number | undefined } | string) => {
+        const template = translatedText[key];
+        if (template) {
+          if (!options || typeof options === 'string') {
+            return template;
+          }
+          return Object.entries(options).reduce((result, [token, value]) => {
+            if (token === 'defaultValue' || value === undefined) {
+              return result;
+            }
+            return result.replace(`{{${token}}}`, String(value));
+          }, template);
+        }
         if (typeof options === 'string') return options;
         return options?.defaultValue ?? key;
       },

@@ -4,6 +4,7 @@ import com.github.claudecodegui.handler.CodexMessageConverter;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.github.claudecodegui.session.SessionState;
 import com.github.claudecodegui.util.JsUtils;
 import com.google.gson.Gson;
@@ -77,6 +78,7 @@ public class HistoryMessageInjector {
                 String cwd = sessionMeta[1];
 
                 context.getSession().setSessionInfo(threadIdToUse, cwd);
+                applyCodexSessionBinding(threadIdToUse);
                 restoreCodexMessagesToSessionState(context.getSession().getState(), messages);
                 LOG.info("[HistoryHandler] 恢复 Codex 会话状态: threadId=" + threadIdToUse + " (from sessionId=" + sessionId + "), cwd=" + cwd);
 
@@ -370,6 +372,28 @@ public class HistoryMessageInjector {
     /**
      * 批量注入前端消息，复用 updateMessages 链路，避免长历史逐条追加导致最新消息显示滞后。
      */
+    private void applyCodexSessionBinding(String threadIdToUse) {
+        if (threadIdToUse == null || threadIdToUse.trim().isEmpty() || context.getSession() == null) {
+            return;
+        }
+        try {
+            CodexSessionBinding binding = context.getSettingsService().getCodexSessionBinding(threadIdToUse);
+            if (binding == null || !binding.isMeaningful()) {
+                return;
+            }
+            context.getSession().setProvider("codex");
+            if (binding.getModel() != null && !binding.getModel().trim().isEmpty()) {
+                context.getSession().setModel(binding.getModel());
+            }
+            context.getSession().getState().setCodexSessionBinding(binding);
+            LOG.info("[HistoryHandler] Restored Codex session binding for threadId=" + threadIdToUse
+                    + ", providerId=" + binding.getProviderId()
+                    + ", model=" + binding.getModel());
+        } catch (Exception e) {
+            LOG.warn("[HistoryHandler] Failed to restore Codex session binding: " + e.getMessage(), e);
+        }
+    }
+
     private void injectBatchToFrontend(List<JsonObject> frontendMessages) {
         String messagesJson = new Gson().toJson(frontendMessages);
         String escapedMessagesJson = JsUtils.escapeJs(messagesJson);

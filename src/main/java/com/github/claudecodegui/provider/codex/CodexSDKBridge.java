@@ -492,7 +492,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
                         effectiveProfile,
                         isCodexCliLoginActive()
                 );
-                LOG.info("[Codex] Request runtime profile: " + effectiveProfile.toDiagnosticJson());
+                LOG.info("[CODEX_RUNTIME] Bridge request runtime profile: " + effectiveProfile.toDiagnosticJson());
 
                 // 透传任务恢复策略配置，供 Node 侧统一决定“转成功/自动重试/最终失败”。
                 try {
@@ -1081,7 +1081,17 @@ public class CodexSDKBridge extends BaseSDKBridge {
         stdinInput.addProperty("reasoningEffort", effectiveProfile.getReasoningEffort().isEmpty()
                 ? "medium"
                 : effectiveProfile.getReasoningEffort());
+        stdinInput.addProperty("providerId", effectiveProfile.getProviderId());
+        stdinInput.addProperty("authMode", effectiveProfile.getAuthMode());
         stdinInput.addProperty("requestMode", effectiveProfile.getRequestMode());
+        stdinInput.addProperty("credentialSource", effectiveProfile.getCredentialSource());
+        stdinInput.addProperty("baseUrlSource", effectiveProfile.getBaseUrlSource());
+        stdinInput.addProperty("effectiveConfigSource", effectiveProfile.getEffectiveConfigSource());
+        stdinInput.addProperty("fallbackDetected", effectiveProfile.isFallbackDetected());
+        stdinInput.addProperty("forcedModelProvider", effectiveProfile.getForcedModelProvider());
+        stdinInput.addProperty("localCodexModelProvider", effectiveProfile.getLocalCodexModelProvider());
+        stdinInput.addProperty("localConfigConflictDetected", effectiveProfile.isLocalConfigConflictDetected());
+        stdinInput.addProperty("finalModelProvider", effectiveProfile.getFinalModelProvider());
 
         // CLI Login 使用 SDK 原生 OAuth，必须清空请求级 endpoint 和 key，避免继承 managed provider 凭据。
         boolean isCodexCliLogin = effectiveProfile.isCodexCliLogin() || globalCliLoginActive;

@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import CodexProviderDialog from './CodexProviderDialog';
+import CodexProviderDialog, {
+  getCodexProviderModeDescription,
+  validateCodexProviderDraft,
+} from './CodexProviderDialog';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -24,6 +27,8 @@ vi.mock('react-i18next', () => ({
         'settings.codexProvider.dialog.authModeHint': '认证方式说明',
         'settings.codexProvider.dialog.requestMode': '请求模式',
         'settings.codexProvider.dialog.requestModeHint': '请求模式说明',
+        'settings.codexProvider.dialog.requestModeUnavailableHint': '当前模式暂未落地，请先切换到 Codex SDK。',
+        'settings.codexProvider.dialog.requestModeUnavailableOptionSuffix': '（开发中）',
         'settings.codexProvider.dialog.baseUrl': 'Base URL',
         'settings.codexProvider.dialog.baseUrlPlaceholder': '例如：https://api.example.com/v1',
         'settings.codexProvider.dialog.baseUrlHint': '请求级 Base URL',
@@ -256,5 +261,193 @@ describe('CodexProviderDialog', () => {
     expect(screen.getByDisplayValue('JSON Model A')).toBeTruthy();
     expect(screen.getByDisplayValue('json-model-b')).toBeTruthy();
     expect(screen.getByDisplayValue('JSON Model B')).toBeTruthy();
+  });
+
+  /**
+   * 验证当前只有 codex_sdk 可以作为新建 provider 的可选请求模式。
+   * 未落地模式仍保留在下拉列表中用于传达规划方向，但必须以 disabled 形式呈现，
+   * 防止用户继续创建“看起来能配、实际上跑不起来”的假配置。
+   */
+  it('应在新建 provider 时禁用未落地的请求模式选项', () => {
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={null}
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+      />,
+    );
+
+    const requestModeSelect = screen.getByLabelText('请求模式') as HTMLSelectElement;
+    const ccSwitchOption = Array.from(requestModeSelect.options).find((option) => option.value === 'cc_switch_proxy');
+    const customAdapterOption = Array.from(requestModeSelect.options).find((option) => option.value === 'custom_adapter');
+
+    expect(ccSwitchOption?.disabled).toBe(true);
+    expect(customAdapterOption?.disabled).toBe(true);
+    expect(ccSwitchOption?.textContent).toContain('开发中');
+    expect(customAdapterOption?.textContent).toContain('开发中');
+  });
+
+  /**
+   * 验证历史 provider 若仍使用未落地模式，设置页会给出显式风险提示并禁止继续保存激活。
+   * 这样用户仍可打开旧配置并切换回 codex_sdk，但不会继续把未实现模式作为可运行能力误用。
+   */
+  it('应在编辑未落地模式的历史 provider 时显示风险提示并禁用保存操作', () => {
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={{
+          id: 'legacy-proxy-provider',
+          name: 'Legacy Proxy',
+          authMode: 'api_key',
+          requestMode: 'cc_switch_proxy',
+          baseUrl: 'http://127.0.0.1:15721',
+          apiKey: 'sk-test',
+          models: [{ id: 'legacy-model', label: 'Legacy Model' }],
+        }}
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+      />,
+    );
+
+    expect(screen.getAllByText('当前模式暂未落地，请先切换到 Codex SDK。').length).toBeGreaterThanOrEqual(1);
+    expect((screen.getByRole('button', { name: '保存修改' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '保存并激活' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('CodexProviderDialog request-mode dynamic fields', () => {
+  const onClose = vi.fn();
+  const onSave = vi.fn();
+  const addToast = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders cc_switch_proxy fields and hides codex_sdk baseUrl field', () => {
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={{
+          id: 'legacy-proxy-provider',
+          name: 'Legacy Proxy',
+          authMode: 'proxy',
+          requestMode: 'cc_switch_proxy',
+          apiKey: 'sk-test',
+          models: [{ id: 'legacy-model', label: 'Legacy Model' }],
+          ccSwitchProxy: {
+            proxyEndpoint: 'http://127.0.0.1:15721',
+            providerRoute: 'minimax',
+            requestPath: '/v1/responses',
+            requestHeaders: {
+              'x-route': 'minimax',
+            },
+          },
+        }}
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+      />,
+    );
+
+    expect(screen.queryByLabelText('Base URL')).toBeNull();
+    expect(screen.getByLabelText('CC Switch Proxy Endpoint')).toBeTruthy();
+    expect(screen.getByLabelText('Provider Route')).toBeTruthy();
+    expect(screen.getByLabelText('Request Path')).toBeTruthy();
+    expect(screen.getByLabelText('Proxy Headers JSON')).toBeTruthy();
+  });
+
+  it('renders custom_adapter fields and hides codex_sdk baseUrl field', () => {
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={{
+          id: 'legacy-adapter-provider',
+          name: 'Legacy Adapter',
+          authMode: 'api_key',
+          requestMode: 'custom_adapter',
+          apiKey: 'sk-test',
+          models: [{ id: 'adapter-model', label: 'Adapter Model' }],
+          customAdapter: {
+            adapterId: 'minimax-adapter',
+            adapterEndpoint: 'http://127.0.0.1:8080/adapter/codex',
+            adapterHeaders: {
+              Authorization: 'Bearer adapter',
+            },
+            adapterExtras: {
+              provider: 'minimax',
+            },
+          },
+        }}
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+      />,
+    );
+
+    expect(screen.queryByLabelText('Base URL')).toBeNull();
+    expect(screen.getByLabelText('Adapter ID')).toBeTruthy();
+    expect(screen.getByLabelText('Adapter Endpoint')).toBeTruthy();
+    expect(screen.getByLabelText('Adapter Headers JSON')).toBeTruthy();
+    expect(screen.getByLabelText('Adapter Extras JSON')).toBeTruthy();
+  });
+});
+
+describe('CodexProviderDialog mode validation helpers', () => {
+  it('validates cc_switch_proxy required fields independently from codex_sdk baseUrl', () => {
+    expect(validateCodexProviderDraft({
+      providerName: 'Proxy Provider',
+      authMode: 'proxy',
+      requestMode: 'cc_switch_proxy',
+      baseUrl: '',
+      apiKey: 'sk-test',
+      apiKeyEnv: '',
+      normalizedModels: [{ id: 'proxy-model', label: 'Proxy Model' }],
+      ccSwitchProxy: {
+        proxyEndpoint: '',
+        providerRoute: '',
+        requestPath: '/v1/responses',
+        requestHeaders: {},
+      },
+      customAdapter: {
+        adapterId: '',
+        adapterEndpoint: '',
+        adapterHeaders: {},
+        adapterExtras: {},
+      },
+    })).toBe('settings.codexProvider.dialog.proxyEndpointRequired');
+  });
+
+  it('validates custom_adapter required fields independently from codex_sdk baseUrl', () => {
+    expect(validateCodexProviderDraft({
+      providerName: 'Adapter Provider',
+      authMode: 'api_key',
+      requestMode: 'custom_adapter',
+      baseUrl: '',
+      apiKey: 'sk-test',
+      apiKeyEnv: '',
+      normalizedModels: [{ id: 'adapter-model', label: 'Adapter Model' }],
+      ccSwitchProxy: {
+        proxyEndpoint: '',
+        providerRoute: '',
+        requestPath: '',
+        requestHeaders: {},
+      },
+      customAdapter: {
+        adapterId: '',
+        adapterEndpoint: '',
+        adapterHeaders: {},
+        adapterExtras: {},
+      },
+    })).toBe('settings.codexProvider.dialog.adapterIdRequired');
+  });
+
+  it('exposes a distinct mode description key for each request mode', () => {
+    expect(getCodexProviderModeDescription('codex_sdk')).toBe('settings.codexProvider.dialog.modeDescription.codex_sdk');
+    expect(getCodexProviderModeDescription('cc_switch_proxy')).toBe('settings.codexProvider.dialog.modeDescription.cc_switch_proxy');
+    expect(getCodexProviderModeDescription('custom_adapter')).toBe('settings.codexProvider.dialog.modeDescription.custom_adapter');
   });
 });

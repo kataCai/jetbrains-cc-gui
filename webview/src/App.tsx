@@ -142,6 +142,7 @@ const App = () => {
   }, [customSessionTitle]);
 
   const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const forceCreateNewSessionRef = useRef<(() => void) | null>(null);
   const [anchorCollapsedCount, setAnchorCollapsedCount] = useState(0);
   const handleMessageNodeRef = useCallback((id: string, node: HTMLDivElement | null) => {
     if (node) {
@@ -180,6 +181,18 @@ const App = () => {
     sendBridgeEvent('restart_session');
     setTaskReminderRequest(null);
   }, [setCurrentView]);
+
+  /**
+   * 当 Codex 运行时配置发生变化时，强制切到新会话。
+   * 这里通过 ref 延迟绑定 `forceCreateNewSession`，避免在 hook 初始化阶段提前引用后置变量，
+   * 同时确保 provider、model 或 active provider 变化后不会继续复用旧线程。
+   *
+   * @param reason 触发会话重建的配置变更来源，仅用于诊断日志
+   */
+  const handleCodexConversationConfigChanged = useCallback((reason: 'provider' | 'model' | 'activeProvider') => {
+    console.info('[CodexSessionIsolation] Reset conversation because runtime config changed:', reason);
+    forceCreateNewSessionRef.current?.();
+  }, []);
 
   useEffect(() => {
     window.showTaskReminderDialog = handleShowTaskReminderDialog;
@@ -285,7 +298,11 @@ const App = () => {
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
     handleLongContextChange,
-  } = useModelProviderState({ addToast, t });
+  } = useModelProviderState({
+    addToast,
+    t,
+    onCodexConversationConfigChanged: handleCodexConversationConfigChanged,
+  });
 
   useEffect(() => {
     const preventExternalDrop = (e: DragEvent) => {
@@ -366,6 +383,15 @@ const App = () => {
     addToast,
     t,
   });
+
+  /**
+   * 当 Codex 的 provider 或 model 发生变化时，强制重建会话。
+   * 这里复用既有 `create_new_session` 链路，确保前端 `currentSessionId`
+   * 与后端缓存的 Codex `threadId` 一起失效，避免新配置继续沿用旧线程。
+   *
+   * @param reason 触发重建的配置变化来源，仅用于诊断日志
+   */
+  forceCreateNewSessionRef.current = forceCreateNewSession;
 
   useHistoryLoader({ currentView, currentProvider });
 

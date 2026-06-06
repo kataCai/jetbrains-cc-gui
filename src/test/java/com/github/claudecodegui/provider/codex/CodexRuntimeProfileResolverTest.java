@@ -36,6 +36,10 @@ public class CodexRuntimeProfileResolverTest {
         assertEquals("secret-value", profile.getApiKey());
         assertEquals("apiKeyEnv:MINIMAX_CN_API_KEY", profile.getCredentialSource());
         assertFalse(profile.isCodexCliLogin());
+        assertEquals("codemoss_managed_provider", profile.getForcedModelProvider());
+        assertEquals("", profile.getLocalCodexModelProvider());
+        assertFalse(profile.isLocalConfigConflictDetected());
+        assertEquals("codemoss_managed_provider", profile.getFinalModelProvider());
     }
 
     @Test
@@ -96,11 +100,12 @@ public class CodexRuntimeProfileResolverTest {
     }
 
     @Test
-    public void shouldFallbackToLocalBaseUrlWhenProviderBaseUrlIsMissing() throws Exception {
+    public void shouldUseSdkDefaultWhenProviderBaseUrlIsMissingAndIgnoreLocalBaseUrl() throws Exception {
         JsonObject provider = createManagedProvider();
         provider.remove("baseUrl");
         TestSettingsService settings = new TestSettingsService(provider);
         settings.setCurrentCodexModelState("local-model", "medium", "https://local.example.com/v1");
+        settings.setCurrentCodexModelProviderState("LocalOpenAI");
         Map<String, String> env = new HashMap<>();
         env.put("MINIMAX_CN_API_KEY", "secret-value");
         CodexRuntimeProfileResolver resolver = new CodexRuntimeProfileResolver(settings, env::get);
@@ -109,11 +114,36 @@ public class CodexRuntimeProfileResolverTest {
 
         /**
          * 验证目标：
-         * 当 provider 自身缺少 baseUrl 时，可以回退使用本地 CLI 展示态同步过来的 baseUrl；
-         * 但模型本身仍应来自 provider 配置，而不是顺带把本地 model 一起带入真实请求。
+         * 当 provider 自身缺少 baseUrl 时，托管 provider 只能走 SDK 默认 endpoint，
+         * 不能因为本地 ~/.codex/config.toml 中存在 endpoint 就被污染到真实请求链路。
          */
         assertEquals("MiniMax-M2.7", profile.getModel());
-        assertEquals("https://local.example.com/v1", profile.getBaseUrl());
+        assertEquals("", profile.getBaseUrl());
+        assertEquals("sdk_default", profile.getBaseUrlSource());
+        assertTrue(profile.isFallbackDetected());
+        assertEquals("codemoss_managed_provider", profile.getForcedModelProvider());
+        assertEquals("LocalOpenAI", profile.getLocalCodexModelProvider());
+        assertTrue(profile.isLocalConfigConflictDetected());
+        assertEquals("codemoss_managed_provider", profile.getFinalModelProvider());
+    }
+
+    @Test
+    public void shouldNotReportManagedConflictForCliLoginMode() throws Exception {
+        JsonObject provider = new JsonObject();
+        provider.addProperty("id", CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID);
+        provider.addProperty("name", "Codex CLI Login");
+        provider.addProperty("isCodexCliLoginProvider", true);
+        TestSettingsService settings = new TestSettingsService(provider);
+        settings.setCurrentCodexModelProviderState("LocalOpenAI");
+        CodexRuntimeProfileResolver resolver = new CodexRuntimeProfileResolver(settings, ignored -> "unexpected");
+
+        CodexRuntimeProfile profile = resolver.resolve("gpt-5.4", "high");
+
+        assertTrue(profile.isCodexCliLogin());
+        assertEquals("", profile.getForcedModelProvider());
+        assertEquals("LocalOpenAI", profile.getLocalCodexModelProvider());
+        assertFalse(profile.isLocalConfigConflictDetected());
+        assertEquals("LocalOpenAI", profile.getFinalModelProvider());
     }
 
     @Test
@@ -211,6 +241,23 @@ public class CodexRuntimeProfileResolverTest {
             if (baseUrl != null) {
                 currentCodexModelState.addProperty("baseUrl", baseUrl);
             }
+        }
+
+        /**
+         * 为测试注入本地 ~/.codex/config.toml 中声明的 model_provider。
+         * 该字段只用于诊断，帮助验证托管 provider 是否正确暴露“GUI 命中但本地仍有干扰风险”的状态。
+         *
+         * @param modelProvider 本地配置中的 model_provider；传入空值表示清空该诊断字段
+         */
+        void setCurrentCodexModelProviderState(String modelProvider) {
+            if (currentCodexModelState == null || currentCodexModelState.size() == 0) {
+                currentCodexModelState = new JsonObject();
+            }
+            if (modelProvider == null || modelProvider.trim().isEmpty()) {
+                currentCodexModelState.remove("modelProvider");
+                return;
+            }
+            currentCodexModelState.addProperty("modelProvider", modelProvider.trim());
         }
     }
 }

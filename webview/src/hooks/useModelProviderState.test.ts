@@ -251,4 +251,56 @@ describe('useModelProviderState', () => {
     );
     expect(sendBridgeEvent).toHaveBeenCalledWith('set_model', 'gpt-5.5');
   });
+
+  it('requests a new codex conversation when switching provider or model', () => {
+    const onCodexConversationConfigChanged = vi.fn();
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.handleModelSelect('gpt-5.4');
+    });
+
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('model');
+  });
+
+  it('requests a new codex conversation when active codex provider changes while staying on codex', () => {
+    const onCodexConversationConfigChanged = vi.fn();
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged,
+    }));
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+      });
+    });
+
+    expect(onCodexConversationConfigChanged).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-b',
+        name: 'Provider B',
+      });
+    });
+
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('activeProvider');
+  });
 });

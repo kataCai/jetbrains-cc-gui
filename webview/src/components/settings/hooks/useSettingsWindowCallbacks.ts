@@ -1,7 +1,13 @@
 // hooks/useSettingsWindowCallbacks.ts
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
+import {
+  getCodexRuntimeSourceTranslationKey,
+  resolveCodexRuntimeSource,
+  type ProviderConfig,
+  type CodexProviderConfig,
+  type CodexProviderTestResult,
+} from '../../../types/provider';
 import type { AgentConfig } from '../../../types/agent';
 import type { ImportPreviewResult } from '../../../types/import';
 import type { PromptConfig } from '../../../types/prompt';
@@ -53,6 +59,7 @@ export interface SettingsWindowCallbacksDeps {
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
+  setTestingCodexProviderId: (providerId: string) => void;
   setCommitGenerationEnabled?: (enabled: boolean) => void;
   setAiTitleGenerationEnabled?: (enabled: boolean) => void;
   setStatusBarWidgetEnabled?: (enabled: boolean) => void;
@@ -165,11 +172,14 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       d().showAlert('success', t('toast.switchSuccess'), message);
     };
 
-    window.showTestResult = (success: boolean, message: string) => {
+    window.showTestResult = (payloadOrSuccess: string | boolean, legacyMessage?: string) => {
+      const payload = normalizeCodexProviderTestResultPayload(payloadOrSuccess, legacyMessage);
+      d().setTestingCodexProviderId('');
+      const runtimeSource = resolveCodexRuntimeSource(payload);
       d().showAlert(
-        success ? 'success' : 'error',
-        success ? t('toast.testResultPassed') : t('toast.testResultFailed'),
-        message
+        payload.success ? 'success' : 'error',
+        payload.success ? t('toast.testResultPassed') : t('toast.testResultFailed'),
+        formatCodexProviderTestResultMessage(payload, t, runtimeSource)
       );
     };
 
@@ -544,4 +554,130 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
+}
+
+/**
+ * 兼容旧版 `(success, message)` 与新版结构化 JSON payload 两种 showTestResult 回调格式。
+ * 这样可以在 Java 侧逐步升级的同时，保证旧版本返回值不会让设置页直接失效。
+ *
+ * @param payloadOrSuccess 结构化 JSON 字符串，或旧版 success 布尔值
+ * @param legacyMessage 旧版第二参数消息
+ * @returns 统一后的结构化测试结果
+ */
+function normalizeCodexProviderTestResultPayload(
+  payloadOrSuccess: string | boolean,
+  legacyMessage?: string,
+): CodexProviderTestResult {
+  if (typeof payloadOrSuccess === 'string') {
+    try {
+      return JSON.parse(payloadOrSuccess) as CodexProviderTestResult;
+    } catch {
+      return {
+        success: false,
+        providerId: '',
+        requestMode: 'codex_sdk',
+        model: '',
+        resolvedBaseUrl: '',
+        credentialSource: '',
+        transport: 'codex_sdk',
+        effectiveConfigSource: '',
+        fallbackDetected: false,
+        forcedModelProvider: '',
+        localCodexModelProvider: '',
+        localConfigConflictDetected: false,
+        finalModelProvider: '',
+        message: payloadOrSuccess,
+      };
+    }
+  }
+
+  return {
+    success: payloadOrSuccess,
+    providerId: '',
+    requestMode: 'codex_sdk',
+    model: '',
+    resolvedBaseUrl: '',
+    credentialSource: '',
+    transport: 'codex_sdk',
+    effectiveConfigSource: '',
+    fallbackDetected: false,
+    forcedModelProvider: '',
+    localCodexModelProvider: '',
+    localConfigConflictDetected: false,
+    finalModelProvider: '',
+    message: legacyMessage || '',
+  };
+}
+
+/**
+ * 将结构化 provider 测试结果格式化为设置页展示文案。
+ * 文案明确展示真实命中的 provider/model/baseUrl/requestMode，并在检测到 fallback 时追加警告提示。
+ *
+ * @param payload 结构化测试结果
+ * @returns 供 AlertDialog 直接展示的多行消息
+ */
+function formatCodexProviderTestResultMessage(
+  payload: CodexProviderTestResult,
+  t: (key: string, options?: Record<string, string | number>) => string,
+  runtimeSource = resolveCodexRuntimeSource(payload),
+): string {
+  const lines = [payload.message || ''];
+  const managedProviderConfirmed = payload.forcedModelProvider
+    && payload.finalModelProvider
+    && payload.forcedModelProvider === payload.finalModelProvider;
+  lines.push(t('settings.codexProvider.runtimeSourceLabel', {
+    source: t(`settings.codexProvider.runtimeSource.${getCodexRuntimeSourceTranslationKey(runtimeSource)}`),
+  }));
+  if (managedProviderConfirmed) {
+    lines.push(t('settings.codexProvider.testResult.guiProviderConfirmed', {
+      provider: payload.forcedModelProvider || 'unknown',
+      defaultValue: 'GUI managed provider is active for this request: {{provider}}',
+    }));
+  }
+  if (payload.providerId) {
+    lines.push(`providerId=${payload.providerId}`);
+  }
+  if (payload.model) {
+    lines.push(`model=${payload.model}`);
+  }
+  if (payload.requestMode) {
+    lines.push(`requestMode=${payload.requestMode}`);
+  }
+  if (payload.transport) {
+    lines.push(`transport=${payload.transport}`);
+  }
+  if (payload.resolvedBaseUrl) {
+    lines.push(`baseUrl=${payload.resolvedBaseUrl}`);
+  }
+  if (payload.authMode) {
+    lines.push(`authMode=${payload.authMode}`);
+  }
+  if (payload.credentialSource) {
+    lines.push(`credentialSource=${payload.credentialSource}`);
+  }
+  if (payload.endpointSource) {
+    lines.push(`endpointSource=${payload.endpointSource}`);
+  }
+  if (payload.effectiveConfigSource) {
+    lines.push(`effectiveConfigSource=${payload.effectiveConfigSource}`);
+  }
+  if (payload.forcedModelProvider) {
+    lines.push(`forcedModelProvider=${payload.forcedModelProvider}`);
+  }
+  if (payload.localCodexModelProvider) {
+    lines.push(`localCodexModelProvider=${payload.localCodexModelProvider}`);
+  }
+  if (payload.finalModelProvider) {
+    lines.push(`finalModelProvider=${payload.finalModelProvider}`);
+  }
+  if (payload.localConfigConflictDetected) {
+    lines.push(t('settings.codexProvider.testResult.localConfigConflict', {
+      provider: payload.localCodexModelProvider || 'unknown',
+      defaultValue: 'Local Codex CLI default provider may still conflict: {{provider}}',
+    }));
+  }
+  if (payload.fallbackDetected) {
+    lines.push('warning=fallback_detected');
+  }
+  return lines.filter((line) => line && line.trim().length > 0).join('\n');
 }

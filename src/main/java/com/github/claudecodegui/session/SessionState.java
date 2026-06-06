@@ -63,6 +63,12 @@ public class SessionState {
     private volatile String provider = "claude";
     // Codex reasoning effort (thinking depth)
     private volatile String reasoningEffort = "medium";
+    /**
+     * Codex 会话绑定元数据。
+     * 仅在 provider=codex 的场景下使用，用于把 threadId 与具体 provider/model/requestMode 绑定，
+     * 避免继续同一条会话时被当前 active provider 污染。
+     */
+    private volatile CodexSessionBinding codexSessionBinding = null;
     private volatile boolean lastRecovered = false;
     private volatile String lastRecoveryCategory = null;
     private volatile String lastRecoveryAction = null;
@@ -128,6 +134,15 @@ public class SessionState {
 
     public String getReasoningEffort() {
         return reasoningEffort;
+    }
+
+    /**
+     * 获取当前会话记录的 Codex 绑定元数据。
+     *
+     * @return 绑定元数据；若当前不是 Codex 会话或尚未建立绑定则返回 null
+     */
+    public CodexSessionBinding getCodexSessionBinding() {
+        return codexSessionBinding;
     }
 
     /**
@@ -224,6 +239,16 @@ public class SessionState {
 
     public void setReasoningEffort(String reasoningEffort) {
         this.reasoningEffort = reasoningEffort;
+    }
+
+    /**
+     * 设置当前会话的 Codex 绑定元数据。
+     * 该绑定只保存最小非敏感字段，允许在恢复历史会话或继续发送时复用。
+     *
+     * @param codexSessionBinding 新的绑定元数据；传入 null 表示清空绑定
+     */
+    public void setCodexSessionBinding(CodexSessionBinding codexSessionBinding) {
+        this.codexSessionBinding = codexSessionBinding;
     }
 
     /**

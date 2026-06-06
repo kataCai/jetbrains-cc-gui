@@ -3,7 +3,10 @@ import { useTranslation } from 'react-i18next';
 import type { ButtonAreaProps, ModelInfo, PermissionMode, ReasoningEffort } from './types';
 import { ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
 import { CLAUDE_MODELS, CODEX_MODELS, createRuntimeModelInfo } from './types';
-import { STORAGE_KEYS, validateCodexCustomModels } from '../../types/provider';
+import {
+  STORAGE_KEYS,
+  validateCodexCustomModels,
+} from '../../types/provider';
 import type { CodexCustomModel, CodexProviderConfig } from '../../types/provider';
 import { readClaudeModelMapping } from '../../utils/claudeModelMapping';
 import { sendBridgeEvent } from '../../utils/bridge';

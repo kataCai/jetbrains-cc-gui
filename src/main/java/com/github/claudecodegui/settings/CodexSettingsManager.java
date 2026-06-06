@@ -377,6 +377,11 @@ public class CodexSettingsManager {
             result.addProperty("reasoningEffort", ((String) reasoningEffort).trim());
         }
 
+        Object modelProvider = configToml.get("model_provider");
+        if (modelProvider instanceof String && !((String) modelProvider).trim().isEmpty()) {
+            result.addProperty("modelProvider", ((String) modelProvider).trim());
+        }
+
         Object openAiProvider = configToml.get("model_providers");
         if (openAiProvider instanceof Map<?, ?> providerMapObject) {
             Object openAiConfigObject = providerMapObject.get("OpenAI");

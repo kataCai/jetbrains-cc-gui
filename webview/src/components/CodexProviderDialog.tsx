@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   CodexAuthMode,
+  CodexCcSwitchProxyConfig,
+  CodexCustomAdapterConfig,
   CodexCustomModel,
   CodexProviderConfig,
   CodexRequestMode,
 } from '../types/provider';
-import { validateCodexCustomModels } from '../types/provider';
+import { isCodexRequestModeImplemented, validateCodexCustomModels } from '../types/provider';
 
 const GRID_STYLE: React.CSSProperties = { display: 'grid', gap: '12px' };
 const FOOTER_ACTIONS_STYLE: React.CSSProperties = { marginLeft: 'auto', display: 'flex', gap: '8px' };
@@ -19,9 +21,24 @@ const MODEL_ROW_STYLE: React.CSSProperties = {
 };
 const MODEL_HEADER_STYLE: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: '6px' };
 const FORM_LINK_STYLE: React.CSSProperties = { fontSize: '12px', color: 'var(--button-primary-background, #0078d4)' };
+const MODE_SECTION_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gap: '12px',
+  padding: '12px',
+  borderRadius: '8px',
+  border: '1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35))',
+  background: 'var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.06))',
+};
 
 const AUTH_MODE_OPTIONS: CodexAuthMode[] = ['api_key', 'api_key_env', 'codex_cli_login', 'proxy', 'oauth'];
 const REQUEST_MODE_OPTIONS: CodexRequestMode[] = ['codex_sdk', 'cc_switch_proxy', 'custom_adapter'];
+const REQUEST_MODE_WARNING_STYLE: React.CSSProperties = {
+  padding: '10px 12px',
+  borderRadius: '8px',
+  border: '1px solid var(--vscode-inputValidation-warningBorder, #b89500)',
+  background: 'var(--vscode-inputValidation-warningBackground, rgba(184, 149, 0, 0.12))',
+  color: 'var(--vscode-editor-foreground, inherit)',
+};
 
 interface CodexProviderPreset {
   id: string;
@@ -74,6 +91,36 @@ function createEmptyModelRow(): CodexCustomModel {
 }
 
 /**
+ * 创建空的 cc-switch 代理配置。
+ * 该默认值用于新建 provider 或切换到代理模式时初始化表单状态，避免受其它模式遗留字段污染。
+ *
+ * @return 空白的 cc-switch 代理配置对象
+ */
+function createEmptyCcSwitchProxyConfig(): CodexCcSwitchProxyConfig {
+  return {
+    proxyEndpoint: '',
+    providerRoute: '',
+    requestPath: '',
+    requestHeaders: {},
+  };
+}
+
+/**
+ * 创建空的自定义 adapter 配置。
+ * 该默认值用于新建 provider 或切换到 adapter 模式时初始化表单状态，确保 adapter 专属字段有稳定的起始值。
+ *
+ * @return 空白的自定义 adapter 配置对象
+ */
+function createEmptyCustomAdapterConfig(): CodexCustomAdapterConfig {
+  return {
+    adapterId: '',
+    adapterEndpoint: '',
+    adapterHeaders: {},
+    adapterExtras: {},
+  };
+}
+
+/**
  * 将运行时模型定义转换成适合表单编辑的行数据。
  * 当 label 与 id 相同时时，编辑态不重复回填显示名称，避免形成两个完全相同的输入值。
  */
@@ -100,6 +147,140 @@ function maskApiKey(value?: string): string {
     return trimmedValue ? '******' : '';
   }
   return `${trimmedValue.slice(0, 4)}******${trimmedValue.slice(-4)}`;
+}
+
+/**
+ * 将对象安全序列化为格式化 JSON 文本。
+ * 该方法只负责 UI 文本呈现；当对象为空或未定义时统一回退为 `{}`，避免 textarea 出现 `undefined`。
+ *
+ * @param value 需要展示到表单中的 JSON 对象
+ * @return 格式化后的 JSON 文本
+ */
+function stringifyJsonObject(value?: Record<string, unknown>): string {
+  return JSON.stringify(value || {}, null, 2);
+}
+
+/**
+ * 解析 JSON 文本并确保结果是普通对象。
+ * 该方法用于模式专属 JSON 输入框的保存前校验，避免把数组、字符串或非法 JSON 直接写入 provider 配置。
+ *
+ * @param text 用户在 textarea 中输入的 JSON 文本
+ * @return 成功时返回对象；失败时返回 null
+ */
+function parseJsonObjectText(text: string): Record<string, unknown> | null {
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(trimmedText);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 解析“值必须全部是字符串”的 JSON 对象。
+ * 该方法用于请求头类字段，避免把数字、布尔值或嵌套对象误写入 `Record<string, string>` 配置。
+ *
+ * @param text 用户输入的 JSON 文本
+ * @return 成功时返回字符串 map；失败时返回 null
+ */
+function parseStringMapText(text: string): Record<string, string> | null {
+  const parsedObject = parseJsonObjectText(text);
+  if (parsedObject == null) {
+    return null;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsedObject)) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+/**
+ * 返回请求模式对应的文案 key。
+ * 该方法把模式说明从渲染逻辑中抽离出来，便于测试覆盖，也便于后续补充多语言文案。
+ *
+ * @param requestMode 当前选中的请求模式
+ * @return 模式说明文案 key
+ */
+export function getCodexProviderModeDescription(requestMode: CodexRequestMode): string {
+  return `settings.codexProvider.dialog.modeDescription.${requestMode}`;
+}
+
+export interface CodexProviderDraftValidationInput {
+  providerName: string;
+  authMode: CodexAuthMode;
+  requestMode: CodexRequestMode;
+  baseUrl: string;
+  apiKey: string;
+  apiKeyEnv: string;
+  normalizedModels: CodexCustomModel[];
+  ccSwitchProxy: CodexCcSwitchProxyConfig;
+  customAdapter: CodexCustomAdapterConfig;
+}
+
+/**
+ * 对当前表单草稿执行模式级校验。
+ * 该方法只负责“当前模式哪些字段必须存在”的规则判断，不处理 JSON 解析等格式问题；格式错误由保存前的专门解析逻辑兜底。
+ *
+ * @param draft 当前表单草稿的归一化输入
+ * @return 校验失败时返回对应的 i18n key；全部通过时返回 null
+ */
+export function validateCodexProviderDraft(draft: CodexProviderDraftValidationInput): string | null {
+  if (!draft.providerName.trim()) {
+    return 'settings.codexProvider.dialog.nameRequired';
+  }
+  if ((draft.authMode === 'api_key' || draft.authMode === 'api_key_env' || draft.authMode === 'proxy')
+    && !draft.apiKey.trim()
+    && !draft.apiKeyEnv.trim()) {
+    return 'settings.codexProvider.dialog.apiKeyOrEnvRequired';
+  }
+  if (draft.normalizedModels.length === 0 && draft.authMode !== 'codex_cli_login') {
+    return 'settings.codexProvider.dialog.modelsRequired';
+  }
+  if (draft.requestMode === 'codex_sdk' && !draft.baseUrl.trim()) {
+    return 'settings.codexProvider.dialog.baseUrlRequired';
+  }
+  if (draft.requestMode === 'cc_switch_proxy') {
+    if (!draft.ccSwitchProxy.proxyEndpoint?.trim()) {
+      return 'settings.codexProvider.dialog.proxyEndpointRequired';
+    }
+    if (!draft.ccSwitchProxy.providerRoute?.trim()) {
+      return 'settings.codexProvider.dialog.providerRouteRequired';
+    }
+  }
+  if (draft.requestMode === 'custom_adapter') {
+    if (!draft.customAdapter.adapterId?.trim()) {
+      return 'settings.codexProvider.dialog.adapterIdRequired';
+    }
+    if (!draft.customAdapter.adapterEndpoint?.trim()) {
+      return 'settings.codexProvider.dialog.adapterEndpointRequired';
+    }
+  }
+  return null;
+}
+
+/**
+ * 判断当前表单所选请求模式是否属于“仅保留兼容、当前未落地”的状态。
+ * 该判断同时用于：
+ * 1. 新建场景禁用未实现模式选项；
+ * 2. 编辑历史 provider 时展示风险提示；
+ * 3. 禁止继续保存或激活未实现模式，避免制造新的假配置。
+ *
+ * @param mode 当前表单中的请求模式
+ * @return `true` 表示当前模式尚未落地
+ */
+function isUnavailableRequestMode(mode: CodexRequestMode): boolean {
+  return !isCodexRequestModeImplemented(mode);
 }
 
 interface CodexProviderDialogProps {
@@ -159,15 +340,24 @@ export default function CodexProviderDialog({
   const [apiKey, setApiKey] = useState('');
   const [apiKeyEnv, setApiKeyEnv] = useState('');
   const [models, setModels] = useState<CodexCustomModel[]>([createEmptyModelRow()]);
+  const [ccSwitchProxy, setCcSwitchProxy] = useState<CodexCcSwitchProxyConfig>(createEmptyCcSwitchProxyConfig());
+  const [customAdapter, setCustomAdapter] = useState<CodexCustomAdapterConfig>(createEmptyCustomAdapterConfig());
   const [showApiKey, setShowApiKey] = useState(false);
   const [showAdvancedJsonEditor, setShowAdvancedJsonEditor] = useState(false);
   const [modelsJsonText, setModelsJsonText] = useState('[]');
+  const [proxyHeadersJsonText, setProxyHeadersJsonText] = useState('{}');
+  const [adapterHeadersJsonText, setAdapterHeadersJsonText] = useState('{}');
+  const [adapterExtrasJsonText, setAdapterExtrasJsonText] = useState('{}');
 
   const selectedPreset = useMemo(
     () => CODEX_PROVIDER_PRESETS.find((preset) => preset.id === providerPreset),
     [providerPreset],
   );
   const maskedApiKey = useMemo(() => maskApiKey(apiKey), [apiKey]);
+  const requestModeUnavailable = useMemo(() => isUnavailableRequestMode(requestMode), [requestMode]);
+  const isCodexSdkMode = requestMode === 'codex_sdk';
+  const isCcSwitchProxyMode = requestMode === 'cc_switch_proxy';
+  const isCustomAdapterMode = requestMode === 'custom_adapter';
 
   /**
    * 将 provider 数据投影到结构化表单。
@@ -188,6 +378,8 @@ export default function CodexProviderDialog({
       setBaseUrl(provider.baseUrl || '');
       setApiKey(provider.apiKey || '');
       setApiKeyEnv(provider.apiKeyEnv || '');
+      setCcSwitchProxy(provider.ccSwitchProxy || createEmptyCcSwitchProxyConfig());
+      setCustomAdapter(provider.customAdapter || createEmptyCustomAdapterConfig());
       setModels(
         provider.models && provider.models.length > 0
           ? provider.models.map(createEditableModelRow)
@@ -208,6 +400,8 @@ export default function CodexProviderDialog({
     setBaseUrl(initialProviderData?.baseUrl || '');
     setApiKey(initialProviderData?.apiKey || '');
     setApiKeyEnv(initialProviderData?.apiKeyEnv || '');
+    setCcSwitchProxy(initialProviderData?.ccSwitchProxy || createEmptyCcSwitchProxyConfig());
+    setCustomAdapter(initialProviderData?.customAdapter || createEmptyCustomAdapterConfig());
     setModels(
       initialProviderData?.models && initialProviderData.models.length > 0
         ? initialProviderData.models.map(createEditableModelRow)
@@ -220,6 +414,18 @@ export default function CodexProviderDialog({
   useEffect(() => {
     setModelsJsonText(serializeModelsJson(models));
   }, [models]);
+
+  useEffect(() => {
+    setProxyHeadersJsonText(stringifyJsonObject(ccSwitchProxy.requestHeaders));
+  }, [ccSwitchProxy.requestHeaders]);
+
+  useEffect(() => {
+    setAdapterHeadersJsonText(stringifyJsonObject(customAdapter.adapterHeaders));
+  }, [customAdapter.adapterHeaders]);
+
+  useEffect(() => {
+    setAdapterExtrasJsonText(stringifyJsonObject(customAdapter.adapterExtras as Record<string, unknown> | undefined));
+  }, [customAdapter.adapterExtras]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -253,12 +459,36 @@ export default function CodexProviderDialog({
     setWebsiteUrl(nextPreset.websiteUrl);
     setApiKeyApplyUrl(nextPreset.apiKeyApplyUrl);
     setBaseUrl(nextPreset.baseUrl);
+    setCcSwitchProxy(createEmptyCcSwitchProxyConfig());
+    setCustomAdapter(createEmptyCustomAdapterConfig());
     setModels(
       nextPreset.models.length > 0
         ? nextPreset.models.map(createEditableModelRow)
         : [createEmptyModelRow()],
     );
   };
+
+  /**
+   * 更新 cc-switch 代理模式下的单个字段。
+   * 该方法只负责维护代理模式局部状态，避免把模式专属字段混入通用表单更新逻辑。
+   *
+   * @param field 需要更新的代理配置字段
+   * @param value 新值
+   */
+  function handleCcSwitchProxyFieldChange(field: keyof CodexCcSwitchProxyConfig, value: string) {
+    setCcSwitchProxy((prev) => ({ ...prev, [field]: value }));
+  }
+
+  /**
+   * 更新自定义 adapter 模式下的单个字段。
+   * 该方法用于维护 adapter 模式的专属输入，确保切换模式时不会破坏其它模式的状态。
+   *
+   * @param field 需要更新的 adapter 配置字段
+   * @param value 新值
+   */
+  function handleCustomAdapterFieldChange(field: keyof CodexCustomAdapterConfig, value: string) {
+    setCustomAdapter((prev) => ({ ...prev, [field]: value }));
+  }
 
   /**
    * 更新指定模型行。
@@ -315,20 +545,47 @@ export default function CodexProviderDialog({
    * @param autoActivate 是否在保存后立即切换为当前 provider
    */
   const handleSave = (autoActivate: boolean) => {
-    if (!providerName.trim()) {
-      addToast(t('settings.codexProvider.dialog.nameRequired'), 'error');
+    if (requestModeUnavailable) {
+      addToast(t('settings.codexProvider.dialog.requestModeUnavailableHint'), 'error');
       return;
     }
-    if (!baseUrl.trim()) {
-      addToast(t('settings.codexProvider.dialog.baseUrlRequired'), 'error');
+
+    const parsedProxyHeaders = parseStringMapText(proxyHeadersJsonText);
+    if (isCcSwitchProxyMode && parsedProxyHeaders == null) {
+      addToast(t('settings.codexProvider.dialog.proxyHeadersInvalid', { defaultValue: 'Proxy headers JSON is invalid' }), 'error');
       return;
     }
-    if ((authMode === 'api_key' || authMode === 'api_key_env' || authMode === 'proxy') && !apiKey.trim() && !apiKeyEnv.trim()) {
-      addToast(t('settings.codexProvider.dialog.apiKeyOrEnvRequired'), 'error');
+    const parsedAdapterHeaders = parseStringMapText(adapterHeadersJsonText);
+    if (isCustomAdapterMode && parsedAdapterHeaders == null) {
+      addToast(t('settings.codexProvider.dialog.adapterHeadersInvalid', { defaultValue: 'Adapter headers JSON is invalid' }), 'error');
       return;
     }
-    if (normalizedModels.length === 0 && authMode !== 'codex_cli_login') {
-      addToast(t('settings.codexProvider.dialog.modelsRequired'), 'error');
+    const parsedAdapterExtras = parseJsonObjectText(adapterExtrasJsonText);
+    if (isCustomAdapterMode && parsedAdapterExtras == null) {
+      addToast(t('settings.codexProvider.dialog.adapterExtrasInvalid', { defaultValue: 'Adapter extras JSON is invalid' }), 'error');
+      return;
+    }
+
+    const validationErrorKey = validateCodexProviderDraft({
+      providerName,
+      authMode,
+      requestMode,
+      baseUrl,
+      apiKey,
+      apiKeyEnv,
+      normalizedModels,
+      ccSwitchProxy: {
+        ...ccSwitchProxy,
+        requestHeaders: parsedProxyHeaders || {},
+      },
+      customAdapter: {
+        ...customAdapter,
+        adapterHeaders: parsedAdapterHeaders || {},
+        adapterExtras: parsedAdapterExtras || {},
+      },
+    });
+    if (validationErrorKey) {
+      addToast(t(validationErrorKey), 'error');
       return;
     }
 
@@ -343,10 +600,22 @@ export default function CodexProviderDialog({
       createdAt: provider?.createdAt,
       authMode,
       requestMode,
-      baseUrl: baseUrl.trim() || undefined,
+      baseUrl: isCodexSdkMode ? baseUrl.trim() || undefined : undefined,
       apiKey: apiKey.trim() || undefined,
       apiKeyEnv: apiKeyEnv.trim() || undefined,
       models: normalizedModels,
+      ccSwitchProxy: isCcSwitchProxyMode ? {
+        proxyEndpoint: ccSwitchProxy.proxyEndpoint?.trim() || undefined,
+        providerRoute: ccSwitchProxy.providerRoute?.trim() || undefined,
+        requestPath: ccSwitchProxy.requestPath?.trim() || undefined,
+        requestHeaders: parsedProxyHeaders || {},
+      } : undefined,
+      customAdapter: isCustomAdapterMode ? {
+        adapterId: customAdapter.adapterId?.trim() || undefined,
+        adapterEndpoint: customAdapter.adapterEndpoint?.trim() || undefined,
+        adapterHeaders: parsedAdapterHeaders || {},
+        adapterExtras: parsedAdapterExtras || {},
+      } : undefined,
       autoActivate,
     };
 
@@ -380,6 +649,12 @@ export default function CodexProviderDialog({
           </p>
 
           <div style={GRID_STYLE}>
+            {requestModeUnavailable && (
+              <div className="form-group" style={REQUEST_MODE_WARNING_STYLE}>
+                {t('settings.codexProvider.dialog.requestModeUnavailableHint')}
+              </div>
+            )}
+
             <div className="form-group">
               <label htmlFor="providerPreset">{t('settings.codexProvider.dialog.providerPreset')}</label>
               <select
@@ -485,27 +760,192 @@ export default function CodexProviderDialog({
                 onChange={(e) => setRequestMode(e.target.value as CodexRequestMode)}
               >
                 {REQUEST_MODE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {t(`settings.codexProvider.dialog.requestModeOptions.${option}`)}
+                  <option
+                    key={option}
+                    value={option}
+                    disabled={isUnavailableRequestMode(option)}
+                  >
+                    {isUnavailableRequestMode(option)
+                      ? `${t(`settings.codexProvider.dialog.requestModeOptions.${option}`)}${t('settings.codexProvider.dialog.requestModeUnavailableOptionSuffix')}`
+                      : t(`settings.codexProvider.dialog.requestModeOptions.${option}`)}
                   </option>
                 ))}
               </select>
-              <small className="form-hint">{t('settings.codexProvider.dialog.requestModeHint')}</small>
+              <small className="form-hint">
+                {requestModeUnavailable
+                  ? t('settings.codexProvider.dialog.requestModeUnavailableHint')
+                  : t(getCodexProviderModeDescription(requestMode), {
+                    defaultValue: t('settings.codexProvider.dialog.requestModeHint'),
+                  })}
+              </small>
             </div>
 
-            <div className="form-group">
-              <label htmlFor="baseUrl">{t('settings.codexProvider.dialog.baseUrl')}</label>
-              <input
-                id="baseUrl"
-                type="text"
-                className="form-input"
-                aria-label={t('settings.codexProvider.dialog.baseUrl')}
-                placeholder={t('settings.codexProvider.dialog.baseUrlPlaceholder')}
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-              />
-              <small className="form-hint">{t('settings.codexProvider.dialog.baseUrlHint')}</small>
-            </div>
+            {isCodexSdkMode && (
+              <div className="form-group">
+                <label htmlFor="baseUrl">{t('settings.codexProvider.dialog.baseUrl')}</label>
+                <input
+                  id="baseUrl"
+                  type="text"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.baseUrl')}
+                  placeholder={t('settings.codexProvider.dialog.baseUrlPlaceholder')}
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                />
+                <small className="form-hint">{t('settings.codexProvider.dialog.baseUrlHint')}</small>
+              </div>
+            )}
+
+            {isCcSwitchProxyMode && (
+              <div className="form-group" style={MODE_SECTION_STYLE}>
+                <label htmlFor="ccSwitchProxyEndpoint">
+                  {t('settings.codexProvider.dialog.ccSwitchProxy.proxyEndpoint', {
+                    defaultValue: 'CC Switch Proxy Endpoint',
+                  })}
+                </label>
+                <input
+                  id="ccSwitchProxyEndpoint"
+                  type="text"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.ccSwitchProxy.proxyEndpoint', {
+                    defaultValue: 'CC Switch Proxy Endpoint',
+                  })}
+                  placeholder={t('settings.codexProvider.dialog.ccSwitchProxy.proxyEndpointPlaceholder', {
+                    defaultValue: 'For example: http://127.0.0.1:15721',
+                  })}
+                  value={ccSwitchProxy.proxyEndpoint || ''}
+                  onChange={(e) => handleCcSwitchProxyFieldChange('proxyEndpoint', e.target.value)}
+                />
+
+                <label htmlFor="ccSwitchProviderRoute">
+                  {t('settings.codexProvider.dialog.ccSwitchProxy.providerRoute', {
+                    defaultValue: 'Provider Route',
+                  })}
+                </label>
+                <input
+                  id="ccSwitchProviderRoute"
+                  type="text"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.ccSwitchProxy.providerRoute', {
+                    defaultValue: 'Provider Route',
+                  })}
+                  placeholder={t('settings.codexProvider.dialog.ccSwitchProxy.providerRoutePlaceholder', {
+                    defaultValue: 'For example: minimax',
+                  })}
+                  value={ccSwitchProxy.providerRoute || ''}
+                  onChange={(e) => handleCcSwitchProxyFieldChange('providerRoute', e.target.value)}
+                />
+
+                <label htmlFor="ccSwitchRequestPath">
+                  {t('settings.codexProvider.dialog.ccSwitchProxy.requestPath', {
+                    defaultValue: 'Request Path',
+                  })}
+                </label>
+                <input
+                  id="ccSwitchRequestPath"
+                  type="text"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.ccSwitchProxy.requestPath', {
+                    defaultValue: 'Request Path',
+                  })}
+                  placeholder={t('settings.codexProvider.dialog.ccSwitchProxy.requestPathPlaceholder', {
+                    defaultValue: 'For example: /v1/responses',
+                  })}
+                  value={ccSwitchProxy.requestPath || ''}
+                  onChange={(e) => handleCcSwitchProxyFieldChange('requestPath', e.target.value)}
+                />
+
+                <label htmlFor="ccSwitchRequestHeaders">
+                  {t('settings.codexProvider.dialog.ccSwitchProxy.requestHeaders', {
+                    defaultValue: 'Proxy Headers JSON',
+                  })}
+                </label>
+                <textarea
+                  id="ccSwitchRequestHeaders"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.ccSwitchProxy.requestHeaders', {
+                    defaultValue: 'Proxy Headers JSON',
+                  })}
+                  rows={4}
+                  value={proxyHeadersJsonText}
+                  onChange={(e) => setProxyHeadersJsonText(e.target.value)}
+                />
+              </div>
+            )}
+
+            {isCustomAdapterMode && (
+              <div className="form-group" style={MODE_SECTION_STYLE}>
+                <label htmlFor="customAdapterId">
+                  {t('settings.codexProvider.dialog.customAdapter.adapterId', {
+                    defaultValue: 'Adapter ID',
+                  })}
+                </label>
+                <input
+                  id="customAdapterId"
+                  type="text"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.customAdapter.adapterId', {
+                    defaultValue: 'Adapter ID',
+                  })}
+                  placeholder={t('settings.codexProvider.dialog.customAdapter.adapterIdPlaceholder', {
+                    defaultValue: 'For example: minimax-adapter',
+                  })}
+                  value={customAdapter.adapterId || ''}
+                  onChange={(e) => handleCustomAdapterFieldChange('adapterId', e.target.value)}
+                />
+
+                <label htmlFor="customAdapterEndpoint">
+                  {t('settings.codexProvider.dialog.customAdapter.adapterEndpoint', {
+                    defaultValue: 'Adapter Endpoint',
+                  })}
+                </label>
+                <input
+                  id="customAdapterEndpoint"
+                  type="text"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.customAdapter.adapterEndpoint', {
+                    defaultValue: 'Adapter Endpoint',
+                  })}
+                  placeholder={t('settings.codexProvider.dialog.customAdapter.adapterEndpointPlaceholder', {
+                    defaultValue: 'For example: http://127.0.0.1:8080/adapter/codex',
+                  })}
+                  value={customAdapter.adapterEndpoint || ''}
+                  onChange={(e) => handleCustomAdapterFieldChange('adapterEndpoint', e.target.value)}
+                />
+
+                <label htmlFor="customAdapterHeaders">
+                  {t('settings.codexProvider.dialog.customAdapter.adapterHeaders', {
+                    defaultValue: 'Adapter Headers JSON',
+                  })}
+                </label>
+                <textarea
+                  id="customAdapterHeaders"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.customAdapter.adapterHeaders', {
+                    defaultValue: 'Adapter Headers JSON',
+                  })}
+                  rows={4}
+                  value={adapterHeadersJsonText}
+                  onChange={(e) => setAdapterHeadersJsonText(e.target.value)}
+                />
+
+                <label htmlFor="customAdapterExtras">
+                  {t('settings.codexProvider.dialog.customAdapter.adapterExtras', {
+                    defaultValue: 'Adapter Extras JSON',
+                  })}
+                </label>
+                <textarea
+                  id="customAdapterExtras"
+                  className="form-input"
+                  aria-label={t('settings.codexProvider.dialog.customAdapter.adapterExtras', {
+                    defaultValue: 'Adapter Extras JSON',
+                  })}
+                  rows={4}
+                  value={adapterExtrasJsonText}
+                  onChange={(e) => setAdapterExtrasJsonText(e.target.value)}
+                />
+              </div>
+            )}
 
             <div className="form-group">
               <label htmlFor="apiKey">{t('settings.codexProvider.dialog.apiKey')}</label>
@@ -635,11 +1075,19 @@ export default function CodexProviderDialog({
               <span className="codicon codicon-close" />
               {t('common.cancel')}
             </button>
-            <button className="btn btn-secondary" onClick={() => handleSave(false)} disabled={!providerName.trim()}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => handleSave(false)}
+              disabled={!providerName.trim() || requestModeUnavailable}
+            >
               <span className="codicon codicon-save" />
               {isAdding ? t('settings.provider.dialog.confirmAdd') : t('settings.provider.dialog.saveChanges')}
             </button>
-            <button className="btn btn-primary" onClick={() => handleSave(true)} disabled={!providerName.trim()}>
+            <button
+              className="btn btn-primary"
+              onClick={() => handleSave(true)}
+              disabled={!providerName.trim() || requestModeUnavailable}
+            >
               <span className="codicon codicon-play" />
               {t('settings.codexProvider.dialog.saveAndActivate')}
             </button>

@@ -179,6 +179,190 @@ export type CodexAuthMode = 'api_key' | 'api_key_env' | 'codex_cli_login' | 'pro
 
 export type CodexRequestMode = 'codex_sdk' | 'cc_switch_proxy' | 'custom_adapter';
 
+/**
+ * CC Switch Proxy 模式专属配置。
+ * 该结构用于描述“请求先打到本地/远端 cc-switch 代理，再由代理转发到真实 provider”的场景。
+ * 当前阶段它主要承担 schema 边界声明和配置持久化职责，真正运行时发送器将在后续任务中消费这些字段。
+ */
+export interface CodexCcSwitchProxyConfig {
+  /** cc-switch 代理入口地址 */
+  proxyEndpoint?: string;
+  /** 代理层内部的目标 provider 路由名 */
+  providerRoute?: string;
+  /** 可选的代理请求路径，用于兼容不同代理入口 */
+  requestPath?: string;
+  /** 需要透传给代理层的额外请求头 */
+  requestHeaders?: Record<string, string>;
+}
+
+/**
+ * Custom Adapter 模式专属配置。
+ * 该结构用于描述“先进入自定义 adapter，再由 adapter 自行完成协议转换与上游调用”的场景。
+ * 当前阶段先固化字段边界，后续运行时发送器再基于这些字段接入真实请求链路。
+ */
+export interface CodexCustomAdapterConfig {
+  /** adapter 标识符，用于区分不同转换器实现 */
+  adapterId?: string;
+  /** adapter HTTP 入口地址 */
+  adapterEndpoint?: string;
+  /** 需要透传给 adapter 的额外请求头 */
+  adapterHeaders?: Record<string, string>;
+  /** 需要透传给 adapter 的额外 JSON 参数 */
+  adapterExtras?: Record<string, unknown>;
+}
+
+/**
+ * Codex provider 字段分组。
+ * 该结构把“所有模式通用字段”和“某个 requestMode 专属字段”显式拆开，供后续 UI 动态渲染与校验规则复用。
+ */
+export interface CodexProviderModeFieldGroups {
+  commonFields: string[];
+  modeFields: string[];
+}
+
+const CODEX_PROVIDER_COMMON_FIELDS: string[] = [
+  'id',
+  'name',
+  'providerType',
+  'presetId',
+  'remark',
+  'websiteUrl',
+  'apiKeyApplyUrl',
+  'createdAt',
+  'isActive',
+  'authMode',
+  'requestMode',
+  'apiKey',
+  'apiKeyEnv',
+  'apiKeyMasked',
+  'configToml',
+  'authJson',
+  'customModels',
+  'autoActivate',
+];
+
+const CODEX_PROVIDER_MODE_FIELDS: Record<CodexRequestMode, string[]> = {
+  codex_sdk: ['baseUrl', 'models'],
+  cc_switch_proxy: [
+    'models',
+    'ccSwitchProxy.proxyEndpoint',
+    'ccSwitchProxy.providerRoute',
+    'ccSwitchProxy.requestPath',
+    'ccSwitchProxy.requestHeaders',
+  ],
+  custom_adapter: [
+    'models',
+    'customAdapter.adapterId',
+    'customAdapter.adapterEndpoint',
+    'customAdapter.adapterHeaders',
+    'customAdapter.adapterExtras',
+  ],
+};
+
+/**
+ * 返回指定请求模式的字段分组。
+ * 该方法只负责声明 schema 边界，不参与运行时分发；后续 Task 8 会复用它驱动表单动态渲染与校验。
+ *
+ * @param requestMode 当前 provider 的请求模式
+ * @return 通用字段与模式专属字段列表
+ */
+export function getCodexProviderModeFieldGroups(requestMode: CodexRequestMode): CodexProviderModeFieldGroups {
+  return {
+    commonFields: [...CODEX_PROVIDER_COMMON_FIELDS],
+    modeFields: [...CODEX_PROVIDER_MODE_FIELDS[requestMode]],
+  };
+}
+
+/**
+ * 判断当前请求模式是否已经在现有运行时链路中真正落地。
+ * 现阶段只有 `codex_sdk` 已具备完整发送链路；
+ * `cc_switch_proxy` 与 `custom_adapter` 仍处于 schema / UI 预留阶段，
+ * 因此只能作为历史兼容值保留，不能继续作为可运行能力误导用户。
+ *
+ * @param requestMode 当前 provider 选择的请求模式
+ * @return `true` 表示当前版本已实现；`false` 表示仍为预留模式
+ */
+export function isCodexRequestModeImplemented(requestMode?: CodexRequestMode | string): boolean {
+  return !requestMode || requestMode === 'codex_sdk';
+}
+
+/**
+ * 运行时来源标签的稳定枚举。
+ * 该值只服务于前端展示层，用于把后端诊断字段折叠成用户能快速理解的四类来源状态。
+ */
+export type CodexRuntimeSource =
+  | 'managedProvider'
+  | 'codexLocalConfig'
+  | 'sdkDefault'
+  | 'proxyFallback';
+
+/**
+ * 运行时来源诊断输入。
+ * 该结构被 `CodexProviderConfig` 与 `CodexProviderTestResult` 共用，
+ * 这样设置页、聊天区和测试结果弹窗可以复用同一套映射逻辑。
+ */
+export interface CodexRuntimeSourceDiagnosticInput {
+  effectiveConfigSource?: string;
+  endpointSource?: string;
+  fallbackDetected?: boolean;
+  forcedModelProvider?: string;
+  localCodexModelProvider?: string;
+  localConfigConflictDetected?: boolean;
+  finalModelProvider?: string;
+}
+
+/**
+ * 判断当前对象是否已经携带运行时来源诊断字段。
+ * 这里不能只看 `fallbackDetected`，因为 `false` 也是一个有意义的显式诊断结果。
+ *
+ * @param input 候选诊断对象
+ * @return `true` 表示可以安全渲染 runtime source；`false` 表示当前对象还没有来源诊断摘要
+ */
+export function hasCodexRuntimeSourceDiagnostics(input?: CodexRuntimeSourceDiagnosticInput | null): boolean {
+  if (!input) {
+    return false;
+  }
+  return typeof input.fallbackDetected === 'boolean'
+    || typeof input.effectiveConfigSource === 'string' && input.effectiveConfigSource.trim().length > 0
+    || typeof input.endpointSource === 'string' && input.endpointSource.trim().length > 0;
+}
+
+/**
+ * 将底层诊断字段折叠成稳定的前端 runtime source 分类。
+ * 规则优先级说明：
+ * 1. 只要后端显式标记发生 fallback，就优先展示为 `proxyFallback`；
+ * 2. CLI Login / 本地 Codex 配置读取路径展示为 `codexLocalConfig`；
+ * 3. 没有 provider endpoint、直接落到 SDK 默认值时展示为 `sdkDefault`；
+ * 4. 其余情况统一视为命中托管 provider。
+ *
+ * @param input 后端返回的运行时诊断摘要
+ * @return 适合前端展示的来源分类
+ */
+export function resolveCodexRuntimeSource(input?: CodexRuntimeSourceDiagnosticInput | null): CodexRuntimeSource {
+  if (input?.fallbackDetected) {
+    return 'proxyFallback';
+  }
+  if (input?.effectiveConfigSource === 'codex_cli_login'
+    || input?.endpointSource === 'codex_cli_login'
+    || input?.endpointSource === 'codex_local_config') {
+    return 'codexLocalConfig';
+  }
+  if (input?.endpointSource === 'sdk_default') {
+    return 'sdkDefault';
+  }
+  return 'managedProvider';
+}
+
+/**
+ * 将运行时来源枚举转换为 i18n key 后缀，供不同界面复用。
+ *
+ * @param source 已归一化的运行时来源分类
+ * @return 对应翻译 key 的尾部标识
+ */
+export function getCodexRuntimeSourceTranslationKey(source: CodexRuntimeSource): string {
+  return source;
+}
+
 export interface CodexSelectedModel {
   providerId: string;
   modelId: string;
@@ -218,6 +402,10 @@ export interface CodexProviderConfig {
   apiKeyEnv?: string;
   /** Runtime model list owned by this provider */
   models?: CodexCustomModel[];
+  /** cc-switch 代理模式专属配置 */
+  ccSwitchProxy?: CodexCcSwitchProxyConfig;
+  /** 自定义 adapter 模式专属配置 */
+  customAdapter?: CodexCustomAdapterConfig;
   /** Optional masked API key preview used by UI */
   apiKeyMasked?: string;
   /** config.toml content (raw string) */
@@ -226,8 +414,45 @@ export interface CodexProviderConfig {
   authJson?: string;
   /** Custom model list */
   customModels?: CodexCustomModel[];
+  /** 当前运行时实际生效的配置来源，用于界面提示是否命中托管 provider 或本地配置 */
+  effectiveConfigSource?: string;
+  /** 当前运行时 endpoint 的来源，用于区分 provider、本地配置或 SDK 默认值 */
+  endpointSource?: string;
+  /** 是否在运行时解析阶段发生了 fallback，用于显式暴露“看起来没走托管配置”的情况 */
+  fallbackDetected?: boolean;
+  /** 当前请求级强制注入的 model_provider 诊断值 */
+  forcedModelProvider?: string;
+  /** 本地 ~/.codex/config.toml 中声明的 model_provider */
+  localCodexModelProvider?: string;
+  /** 当前托管 provider 是否与本地 CLI 默认 provider 存在冲突风险 */
+  localConfigConflictDetected?: boolean;
+  /** 诊断语义下最终应生效的 model_provider */
+  finalModelProvider?: string;
   /** Whether to auto-activate after saving */
   autoActivate?: boolean;
+}
+
+/**
+ * Codex provider 连通性测试结果。
+ * 该结构用于把后端真实运行时解析结果返回给设置页，便于用户确认实际命中的 provider、endpoint 与凭据来源。
+ */
+export interface CodexProviderTestResult {
+  success: boolean;
+  providerId: string;
+  requestMode: string;
+  model: string;
+  resolvedBaseUrl: string;
+  credentialSource: string;
+  transport: string;
+  effectiveConfigSource: string;
+  fallbackDetected: boolean;
+  authMode?: string;
+  endpointSource?: string;
+  forcedModelProvider?: string;
+  localCodexModelProvider?: string;
+  localConfigConflictDetected?: boolean;
+  finalModelProvider?: string;
+  message: string;
 }
 
 // ============ Provider Presets ============

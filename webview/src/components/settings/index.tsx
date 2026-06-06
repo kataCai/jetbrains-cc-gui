@@ -258,8 +258,10 @@ const SettingsView = ({
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
+    testingCodexProviderId,
     setCodexLoading,
     setCodexConfigLoading,
+    setTestingCodexProviderId,
   } = useCodexProviderManagement({
     onSuccess: (msg) => addToast(msg, 'success'),
   });
@@ -318,6 +320,7 @@ const SettingsView = ({
     setLoading,
     setCodexLoading,
     setCodexConfigLoading,
+    setTestingCodexProviderId,
     updateProviders,
     updateActiveProvider,
     loadProviders,
@@ -569,6 +572,7 @@ const SettingsView = ({
               onSwitchProvider={handleSwitchProvider}
               codexProviders={codexProviders}
               codexLoading={codexLoading}
+              testingCodexProviderId={testingCodexProviderId}
               onAddCodexProvider={handleAddCodexProvider}
               onCreateCodexProviderFromAlias={handleAddCodexProviderWithDraft}
               onEditCodexProvider={handleEditCodexProvider}

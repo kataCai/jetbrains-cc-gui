@@ -4,9 +4,29 @@ import { useSettingsWindowCallbacks, type SettingsWindowCallbacksDeps } from './
 import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
 import type { PromptEnhancerConfig } from '../../../types/promptEnhancer';
 
+const translations: Record<string, string> = {
+  'settings.codexProvider.runtimeSourceLabel': 'Runtime Source: {{source}}',
+  'settings.codexProvider.runtimeSource.managedProvider': 'Managed Provider',
+  'settings.codexProvider.runtimeSource.codexLocalConfig': 'Codex Local Config',
+  'settings.codexProvider.runtimeSource.sdkDefault': 'SDK Default',
+  'settings.codexProvider.runtimeSource.proxyFallback': 'Proxy Fallback',
+};
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: Record<string, string | number>) => {
+      const template = translations[key];
+      if (!template) {
+        return key;
+      }
+      if (!options) {
+        return template;
+      }
+      return Object.entries(options).reduce(
+        (result, [token, value]) => result.replace(`{{${token}}}`, String(value)),
+        template
+      );
+    },
   }),
 }));
 
@@ -31,6 +51,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setLoading: vi.fn(),
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
+    setTestingCodexProviderId: vi.fn(),
     setCommitGenerationEnabled: vi.fn(),
     setAiTitleGenerationEnabled: vi.fn(),
     setStatusBarWidgetEnabled: vi.fn(),
@@ -296,25 +317,54 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
    * 验证 provider 测试结果走独立回调，不再复用切换成功提示。
    * 断言意图：测试成功与失败应分别映射到独立标题，避免与 switch toast 混淆。
    */
-  it('shows dedicated alerts for codex provider test results', () => {
+  it('shows dedicated alerts for structured codex provider test results', () => {
     const deps = createDeps();
     renderHook(() => useSettingsWindowCallbacks(deps));
 
-    window.showTestResult?.(true, 'provider ok');
-    window.showTestResult?.(false, 'provider failed');
+    window.showTestResult?.(JSON.stringify({
+      success: true,
+      providerId: 'minimax-cn',
+      requestMode: 'codex_sdk',
+      model: 'MiniMax-M2.5',
+      resolvedBaseUrl: 'https://api.minimaxi.com/v1',
+      credentialSource: 'apiKeyEnv:MINIMAX_API_KEY',
+      transport: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+      fallbackDetected: false,
+      endpointSource: 'provider',
+      authMode: 'api_key_env',
+      message: 'provider ok',
+    }));
+    window.showTestResult?.(JSON.stringify({
+      success: false,
+      providerId: 'minimax-cn',
+      requestMode: 'codex_sdk',
+      model: 'MiniMax-M2.5',
+      resolvedBaseUrl: 'https://local.example.com/v1',
+      credentialSource: 'apiKeyEnv:MINIMAX_API_KEY',
+      transport: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+      fallbackDetected: true,
+      endpointSource: 'codex_local_config',
+      authMode: 'api_key_env',
+      message: 'provider failed',
+    }));
 
     expect(deps.showAlert).toHaveBeenNthCalledWith(
       1,
       'success',
       'toast.testResultPassed',
-      'provider ok'
+      expect.stringContaining('provider ok')
     );
     expect(deps.showAlert).toHaveBeenNthCalledWith(
       2,
       'error',
       'toast.testResultFailed',
-      'provider failed'
+      expect.stringContaining('provider failed')
     );
+    expect((deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[0]?.[2]).toContain('Runtime Source: Managed Provider');
+    expect((deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[1]?.[2]).toContain('Runtime Source: Proxy Fallback');
+    expect(deps.setTestingCodexProviderId).toHaveBeenCalledWith('');
   });
 
   /**

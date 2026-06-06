@@ -33,4 +33,24 @@ public class TabSessionStateTitleBindingModeTest {
 
         assertEquals("MANUAL_CUSTOM", copied.getEffectiveTitleBindingMode());
     }
+
+    /**
+     * 验证 Tab 快照复制时会保留 Codex 会话绑定相关字段。
+     * 这是历史会话在 Tab 级恢复 provider/model 绑定的前提，避免只复制标题却丢失运行时来源信息。
+     */
+    @Test
+    public void shouldCopyCodexBindingFieldsWhenDuplicatingSessionState() {
+        TabStateService.TabSessionState state = new TabStateService.TabSessionState();
+        state.codexProviderId = "minimax-provider";
+        state.codexRequestMode = "codex_sdk";
+        state.codexBaseUrlSource = "provider";
+        state.codexEffectiveConfigSource = "managed_provider";
+
+        TabStateService.TabSessionState copied = state.copy();
+
+        assertEquals("minimax-provider", copied.codexProviderId);
+        assertEquals("codex_sdk", copied.codexRequestMode);
+        assertEquals("provider", copied.codexBaseUrlSource);
+        assertEquals("managed_provider", copied.codexEffectiveConfigSource);
+    }
 }

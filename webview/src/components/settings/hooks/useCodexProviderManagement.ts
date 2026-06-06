@@ -41,6 +41,8 @@ function buildCodexProviderPayload(providerData: CodexProviderConfig) {
     websiteUrl: providerData.websiteUrl?.trim() || undefined,
     apiKeyApplyUrl: providerData.apiKeyApplyUrl?.trim() || undefined,
     models: providerData.models && providerData.models.length > 0 ? providerData.models : undefined,
+    ccSwitchProxy: providerData.ccSwitchProxy || undefined,
+    customAdapter: providerData.customAdapter || undefined,
   };
 }
 
@@ -69,6 +71,9 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     isOpen: false,
     provider: null,
   });
+  // 当前正在执行“测试连接”的 provider id。
+  // 该状态只服务于设置页按钮级反馈，避免用户误判“点击后没有反应”。
+  const [testingCodexProviderId, setTestingCodexProviderId] = useState('');
 
   // Load Codex provider list
   const loadCodexProviders = useCallback(() => {
@@ -86,7 +91,9 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   const updateActiveCodexProvider = useCallback((activeProvider: CodexProviderConfig) => {
     if (activeProvider) {
       setCodexProviders((prev) =>
-        prev.map((p) => ({ ...p, isActive: p.id === activeProvider.id }))
+        prev.map((p) => (p.id === activeProvider.id
+          ? { ...p, ...activeProvider, isActive: true }
+          : { ...p, isActive: false }))
       );
       // Custom models are now plugin-level, managed by PluginCustomModels in ProviderTabSection.
       // No longer sync provider-level customModels to localStorage.
@@ -180,6 +187,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   }, []);
 
   const handleTestCodexProvider = useCallback((provider: CodexProviderConfig) => {
+    setTestingCodexProviderId(provider.id);
     sendToJava(`test_codex_provider:${JSON.stringify({ id: provider.id })}`);
   }, []);
 
@@ -211,6 +219,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
+    testingCodexProviderId,
     // Methods
     loadCodexProviders,
     updateCodexProviders,
@@ -230,6 +239,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     // Setter
     setCodexLoading,
     setCodexConfigLoading,
+    setTestingCodexProviderId,
   };
 }
 

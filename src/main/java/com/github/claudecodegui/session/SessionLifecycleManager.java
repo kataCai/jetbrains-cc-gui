@@ -209,6 +209,7 @@ public class SessionLifecycleManager {
             String workingDir = (projectPath != null && new File(projectPath).exists())
                                     ? projectPath : determineWorkingDirectory();
             newSession.setSessionInfo(sessionId, workingDir);
+            restoreCodexSessionBindingIfPresent(newSession, sessionId);
 
             newSession.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
                 replayRestoredSessionTitle(sessionId);
@@ -268,6 +269,48 @@ public class SessionLifecycleManager {
         }
 
         return projectPath;
+    }
+
+    /**
+     * 恢复 Codex 会话绑定元数据。
+     * 该恢复只依赖插件侧持久化的非敏感绑定字段，不改写 Codex 原生历史文件，
+     * 目的是在历史会话继续发送时仍优先命中原来的 provider/model。
+     *
+     * @param session 待恢复绑定的会话对象
+     * @param sessionId 当前加载的会话 ID
+     */
+    protected void restoreCodexSessionBindingIfPresent(ClaudeSession session, String sessionId) {
+        if (session == null || sessionId == null || sessionId.trim().isEmpty()) {
+            return;
+        }
+
+        try {
+            CodexSessionBinding binding = createSettingsService().getCodexSessionBinding(sessionId);
+            if (binding == null || !binding.isMeaningful()) {
+                return;
+            }
+
+            session.setProvider("codex");
+            if (binding.getModel() != null && !binding.getModel().trim().isEmpty()) {
+                session.setModel(binding.getModel());
+            }
+            session.getState().setCodexSessionBinding(binding);
+            LOG.info("[CODEX_RUNTIME] Restored Codex session binding during history load. sessionId="
+                    + sessionId + ", providerId=" + binding.getProviderId() + ", model=" + binding.getModel());
+        } catch (Exception e) {
+            LOG.warn("[CODEX_RUNTIME] Failed to restore Codex session binding during history load: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 创建设置服务实例。
+     * 之所以保留单独工厂方法，是为了让单元测试能够稳定替换配置来源，而不影响生产逻辑。
+     *
+     * @return 设置服务实例
+     */
+    protected CodemossSettingsService createSettingsService() {
+        return new CodemossSettingsService();
     }
 
     /**

@@ -11,6 +11,7 @@ import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.common.DaemonBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.github.claudecodegui.session.SessionCallbackAdapter;
 import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.SessionLoadService;
@@ -398,6 +399,7 @@ public class ClaudeChatWindow {
         if (savedState.reasoningEffort != null && !savedState.reasoningEffort.trim().isEmpty()) {
             session.setReasoningEffort(savedState.reasoningEffort);
         }
+        session.getState().setCodexSessionBinding(buildCodexSessionBinding(savedState));
 
         String restoredSessionId = isNonEmpty(savedState.sessionId) ? savedState.sessionId : null;
         String restoredCwd = isNonEmpty(savedState.cwd) ? savedState.cwd : session.getCwd();
@@ -744,6 +746,13 @@ public class ClaudeChatWindow {
         snapshot.model = session.getModel();
         snapshot.permissionMode = session.getPermissionMode();
         snapshot.reasoningEffort = session.getReasoningEffort();
+        CodexSessionBinding binding = session.getState().getCodexSessionBinding();
+        if (binding != null) {
+            snapshot.codexProviderId = binding.getProviderId();
+            snapshot.codexRequestMode = binding.getRequestMode();
+            snapshot.codexBaseUrlSource = binding.getBaseUrlSource();
+            snapshot.codexEffectiveConfigSource = binding.getEffectiveConfigSource();
+        }
         TabStateService tabStateService = TabStateService.getInstance(project);
         TabStateService.TabSessionState persistedState = tabStateService.getTabSessionState(tabIndex);
         snapshot.titleBindingMode = persistedState != null
@@ -781,6 +790,28 @@ public class ClaudeChatWindow {
         String persistedSessionId = persistedState != null ? normalizeValue(persistedState.sessionId) : null;
         String currentSessionId = normalizeValue(snapshot.sessionId);
         return currentSessionId != null && !currentSessionId.equals(persistedSessionId);
+    }
+
+    /**
+     * 从 Tab 快照恢复 Codex 会话绑定元数据。
+     * 仅当快照里存在 providerId 或 model 时才认为该绑定有效，
+     * 避免把普通 Claude 会话误标成 Codex 绑定。
+     *
+     * @param savedState 已持久化的 Tab 会话快照
+     * @return 恢复出的 Codex 绑定；不存在有效绑定时返回 null
+     */
+    private CodexSessionBinding buildCodexSessionBinding(TabStateService.TabSessionState savedState) {
+        if (savedState == null) {
+            return null;
+        }
+        CodexSessionBinding binding = new CodexSessionBinding(
+                savedState.codexProviderId,
+                savedState.model,
+                savedState.codexRequestMode,
+                savedState.codexBaseUrlSource,
+                savedState.codexEffectiveConfigSource
+        );
+        return binding.isMeaningful() ? binding : null;
     }
 
     /**
