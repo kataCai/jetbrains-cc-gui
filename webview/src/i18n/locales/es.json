@@ -570,7 +570,38 @@
         "modelIdRequired": "Model ID is required",
         "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
         "modelIdDuplicate": "Model ID already exists"
-      }
+      },
+      "cliLogin": {
+        "title": "Use local Codex CLI profile",
+        "description": "Read your existing Codex CLI login and default settings so you can use them in CC-GUI.",
+        "readonlyHint": "Read-only access. The plugin never overwrites ~/.codex/config.toml or auth.json.",
+        "authorizationStatus": "Authorization",
+        "currentUsageStatus": "Request Source",
+        "authorized": "Authorized",
+        "notAuthorized": "Not authorized",
+        "currentlyUsed": "Currently used",
+        "notInUse": "Not in use",
+        "authorizeOnly": "Authorize",
+        "useForRequests": "Use for requests",
+        "currentlyUsingAction": "Currently in use"
+      },
+      "modelsTitle": "Models",
+      "modelsDescription": "Control which Codex models appear in the chat model picker.",
+      "modelsSearchPlaceholder": "Search by model or provider",
+      "modelsEmpty": "No matching models",
+      "modelsViewAll": "View All Models",
+      "modelsCollapse": "Collapse",
+      "modelsVisibleSectionTitle": "Visible models",
+      "modelsAllSectionTitle": "All matching models",
+      "modelsUnavailable": "Available after authorization",
+      "modelsSource": {
+        "codex_cli_login": "CLI Login",
+        "managed_provider": "Managed Provider",
+        "plugin_custom": "Model Alias",
+        "local_config": "Local Config"
+      },
+      "requestModeUnavailableBadge": "Coming Soon",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled."
     },
     "agent": {
       "title": "Agentes",

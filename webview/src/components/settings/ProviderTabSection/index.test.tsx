@@ -17,6 +17,10 @@ vi.mock('react-i18next', () => ({
         'settings.codexProvider.quickCreateDescription': 'Create a runnable Codex provider with Base URL, API Key, and models',
         'settings.codexProvider.aliasTitle': 'Model Aliases (Advanced)',
         'settings.codexProvider.aliasDescription': 'Only affect model picker display entries',
+        'settings.codexProvider.description': 'Manage Codex providers',
+        'settings.provider.allProviders': 'All Providers',
+        'settings.codexProvider.modelsTitle': 'Models',
+        'settings.codexProvider.modelsDescription': 'Control which Codex models appear in the chat model picker.',
         'common.add': 'Add',
       };
       return translations[key] ?? key;
@@ -29,8 +33,15 @@ vi.mock('../ProviderManageSection', () => ({
 }));
 
 vi.mock('../CodexProviderSection', () => ({
-  default: ({ onAddCodexProvider }: { onAddCodexProvider: () => void }) => (
+  default: ({
+    onAddCodexProvider,
+    showProviderListHeader,
+  }: {
+    onAddCodexProvider: () => void;
+    showProviderListHeader?: boolean;
+  }) => (
     <div data-testid="codex-provider-section">
+      <span>{showProviderListHeader === false ? 'Provider Header Hidden' : 'Provider Header Visible'}</span>
       <button type="button" onClick={onAddCodexProvider}>List Add</button>
       Codex Provider Section
     </div>
@@ -38,7 +49,12 @@ vi.mock('../CodexProviderSection', () => ({
 }));
 
 vi.mock('../CodexModelVisibilitySection', () => ({
-  default: () => <div data-testid="codex-model-visibility-section">Codex Model Visibility Section</div>,
+  default: ({ showHeader }: { showHeader?: boolean }) => (
+    <div data-testid="codex-model-visibility-section">
+      <span>{showHeader === false ? 'Models Header Hidden' : 'Models Header Visible'}</span>
+      Codex Model Visibility Section
+    </div>
+  ),
 }));
 
 vi.mock('../CustomModelDialog', () => ({
@@ -172,6 +188,47 @@ describe('ProviderTabSection', () => {
 
     expect(screen.getByText('Model Aliases (Advanced)')).toBeTruthy();
     expect(screen.getByText('Only affect model picker display entries')).toBeTruthy();
+  });
+
+  /**
+   * 验证 Codex 页签已经拆成入口区、Provider 区和 Models 区三个层次。
+   * 断言意图：本轮收口需要明确分组节奏，而不是把所有内容继续平铺在同一段里。
+   */
+  it('groups Codex entries, provider management, and model visibility into separate sections', () => {
+    render(
+      <ProviderTabSection
+        currentProvider="codex"
+        providers={[]}
+        loading={false}
+        onAddProvider={onAddProvider}
+        onEditProvider={onEditProvider}
+        onDeleteProvider={onDeleteProvider}
+        onSwitchProvider={onSwitchProvider}
+        codexProviders={[]}
+        codexLoading={false}
+        codexModelCatalog={emptyCatalog}
+        codexModelCatalogLoading={false}
+        onAddCodexProvider={onAddCodexProvider}
+        onCreateCodexProviderFromAlias={onCreateCodexProviderFromAlias}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
+        onSwitchCodexProvider={onSwitchCodexProvider}
+        onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+        onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
+        onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        addToast={addToast}
+      />
+    );
+
+    expect(screen.getAllByText('Codex')).toHaveLength(3);
+    expect(screen.getByText('All Providers')).toBeTruthy();
+    expect(screen.getByText('Manage Codex providers')).toBeTruthy();
+    expect(screen.getByText('Models')).toBeTruthy();
+    expect(screen.getByText('Control which Codex models appear in the chat model picker.')).toBeTruthy();
+    expect(screen.getByText('Provider Header Hidden')).toBeTruthy();
+    expect(screen.getByText('Models Header Hidden')).toBeTruthy();
   });
 
   /**

@@ -201,78 +201,100 @@ const ProviderTabSection = ({
       </div>
 
       <div id="panel-codex-providers" role="tabpanel" style={activeTab === 'codex' ? BLOCK_STYLE : NONE_STYLE}>
-        <div
-          className={styles.primaryEntryRow}
-          onClick={onAddCodexProvider}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onAddCodexProvider(); }}
-        >
-          <div className={styles.entryInfo}>
-            <span className="codicon codicon-cloud-upload" style={ICON_14_STYLE} />
-            <div className={styles.entryTextGroup}>
-              <span className={styles.pluginModelsLabel}>
-                {t('settings.codexProvider.quickCreateTitle')}
-              </span>
-              <span className={styles.entryDescription}>
-                {t('settings.codexProvider.quickCreateDescription')}
-              </span>
+        <div className={styles.codexTabLayout}>
+          <div className={styles.entryCluster}>
+            <div
+              className={styles.primaryEntryRow}
+              onClick={onAddCodexProvider}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onAddCodexProvider(); }}
+            >
+              <div className={styles.entryInfo}>
+                <span className="codicon codicon-cloud-upload" style={ICON_14_STYLE} />
+                <div className={styles.entryTextGroup}>
+                  <span className={styles.pluginModelsLabel}>
+                    {t('settings.codexProvider.quickCreateTitle')}
+                  </span>
+                  <span className={styles.entryDescription}>
+                    {t('settings.codexProvider.quickCreateDescription')}
+                  </span>
+                </div>
+              </div>
+              <button
+                className={styles.pluginModelsManageBtn}
+                onClick={(e) => { e.stopPropagation(); onAddCodexProvider(); }}
+              >
+                {t('common.add')}
+              </button>
+            </div>
+            <div
+              className={styles.pluginModelsRow}
+              onClick={() => openModelDialog('codex')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('codex'); }}
+            >
+              <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
+              <div className={styles.entryTextGroup}>
+                <span className={styles.pluginModelsLabel}>
+                  {t('settings.codexProvider.aliasTitle')}
+                </span>
+                <span className={styles.entryDescription}>
+                  {t('settings.codexProvider.aliasDescription')}
+                </span>
+              </div>
+              {codexModels.models.length > 0 && (
+                <span className={styles.pluginModelsBadge}>{codexModels.models.length}</span>
+              )}
+              <span style={FLEX_1_STYLE} />
+              <button
+                className={styles.pluginModelsManageBtn}
+                onClick={(e) => { e.stopPropagation(); openModelDialog('codex'); }}
+              >
+                {t('settings.pluginModels.manage')}
+              </button>
             </div>
           </div>
-          <button
-            className={styles.pluginModelsManageBtn}
-            onClick={(e) => { e.stopPropagation(); onAddCodexProvider(); }}
-          >
-            {t('common.add')}
-          </button>
+
+          <section className={styles.sectionBlock} aria-label={t('settings.provider.allProviders')}>
+            <div className={styles.sectionLead}>
+              <span className={styles.sectionEyebrow}>{t('settings.providerTab.codex')}</span>
+              <h4 className={styles.sectionLeadTitle}>{t('settings.provider.allProviders')}</h4>
+              <p className={styles.sectionLeadDescription}>{t('settings.codexProvider.description')}</p>
+            </div>
+            <CodexProviderSection
+              codexProviders={codexProviders}
+              codexLocalConfigAuthorized={cliLoginProvider?.isAuthorized === true}
+              codexLoading={codexLoading}
+              testingCodexProviderId={testingCodexProviderId}
+              onAddCodexProvider={onAddCodexProvider}
+              onEditCodexProvider={onEditCodexProvider}
+              onDeleteCodexProvider={onDeleteCodexProvider}
+              onTestCodexProvider={onTestCodexProvider}
+              onSwitchCodexProvider={onSwitchCodexProvider}
+              onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
+              onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+              showHeader={false}
+              showProviderListHeader={false}
+            />
+          </section>
+
+          <section className={styles.sectionBlock} aria-label={t('settings.codexProvider.modelsTitle')}>
+            <div className={styles.sectionLead}>
+              <span className={styles.sectionEyebrow}>{t('settings.providerTab.codex')}</span>
+              <h4 className={styles.sectionLeadTitle}>{t('settings.codexProvider.modelsTitle')}</h4>
+              <p className={styles.sectionLeadDescription}>{t('settings.codexProvider.modelsDescription')}</p>
+            </div>
+            <CodexModelVisibilitySection
+              catalog={codexModelCatalog}
+              loading={codexModelCatalogLoading}
+              onRefresh={onRefreshCodexModelCatalog}
+              onSaveVisibility={onSaveCodexModelVisibility}
+              showHeader={false}
+            />
+          </section>
         </div>
-        <div
-          className={styles.pluginModelsRow}
-          onClick={() => openModelDialog('codex')}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('codex'); }}
-        >
-          <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
-          <div className={styles.entryTextGroup}>
-            <span className={styles.pluginModelsLabel}>
-              {t('settings.codexProvider.aliasTitle')}
-            </span>
-            <span className={styles.entryDescription}>
-              {t('settings.codexProvider.aliasDescription')}
-            </span>
-          </div>
-          {codexModels.models.length > 0 && (
-            <span className={styles.pluginModelsBadge}>{codexModels.models.length}</span>
-          )}
-          <span style={FLEX_1_STYLE} />
-          <button
-            className={styles.pluginModelsManageBtn}
-            onClick={(e) => { e.stopPropagation(); openModelDialog('codex'); }}
-          >
-            {t('settings.pluginModels.manage')}
-          </button>
-        </div>
-        <CodexProviderSection
-          codexProviders={codexProviders}
-          codexLocalConfigAuthorized={cliLoginProvider?.isAuthorized === true}
-          codexLoading={codexLoading}
-          testingCodexProviderId={testingCodexProviderId}
-          onAddCodexProvider={onAddCodexProvider}
-          onEditCodexProvider={onEditCodexProvider}
-          onDeleteCodexProvider={onDeleteCodexProvider}
-          onTestCodexProvider={onTestCodexProvider}
-          onSwitchCodexProvider={onSwitchCodexProvider}
-          onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
-          onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
-          showHeader={false}
-        />
-        <CodexModelVisibilitySection
-          catalog={codexModelCatalog}
-          loading={codexModelCatalogLoading}
-          onRefresh={onRefreshCodexModelCatalog}
-          onSaveVisibility={onSaveCodexModelVisibility}
-        />
       </div>
 
       {/* Shared model management dialog */}

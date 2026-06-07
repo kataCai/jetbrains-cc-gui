@@ -16,13 +16,13 @@ import styles from './style.module.less';
 const ICON_MR_8_STYLE: React.CSSProperties = { marginRight: '8px' };
 
 /**
- * 生成 Codex provider 卡片上的元信息展示项。
- * 这些字段来自结构化 provider 创建表单，用于在列表层快速确认当前配置的模板、请求地址和模型数量；
- * 不参与运行时解析，也不改变保存结构，只作为用户检查配置是否选错的只读摘要。
+ * 生成普通 Codex provider 卡片上的元信息摘要项。
+ * 这些字段来自结构化 provider 创建表单，用于在列表层快速确认当前配置的模板、
+ * 请求地址和模型数量；该摘要不参与运行时解析，只负责帮助用户在设置页检查配置。
  *
- * @param provider Codex provider 配置对象
- * @param t i18n 翻译函数
- * @return 可展示的元信息文本数组；无可用信息时返回空数组
+ * @param provider Codex provider 配置对象。
+ * @param t i18n 翻译函数。
+ * @return 可展示的元信息文本数组；没有可用信息时返回空数组。
  */
 function buildProviderMetaItems(
   provider: CodexProviderConfig,
@@ -65,6 +65,42 @@ interface CodexProviderSectionProps {
   onAuthorizeCodexLocalConfig?: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   showHeader?: boolean;
+  showProviderListHeader?: boolean;
+}
+
+/**
+ * 组合 CLI Login 卡片的状态摘要行。
+ * 这里显式把“授权状态”和“当前请求来源”拆成两个独立标签，
+ * 避免继续使用旧的技术化长句，保证用户能快速理解当前配置状态。
+ *
+ * @param isAuthorized 当前是否已授权读取本地 Codex 配置。
+ * @param isActive 当前请求是否正在使用 CLI Login 来源。
+ * @param t i18n 翻译函数。
+ * @return 用于渲染状态徽标的标签和值列表。
+ */
+function buildCliLoginStatusItems(
+  isAuthorized: boolean,
+  isActive: boolean,
+  t: (key: string) => string
+): Array<{ label: string; value: string }> {
+  return [
+    {
+      label: t('settings.codexProvider.cliLogin.authorizationStatus'),
+      value: t(
+        isAuthorized
+          ? 'settings.codexProvider.cliLogin.authorized'
+          : 'settings.codexProvider.cliLogin.notAuthorized'
+      ),
+    },
+    {
+      label: t('settings.codexProvider.cliLogin.currentUsageStatus'),
+      value: t(
+        isActive
+          ? 'settings.codexProvider.cliLogin.currentlyUsed'
+          : 'settings.codexProvider.cliLogin.notInUse'
+      ),
+    },
+  ];
 }
 
 const CodexProviderSection = ({
@@ -80,6 +116,7 @@ const CodexProviderSection = ({
   onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
   showHeader = true,
+  showProviderListHeader = true,
 }: CodexProviderSectionProps) => {
   const { t } = useTranslation();
 
@@ -90,9 +127,8 @@ const CodexProviderSection = ({
     sendToJava('sort_codex_providers', { orderedIds });
   }, []);
 
-  // Filter out CLI Login provider from drag-sort list
   const regularProviders = useMemo(
-    () => codexProviders.filter((p) => p.id !== SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN),
+    () => codexProviders.filter((provider) => provider.id !== SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN),
     [codexProviders]
   );
 
@@ -112,13 +148,17 @@ const CodexProviderSection = ({
   });
 
   const cliLoginProvider = useMemo(
-    () => codexProviders.find((p) => p.id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN) as
+    () => codexProviders.find((provider) => provider.id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN) as
       | (CodexProviderConfig & { isAuthorized?: boolean })
       | undefined,
     [codexProviders]
   );
   const isCliLoginActive = cliLoginProvider?.isActive === true;
   const isCliLoginAuthorized = codexLocalConfigAuthorized || cliLoginProvider?.isAuthorized === true;
+  const cliLoginStatusItems = useMemo(
+    () => buildCliLoginStatusItems(isCliLoginAuthorized, isCliLoginActive, t),
+    [isCliLoginActive, isCliLoginAuthorized, t]
+  );
 
   return (
     <div className={styles.configSection}>
@@ -129,7 +169,6 @@ const CodexProviderSection = ({
         </>
       )}
 
-      {/* CLI Login authorize confirm dialog */}
       {showCliLoginConfirm && (
         <div className={sharedStyles.warningOverlay}>
           <div className={sharedStyles.warningDialog}>
@@ -164,7 +203,6 @@ const CodexProviderSection = ({
         </div>
       )}
 
-      {/* CLI Login disable confirm dialog */}
       {showCliLoginDisableConfirm && (
         <div className={sharedStyles.warningOverlay}>
           <div className={sharedStyles.warningDialog}>
@@ -186,8 +224,8 @@ const CodexProviderSection = ({
                 className={sharedStyles.btnDanger}
                 onClick={() => {
                   setShowCliLoginDisableConfirm(false);
-                  const firstRegular = regularProviders[0];
-                  onRevokeCodexLocalConfigAuthorization(firstRegular?.id);
+                  const firstRegularProvider = regularProviders[0];
+                  onRevokeCodexLocalConfigAuthorization(firstRegularProvider?.id);
                 }}
               >
                 {t('settings.provider.revokeAuthorization')}
@@ -206,60 +244,65 @@ const CodexProviderSection = ({
 
       {!codexLoading && (
         <div className={styles.providerListContainer}>
-          <div className={sharedStyles.header}>
-            <h4 className={sharedStyles.title}>{t('settings.provider.allProviders')}</h4>
-            <div className={sharedStyles.actions}>
-              <button
-                className={sharedStyles.btnPrimary}
-                onClick={onAddCodexProvider}
-              >
-                <span className="codicon codicon-add" />
-                {t('common.add')}
-              </button>
+          {showProviderListHeader && (
+            <div className={sharedStyles.header}>
+              <h4 className={sharedStyles.title}>{t('settings.provider.allProviders')}</h4>
+              <div className={sharedStyles.actions}>
+                <button
+                  className={sharedStyles.btnPrimary}
+                  onClick={onAddCodexProvider}
+                >
+                  <span className="codicon codicon-add" />
+                  {t('common.add')}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className={sharedStyles.list}>
-            {/* CLI Login virtual provider card (pinned at top) */}
             {cliLoginProvider && (
               <div
-                className={`${sharedStyles.card} ${isCliLoginActive ? sharedStyles.active : ''} ${sharedStyles.localProviderCard}`}
+                className={`${sharedStyles.card} ${isCliLoginActive ? sharedStyles.active : ''} ${sharedStyles.localProviderCard} ${styles.cliLoginCard}`}
               >
                 <div className={sharedStyles.cardInfo}>
                   <div className={sharedStyles.name}>
                     <span className="codicon codicon-key" style={ICON_MR_8_STYLE} />
-                    {t('settings.codexProvider.dialog.cliLoginProviderName')}
+                    {t('settings.codexProvider.cliLogin.title')}
                   </div>
-                  <div className={sharedStyles.website} title={t('settings.codexProvider.dialog.cliLoginProviderDescription')}>
-                    {t('settings.codexProvider.dialog.cliLoginProviderDescription')}
+                  <div className={styles.cliLoginDescription}>
+                    {t('settings.codexProvider.cliLogin.description')}
+                  </div>
+                  <div className={styles.cliLoginReadonlyHint}>
+                    {t('settings.codexProvider.cliLogin.readonlyHint')}
                   </div>
                   <div className={styles.providerMeta}>
-                    <span className={styles.providerMetaItem}>
-                      {t('settings.codexProvider.cliLogin.authorizationStatus')}: {t(
-                        isCliLoginAuthorized
-                          ? 'settings.codexProvider.cliLogin.authorized'
-                          : 'settings.codexProvider.cliLogin.notAuthorized'
-                      )}
-                    </span>
-                    <span className={styles.providerMetaItem}>
-                      {t('settings.codexProvider.cliLogin.currentUsageStatus')}: {t(
-                        isCliLoginActive
-                          ? 'settings.codexProvider.cliLogin.currentlyUsed'
-                          : 'settings.codexProvider.cliLogin.notInUse'
-                      )}
-                    </span>
+                    {cliLoginStatusItems.map((item) => (
+                      <span key={item.label} className={styles.providerMetaItem}>
+                        <span className={styles.providerMetaLabel}>{item.label}</span>
+                        <span className={styles.providerMetaValue}>{item.value}</span>
+                      </span>
+                    ))}
                   </div>
                 </div>
 
-                <div className={sharedStyles.cardActions}>
+                <div className={`${sharedStyles.cardActions} ${styles.cliLoginActions}`}>
                   {isCliLoginActive ? (
-                    <button
-                      className={sharedStyles.revokeButton}
-                      onClick={() => setShowCliLoginDisableConfirm(true)}
-                    >
-                      <span className="codicon codicon-circle-slash" />
-                      {t('settings.provider.revokeAuthorization')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className={styles.cliLoginActiveButton}
+                        disabled={true}
+                      >
+                        {t('settings.codexProvider.cliLogin.currentlyUsingAction')}
+                      </button>
+                      <button
+                        className={sharedStyles.revokeButton}
+                        onClick={() => setShowCliLoginDisableConfirm(true)}
+                      >
+                        <span className="codicon codicon-circle-slash" />
+                        {t('settings.provider.revokeAuthorization')}
+                      </button>
+                    </>
                   ) : !isCliLoginAuthorized ? (
                     <button
                       className={sharedStyles.useButton}
@@ -290,7 +333,6 @@ const CodexProviderSection = ({
               </div>
             )}
 
-            {/* Regular providers (drag-sortable) */}
             {localProviders.length > 0 ? (
               localProviders.map((provider) => {
                 const metaItems = buildProviderMetaItems(provider, t);
@@ -306,16 +348,20 @@ const CodexProviderSection = ({
                     ].filter(Boolean).join(' ')}
                     data-drag-sort-id={provider.id}
                     draggable={true}
-                    onDragStart={(e) => handleDragStart(e, provider.id)}
-                    onDragOver={(e) => handleDragOver(e, provider.id)}
+                    onDragStart={(event) => handleDragStart(event, provider.id)}
+                    onDragOver={(event) => handleDragOver(event, provider.id)}
                     onDragLeave={handleDragLeave}
-                    onDrop={(e) => handleDrop(e, provider.id)}
+                    onDrop={(event) => handleDrop(event, provider.id)}
                     onDragEnd={handleDragEnd}
                   >
                     <div
                       className={sharedStyles.dragHandle}
                       title={t('settings.provider.dragToSort')}
-                      onPointerDown={(e) => handlePointerDown(e, provider.id, e.currentTarget.closest<HTMLElement>('[data-drag-sort-id]'))}
+                      onPointerDown={(event) => handlePointerDown(
+                        event,
+                        provider.id,
+                        event.currentTarget.closest<HTMLElement>('[data-drag-sort-id]')
+                      )}
                     >
                       <span className="codicon codicon-gripper" />
                     </div>
@@ -362,8 +408,8 @@ const CodexProviderSection = ({
                           title={requestModeUnavailable
                             ? t('settings.codexProvider.requestModeUnavailableTooltip')
                             : testingCodexProviderId === provider.id
-                            ? t('settings.provider.loading')
-                            : t('settings.codexProvider.dialog.testProvider')}
+                              ? t('settings.provider.loading')
+                              : t('settings.codexProvider.dialog.testProvider')}
                           disabled={testingCodexProviderId === provider.id || requestModeUnavailable}
                         >
                           <span className={testingCodexProviderId === provider.id

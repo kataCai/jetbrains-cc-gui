@@ -682,25 +682,25 @@
       "description": "Manage CC-GUI owned Codex runtime profiles without rewriting ~/.codex/ live config by default",
       "emptyProvider": "No Codex providers configured, click Add to create one",
       "quickCreateTitle": "Add Provider",
-    "quickCreateDescription": "Configure a runnable Codex provider with Base URL, API Key, and model list",
-    "aliasTitle": "Model Alias (Advanced)",
-    "aliasDescription": "Only adds display items to the model selector. It does not store provider, credential, or endpoint settings.",
-    "noActiveProviderForManage": "No active Codex provider is available to edit. Add or enable a provider first.",
-    "providerTypeMeta": "Preset: {{type}}",
-    "baseUrlMeta": "Base URL: {{baseUrl}}",
-    "modelCountMeta": "Models: {{count}}",
-    "runtimeSourceLabel": "Runtime Source: {{source}}",
-    "runtimeSource": {
-      "managedProvider": "Managed Provider",
-      "codexLocalConfig": "Codex Local Config",
-      "sdkDefault": "SDK Default",
-      "proxyFallback": "Proxy Fallback"
-    },
-    "testResult": {
-      "guiProviderConfirmed": "GUI managed provider is active for this request: {{provider}}",
-      "localConfigConflict": "Local Codex CLI default provider may still conflict: {{provider}}"
-    },
-    "deleteConfirmTitle": "Confirm Delete",
+      "quickCreateDescription": "Configure a runnable Codex provider with Base URL, API Key, and model list",
+      "aliasTitle": "Model Alias (Advanced)",
+      "aliasDescription": "Only adds display items to the model selector. It does not store provider, credential, or endpoint settings.",
+      "noActiveProviderForManage": "No active Codex provider is available to edit. Add or enable a provider first.",
+      "providerTypeMeta": "Preset: {{type}}",
+      "baseUrlMeta": "Base URL: {{baseUrl}}",
+      "modelCountMeta": "Models: {{count}}",
+      "runtimeSourceLabel": "Runtime Source: {{source}}",
+      "runtimeSource": {
+        "managedProvider": "Managed Provider",
+        "codexLocalConfig": "Codex Local Config",
+        "sdkDefault": "SDK Default",
+        "proxyFallback": "Proxy Fallback"
+      },
+      "testResult": {
+        "guiProviderConfirmed": "GUI managed provider is active for this request: {{provider}}",
+        "localConfigConflict": "Local Codex CLI default provider may still conflict: {{provider}}"
+      },
+      "deleteConfirmTitle": "Confirm Delete",
       "deleteConfirmMessage": "Are you sure you want to delete provider \"{{name}}\"? This action cannot be undone.",
       "dialog": {
         "addTitle": "Add Codex Provider",
@@ -777,7 +777,39 @@
         "modelIdRequired": "Model ID is required",
         "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
         "modelIdDuplicate": "Model ID already exists"
+      },
+      "cliLogin": {
+        "title": "Use local Codex CLI profile",
+        "description": "Read your existing Codex CLI login and default settings so you can use them in CC-GUI.",
+        "readonlyHint": "Read-only access. The plugin never overwrites ~/.codex/config.toml or auth.json.",
+        "authorizationStatus": "Authorization",
+        "currentUsageStatus": "Request Source",
+        "authorized": "Authorized",
+        "notAuthorized": "Not authorized",
+        "currentlyUsed": "Currently used",
+        "notInUse": "Not in use",
+        "authorizeOnly": "Authorize",
+        "useForRequests": "Use for requests",
+        "currentlyUsingAction": "Currently in use"
+      },
+      "modelsTitle": "Models",
+      "modelsDescription": "Control which Codex models appear in the chat model picker.",
+      "modelsSearchPlaceholder": "Search by model or provider",
+      "modelsEmpty": "No matching models",
+      "modelsViewAll": "View All Models",
+      "modelsCollapse": "Collapse",
+      "modelsVisibleSectionTitle": "Visible models",
+      "modelsAllSectionTitle": "All matching models",
+      "modelsUnavailable": "Available after authorization",
+      "modelsSource": {
+        "codex_cli_login": "CLI Login",
+        "managed_provider": "Managed Provider",
+        "plugin_custom": "Model Alias",
+        "local_config": "Local Config"
       }
+      ,
+      "requestModeUnavailableBadge": "Coming Soon",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled."
     },
     "chat": {
       "codexModelConfigRequired": "Configure models in Codex Provider first"

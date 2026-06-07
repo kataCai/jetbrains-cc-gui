@@ -7,16 +7,21 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => {
       const translations: Record<string, string> = {
-        'common.refresh': '刷新',
-        'settings.codexProvider.modelsTitle': 'Codex Models',
-        'settings.codexProvider.modelsDescription': '控制聊天区模型下拉中显示哪些 Codex 模型',
-        'settings.codexProvider.modelsSearchPlaceholder': '搜索模型或 provider',
-        'settings.codexProvider.modelsEmpty': '暂无模型目录',
+        'common.refresh': 'Refresh',
+        'common.loading': 'Loading',
+        'settings.codexProvider.modelsTitle': 'Models',
+        'settings.codexProvider.modelsDescription': 'Control which Codex models appear in the chat model picker.',
+        'settings.codexProvider.modelsSearchPlaceholder': 'Search by model or provider',
+        'settings.codexProvider.modelsEmpty': 'No matching models',
+        'settings.codexProvider.modelsViewAll': 'View All Models',
+        'settings.codexProvider.modelsCollapse': 'Collapse',
+        'settings.codexProvider.modelsVisibleSectionTitle': 'Visible models',
+        'settings.codexProvider.modelsAllSectionTitle': 'All matching models',
         'settings.codexProvider.modelsSource.codex_cli_login': 'CLI Login',
-        'settings.codexProvider.modelsSource.managed_provider': '托管 Provider',
-        'settings.codexProvider.modelsSource.plugin_custom': '插件别名',
-        'settings.codexProvider.modelsSource.local_config': '本地配置',
-        'settings.codexProvider.modelsUnavailable': '授权后可用',
+        'settings.codexProvider.modelsSource.managed_provider': 'Managed Provider',
+        'settings.codexProvider.modelsSource.plugin_custom': 'Model Alias',
+        'settings.codexProvider.modelsSource.local_config': 'Local Config',
+        'settings.codexProvider.modelsUnavailable': 'Available after authorization',
       };
       return translations[key] ?? key;
     },
@@ -24,8 +29,14 @@ vi.mock('react-i18next', () => ({
 }));
 
 /**
- * 构造设置页模型显示面板使用的最小目录样本。
- * 这里同时覆盖可运行模型与未授权模型，便于验证搜索、来源展示和可见性切换。
+ * 构造模型展示面板使用的最小目录样本。
+ * 该样本同时覆盖：
+ * 1. 默认可见且未授权的 CLI Login 模型；
+ * 2. 默认隐藏的托管 Provider 模型；
+ * 3. 默认可见的本地配置模型。
+ * 这样可以在同一组测试里覆盖折叠视图、展开视图、搜索和可见性切换。
+ *
+ * @return 用于渲染测试的统一模型目录数据。
  */
 function createCatalog(): CodexModelCatalogItem[] {
   return [
@@ -51,15 +62,27 @@ function createCatalog(): CodexModelCatalogItem[] {
       visible: false,
       runnable: true,
     },
+    {
+      key: 'local::gpt-5.4',
+      providerId: 'local',
+      providerName: 'Local Config',
+      modelId: 'gpt-5.4',
+      label: 'GPT-5.4',
+      description: 'Local config fallback model',
+      source: 'local_config',
+      visible: true,
+      runnable: true,
+    },
   ];
 }
 
 describe('CodexModelVisibilitySection', () => {
   /**
-   * 验证模型搜索只过滤展示层，不修改原始目录。
-   * 断言意图：输入关键字后，仅保留匹配 provider/model 的行，避免在大型目录下难以定位目标模型。
+   * 验证默认折叠视图只展示“当前可见模型”子集。
+   * 断言意图：设置页初始态优先回答“聊天区现在能看到什么”，
+   * 而不是把完整目录直接铺满整张卡片。
    */
-  it('filters catalog rows by model and provider keywords', () => {
+  it('shows visible models first and reveals the full catalog after clicking view all', () => {
     render(
       <CodexModelVisibilitySection
         catalog={createCatalog()}
@@ -69,17 +92,47 @@ describe('CodexModelVisibilitySection', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('搜索模型或 provider'), {
+    expect(screen.getByText('Visible models')).toBeTruthy();
+    expect(screen.getByText('GPT-5.5')).toBeTruthy();
+    expect(screen.getByText('GPT-5.4')).toBeTruthy();
+    expect(screen.queryByText('MiniMax-M3')).toBeNull();
+    expect(screen.getByRole('button', { name: 'View All Models' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View All Models' }));
+
+    expect(screen.getByText('All matching models')).toBeTruthy();
+    expect(screen.getByText('MiniMax-M3')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Collapse' })).toBeTruthy();
+  });
+
+  /**
+   * 验证搜索会自动切换到匹配结果视图。
+   * 断言意图：一旦用户已经给出明确关键词，隐藏模型也应直接出现，
+   * 不应继续受到默认折叠规则限制。
+   */
+  it('switches to matching results when searching for a hidden model', () => {
+    render(
+      <CodexModelVisibilitySection
+        catalog={createCatalog()}
+        loading={false}
+        onRefresh={vi.fn()}
+        onSaveVisibility={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search by model or provider'), {
       target: { value: 'MiniMax' },
     });
 
+    expect(screen.getByText('All matching models')).toBeTruthy();
     expect(screen.getByText('MiniMax-M3')).toBeTruthy();
     expect(screen.queryByText('GPT-5.5')).toBeNull();
   });
 
   /**
-   * 验证切换某一行的可见性时，会回传完整 visibility config。
-   * 断言意图：后端保存接口需要全量 key->visible 映射，前端不能只发当前被点击的单条记录。
+   * 验证切换模型可见性时仍会回传完整 visibility config。
+   * 断言意图：即使 UI 从文本按钮升级成正式开关卡片，
+   * 也不能破坏后端要求的“提交全量映射”协议。
    */
   it('sends the full visibility config when toggling a model switch', () => {
     const onSaveVisibility = vi.fn();
@@ -93,17 +146,20 @@ describe('CodexModelVisibilitySection', () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText('toggle:minimax::MiniMax-M3'));
+    fireEvent.click(screen.getByRole('button', { name: 'View All Models' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'toggle:minimax::MiniMax-M3' }));
 
     expect(onSaveVisibility).toHaveBeenCalledWith({
       '__codex_cli_login__::gpt-5.5': { visible: true },
       'minimax::MiniMax-M3': { visible: true },
+      'local::gpt-5.4': { visible: true },
     });
   });
 
   /**
-   * 验证不可运行模型会暴露原因提示，但仍允许用户看到该模型项。
-   * 断言意图：CLI Login 未授权时，模型应继续出现在设置页里，以便用户理解为什么聊天区里暂不可用。
+   * 验证不可运行模型仍保留在目录里，并展示授权提示。
+   * 断言意图：用户需要在设置页理解“模型为什么暂时不可用”，
+   * 而不是把对应目录项直接隐藏掉。
    */
   it('shows non-runnable catalog items with an authorization hint', () => {
     render(
@@ -116,6 +172,26 @@ describe('CodexModelVisibilitySection', () => {
     );
 
     expect(screen.getByText('GPT-5.5')).toBeTruthy();
-    expect(screen.getByText('授权后可用')).toBeTruthy();
+    expect(screen.getByText('Available after authorization')).toBeTruthy();
+  });
+
+  /**
+   * 验证嵌入式展示模式下不会重复渲染外层已经给出的标题和说明。
+   * 断言意图：ProviderTabSection 统一管理分组标题时，子卡片应只保留工具栏和内容区。
+   */
+  it('hides the local header when embedded into a higher-level group', () => {
+    render(
+      <CodexModelVisibilitySection
+        catalog={createCatalog()}
+        loading={false}
+        onRefresh={vi.fn()}
+        onSaveVisibility={vi.fn()}
+        showHeader={false}
+      />
+    );
+
+    expect(screen.queryByText('Models')).toBeNull();
+    expect(screen.queryByText('Control which Codex models appear in the chat model picker.')).toBeNull();
+    expect(screen.getByPlaceholderText('Search by model or provider')).toBeTruthy();
   });
 });

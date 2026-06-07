@@ -687,25 +687,25 @@
       "description": "管理 CC-GUI 自有的 Codex 运行时配置，默认不会改写 ~/.codex/ 实时配置",
       "emptyProvider": "暂无 Codex 供应商配置，点击添加按钮创建",
       "quickCreateTitle": "新增供应商",
-    "quickCreateDescription": "为 Codex 配置可运行的供应商、Base URL、API Key 和模型列表",
-    "aliasTitle": "模型别名（高级）",
-    "aliasDescription": "只补充模型选择列表展示项，不保存供应商、密钥和请求地址",
-    "noActiveProviderForManage": "当前没有可编辑的激活 Codex 供应商，请先新增或启用一个供应商。",
-    "providerTypeMeta": "模板：{{type}}",
-    "baseUrlMeta": "Base URL：{{baseUrl}}",
-    "modelCountMeta": "模型数：{{count}}",
-    "runtimeSourceLabel": "运行时来源：{{source}}",
-    "runtimeSource": {
-      "managedProvider": "托管供应商",
-      "codexLocalConfig": "Codex 本地配置",
-      "sdkDefault": "SDK 默认值",
-      "proxyFallback": "代理回退"
-    },
-    "testResult": {
-      "guiProviderConfirmed": "当前请求已命中 GUI 托管 provider：{{provider}}",
-      "localConfigConflict": "本地 Codex CLI 默认 provider 仍可能造成冲突：{{provider}}"
-    },
-    "deleteConfirmTitle": "确认删除",
+      "quickCreateDescription": "为 Codex 配置可运行的供应商、Base URL、API Key 和模型列表",
+      "aliasTitle": "模型别名（高级）",
+      "aliasDescription": "只补充模型选择列表展示项，不保存供应商、密钥和请求地址",
+      "noActiveProviderForManage": "当前没有可编辑的激活 Codex 供应商，请先新增或启用一个供应商。",
+      "providerTypeMeta": "模板：{{type}}",
+      "baseUrlMeta": "Base URL：{{baseUrl}}",
+      "modelCountMeta": "模型数：{{count}}",
+      "runtimeSourceLabel": "运行时来源：{{source}}",
+      "runtimeSource": {
+        "managedProvider": "托管供应商",
+        "codexLocalConfig": "Codex 本地配置",
+        "sdkDefault": "SDK 默认值",
+        "proxyFallback": "代理回退"
+      },
+      "testResult": {
+        "guiProviderConfirmed": "当前请求已命中 GUI 托管 provider：{{provider}}",
+        "localConfigConflict": "本地 Codex CLI 默认 provider 仍可能造成冲突：{{provider}}"
+      },
+      "deleteConfirmTitle": "确认删除",
       "deleteConfirmMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。",
       "dialog": {
         "addTitle": "添加 Codex 供应商",
@@ -782,7 +782,39 @@
         "modelIdRequired": "请输入模型 ID",
         "modelIdInvalid": "模型 ID 格式无效（仅允许字母、数字、点、连字符、下划线、斜杠和冒号）",
         "modelIdDuplicate": "模型 ID 已存在"
+      },
+      "cliLogin": {
+        "title": "使用本地 Codex 配置",
+        "description": "读取本机已有的 Codex CLI 登录信息和默认配置，不会修改原始文件。",
+        "readonlyHint": "只读访问。插件不会覆盖 ~/.codex/config.toml 或 auth.json。",
+        "authorizationStatus": "授权状态",
+        "currentUsageStatus": "当前请求来源",
+        "authorized": "已授权",
+        "notAuthorized": "未授权",
+        "currentlyUsed": "当前用于请求",
+        "notInUse": "当前未使用",
+        "authorizeOnly": "授权",
+        "useForRequests": "用于请求",
+        "currentlyUsingAction": "当前使用中"
+      },
+      "modelsTitle": "Models",
+      "modelsDescription": "控制聊天区模型下拉中显示哪些 Codex 模型。",
+      "modelsSearchPlaceholder": "按模型或供应商搜索",
+      "modelsEmpty": "没有匹配的模型",
+      "modelsViewAll": "查看全部模型",
+      "modelsCollapse": "收起",
+      "modelsVisibleSectionTitle": "当前显示的模型",
+      "modelsAllSectionTitle": "全部匹配模型",
+      "modelsUnavailable": "授权后可用",
+      "modelsSource": {
+        "codex_cli_login": "CLI Login",
+        "managed_provider": "托管 Provider",
+        "plugin_custom": "模型别名",
+        "local_config": "本地配置"
       }
+      ,
+      "requestModeUnavailableBadge": "开发中",
+      "requestModeUnavailableTooltip": "当前请求模式尚未落地，暂不可测试或启用"
     },
     "chat": {
       "codexModelConfigRequired": "请先在 Codex Provider 中配置模型"
