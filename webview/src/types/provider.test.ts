@@ -4,6 +4,7 @@ import {
   getCodexProviderModeFieldGroups,
   isCodexRequestModeImplemented,
 } from './provider';
+import * as providerModule from './provider';
 import type { CodexProviderConfig, CodexSelectedModel } from './provider';
 
 describe('PROVIDER_PRESETS', () => {
@@ -146,5 +147,43 @@ describe('Codex runtime provider types', () => {
     expect(isCodexRequestModeImplemented('codex_sdk')).toBe(true);
     expect(isCodexRequestModeImplemented('cc_switch_proxy')).toBe(false);
     expect(isCodexRequestModeImplemented('custom_adapter')).toBe(false);
+  });
+});
+
+describe('Codex model catalog key helpers', () => {
+  it('builds and parses composite keys for provider-scoped models', () => {
+    // 测试目标：锁定前端与后端共享的复合 key 规则，确保展示配置可以稳定绑定到 provider+model。
+    // 前置条件：providerId 与 modelId 都是非空字符串，且 modelId 允许继续包含单个冒号。
+    // 断言意图：必须按 providerId::modelId 生成，并且解析时只按第一个双冒号拆分。
+    const buildKey = (providerModule as Record<string, unknown>).buildCodexModelCatalogKey as
+      | ((providerId: string, modelId: string) => string)
+      | undefined;
+    const parseKey = (providerModule as Record<string, unknown>).parseCodexModelCatalogKey as
+      | ((compositeKey: string) => { providerId: string; modelId: string } | null)
+      | undefined;
+
+    expect(typeof buildKey).toBe('function');
+    expect(typeof parseKey).toBe('function');
+
+    const compositeKey = buildKey?.('managed-provider', 'gpt-5:thinking');
+    expect(compositeKey).toBe('managed-provider::gpt-5:thinking');
+    expect(parseKey?.(compositeKey || '')).toEqual({
+      providerId: 'managed-provider',
+      modelId: 'gpt-5:thinking',
+    });
+  });
+
+  it('rejects malformed composite keys', () => {
+    // 测试目标：覆盖边界输入，避免把缺失 providerId/modelId 的脏数据写入展示配置。
+    // 前置条件：传入的 key 可能来自旧配置、手工编辑或未来接口回归。
+    // 断言意图：缺少分隔符、前半段为空或后半段为空时都必须返回 null。
+    const parseKey = (providerModule as Record<string, unknown>).parseCodexModelCatalogKey as
+      | ((compositeKey: string) => { providerId: string; modelId: string } | null)
+      | undefined;
+
+    expect(typeof parseKey).toBe('function');
+    expect(parseKey?.('missing-separator')).toBeNull();
+    expect(parseKey?.('::missing-provider')).toBeNull();
+    expect(parseKey?.('missing-model::')).toBeNull();
   });
 });

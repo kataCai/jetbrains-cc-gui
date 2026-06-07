@@ -4,13 +4,17 @@ import type { ButtonAreaProps, ModelInfo, PermissionMode, ReasoningEffort } from
 import { ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
 import { CLAUDE_MODELS, CODEX_MODELS, createRuntimeModelInfo } from './types';
 import {
+  buildCodexModelCatalogKey,
   STORAGE_KEYS,
   validateCodexCustomModels,
 } from '../../types/provider';
-import type { CodexCustomModel, CodexProviderConfig } from '../../types/provider';
+import type { CodexCustomModel, CodexModelCatalogItem, CodexProviderConfig } from '../../types/provider';
 import { readClaudeModelMapping } from '../../utils/claudeModelMapping';
 import { sendBridgeEvent } from '../../utils/bridge';
-import { subscribeActiveCodexProvider } from '../../utils/runtimeProviderCapabilities';
+import {
+  subscribeActiveCodexProvider,
+  subscribeCodexModelCatalog,
+} from '../../utils/runtimeProviderCapabilities';
 import {
   getChatExecutionMode,
   getComposerUsageMode,
@@ -110,6 +114,13 @@ function getProviderCodexModels(provider: CodexProviderConfig | null): ModelInfo
     }));
 }
 
+interface CodexSelectorModelInfo extends ModelInfo {
+  providerId?: string;
+  providerLabel?: string;
+  rawModelId?: string;
+  runnable?: boolean;
+}
+
 /**
  * 合并插件级自定义模型与当前 provider 模型。
  * 自定义模型代表用户在插件层显式补充的能力，应始终优先展示；若与 provider 模型同 id，
@@ -182,6 +193,7 @@ export const ButtonArea = ({
   // When localStorage changes, updating this version number triggers useMemo recalculation
   const [customModelsVersion, setCustomModelsVersion] = useState(0);
   const [activeCodexProvider, setActiveCodexProvider] = useState<CodexProviderConfig | null>(null);
+  const [codexModelCatalog, setCodexModelCatalog] = useState<CodexModelCatalogItem[]>([]);
   // Plan 是产品层 usage mode，不是底层具体执行模式。
   // 切到 Plan 时仍要记住用户上一次真正选择的 chat execution mode，
   // 这样再切回 Chat 时可以恢复原选择，而不是粗暴丢回 default。
@@ -231,11 +243,95 @@ export const ButtonArea = ({
   }, []);
 
   useEffect(() => {
+    const unsubscribe = subscribeCodexModelCatalog((json) => {
+      try {
+        const payload = JSON.parse(json) as unknown;
+        if (!Array.isArray(payload)) {
+          setCodexModelCatalog([]);
+          return;
+        }
+        setCodexModelCatalog(payload.filter((item): item is CodexModelCatalogItem => {
+          if (!item || typeof item !== 'object') {
+            return false;
+          }
+          const candidate = item as Record<string, unknown>;
+          return typeof candidate.key === 'string'
+            && typeof candidate.providerId === 'string'
+            && typeof candidate.providerName === 'string'
+            && typeof candidate.modelId === 'string'
+            && typeof candidate.label === 'string'
+            && typeof candidate.visible === 'boolean'
+            && typeof candidate.runnable === 'boolean';
+        }));
+      } catch (error) {
+        console.error('[ButtonArea] Failed to parse Codex model catalog:', error);
+        setCodexModelCatalog([]);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     if (currentProvider === 'codex') {
-      // Codex 模型列表来自 active provider，进入 Codex 时主动刷新，避免继续展示旧内置列表。
+      // Codex 聊天区优先消费统一 catalog，同时保留旧 active provider 回调作兜底。
+      sendBridgeEvent('get_codex_model_catalog');
       sendBridgeEvent('get_active_codex_provider');
     }
   }, [currentProvider]);
+
+  /**
+   * 将后端拍平的 catalog 转成聊天区可直接消费的下拉项。
+   * 这里直接把 option id 设为复合 key，确保用户选择后能把 provider + model 一次性回传给 hook。
+   *
+   * @param catalog 后端统一模型目录
+   * @return 过滤可见项后的聊天区下拉模型列表
+   */
+  const buildCatalogModels = useCallback((catalog: CodexModelCatalogItem[]): CodexSelectorModelInfo[] => {
+    return catalog
+      .filter(item => item.visible)
+      .map(item => ({
+        id: item.key || buildCodexModelCatalogKey(item.providerId, item.modelId),
+        label: item.label || item.modelId,
+        description: item.description,
+        providerId: item.providerId,
+        providerLabel: item.providerName,
+        rawModelId: item.modelId,
+        runnable: item.runnable,
+      }));
+  }, []);
+
+  /**
+   * 当 catalog 尚未覆盖当前选中模型时，在列表顶部注入一个运行时兜底项。
+   * 这样即使后端 catalog 尚未返回、或当前会话模型来自旧配置，也不会导致下拉按钮丢失当前值。
+   *
+   * @param models 当前候选模型列表
+   * @param selectedCodexModelId 当前选中模型 ID
+   * @param provider 当前激活 provider
+   * @return 保证包含当前选中值的列表
+   */
+  const ensureSelectedCodexCatalogModelVisible = useCallback((
+    models: CodexSelectorModelInfo[],
+    selectedCodexModelId: string,
+    provider: CodexProviderConfig | null,
+  ): CodexSelectorModelInfo[] => {
+    if (!selectedCodexModelId) {
+      return models;
+    }
+    if (models.some(model => model.rawModelId === selectedCodexModelId || model.id === selectedCodexModelId)) {
+      return models;
+    }
+    const runtimeModel = createRuntimeModelInfo(selectedCodexModelId);
+    if (!runtimeModel) {
+      return models;
+    }
+    return [{
+      ...runtimeModel,
+      providerId: provider?.id,
+      providerLabel: provider?.name,
+      rawModelId: selectedCodexModelId,
+      runnable: true,
+    }, ...models];
+  }, []);
 
   /**
    * Apply model name mapping
@@ -265,6 +361,14 @@ export const ButtonArea = ({
   // customModelsVersion triggers recalculation when localStorage changes
   const availableModels = useMemo(() => {
     if (currentProvider === 'codex') {
+      const catalogModels = buildCatalogModels(codexModelCatalog);
+      if (catalogModels.length > 0) {
+        return ensureSelectedCodexCatalogModelVisible(
+          catalogModels,
+          selectedModel,
+          activeCodexProvider,
+        );
+      }
       const providerModels = getProviderCodexModels(activeCodexProvider);
       if (providerModels.length > 0) {
         const customModels = getCustomCodexModels();
@@ -312,7 +416,16 @@ export const ButtonArea = ({
     const customIds = new Set(customModels.map(m => m.id));
     const filteredBuiltIn = builtInModels.filter(m => !customIds.has(m.id));
     return [...customModels, ...filteredBuiltIn];
-  }, [activeCodexProvider, currentProvider, selectedModel, applyModelMapping, customModelsVersion]);
+  }, [
+    activeCodexProvider,
+    applyModelMapping,
+    buildCatalogModels,
+    codexModelCatalog,
+    currentProvider,
+    customModelsVersion,
+    ensureSelectedCodexCatalogModelVisible,
+    selectedModel,
+  ]);
 
   const codexModelConfigHintVisible = useMemo(
     () => currentProvider === 'codex' && shouldShowCodexModelConfigHint(activeCodexProvider),

@@ -10,6 +10,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
 
 import java.util.Collections;
@@ -51,7 +52,7 @@ public class CodexProviderOperations {
             List<JsonObject> providers = context.getSettingsService().getCodexProviders();
             String providersJson = GSON.toJson(providers);
 
-            ApplicationManager.getApplication().invokeLater(() ->
+            invokeLaterOrRun(() ->
                     context.callJavaScript("window.updateCodexProviders", context.escapeJs(providersJson)));
         } catch (Exception e) {
             LOG.error("[ProviderHandler] Failed to get Codex providers: " + e.getMessage(), e);
@@ -66,7 +67,7 @@ public class CodexProviderOperations {
             JsonObject config = context.getSettingsService().getCurrentCodexConfig();
             String configJson = GSON.toJson(config);
 
-            ApplicationManager.getApplication().invokeLater(() ->
+            invokeLaterOrRun(() ->
                     context.callJavaScript("window.updateCurrentCodexConfig", context.escapeJs(configJson)));
         } catch (Exception e) {
             LOG.error("[ProviderHandler] Failed to get current Codex config: " + e.getMessage(), e);
@@ -234,6 +235,53 @@ public class CodexProviderOperations {
     }
 
     /**
+     * 仅授权读取本地 Codex CLI 配置，不直接假定前端一定要通过旧的切换 provider 入口触发。
+     * 该桥接用于设置页“先授权、再决定是否切换使用”的拆分交互，成功后只刷新 provider/config/active-provider 摘要。
+     *
+     * @param content 预留给未来扩展的 JSON 载荷；当前实现不依赖具体字段
+     */
+    public void handleAuthorizeCodexLocalConfig(String content) {
+        try {
+            context.getSettingsService().setCodexLocalConfigAuthorized(true);
+
+            JsonObject activeProvider = context.getSettingsService().getActiveCodexProvider();
+            boolean shouldActivateCliLogin = activeProvider == null
+                    || !activeProvider.has("id")
+                    || activeProvider.get("id").isJsonNull()
+                    || activeProvider.get("id").getAsString().isBlank();
+            if (shouldActivateCliLogin) {
+                context.getSettingsService().switchCodexProvider(
+                        com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID
+                );
+            }
+
+            LOG.info("[ProviderHandler] Authorized local Codex config access");
+
+            invokeLaterOrRun(() -> {
+                context.callJavaScript(
+                        "window.showSwitchSuccess",
+                        context.escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message(
+                                "toast.codexCliLoginSwitchSuccess"
+                        ))
+                );
+                handleGetCodexProviders();
+                handleGetCurrentCodexConfig();
+                handleGetActiveCodexProvider();
+            });
+        } catch (Exception e) {
+            LOG.error("[ProviderHandler] Failed to authorize Codex local config access: " + e.getMessage(), e);
+            invokeLaterOrRun(() ->
+                    context.callJavaScript(
+                            "window.showError",
+                            context.escapeJs(
+                                    com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchFailed")
+                                            + ": " + e.getMessage()
+                            )
+                    ));
+        }
+    }
+
+    /**
      * 撤销本地 Codex 配置授权，并停止读取 `~/.codex/{config.toml,auth.json}`。
      *
      * @param content 前端传入的撤销授权请求 JSON
@@ -261,7 +309,7 @@ public class CodexProviderOperations {
                 context.getSettingsService().switchCodexProvider(fallbackProviderId);
             }
 
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterOrRun(() -> {
                 context.callJavaScript(
                         "window.showSwitchSuccess",
                         context.escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message(
@@ -274,7 +322,7 @@ public class CodexProviderOperations {
             });
         } catch (Exception e) {
             LOG.error("[ProviderHandler] Failed to revoke Codex local config authorization: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() ->
+            invokeLaterOrRun(() ->
                     context.callJavaScript(
                             "window.showError",
                             context.escapeJs(
@@ -298,7 +346,7 @@ public class CodexProviderOperations {
 
             LOG.info("[ProviderHandler] Authorized local Codex config provider");
 
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterOrRun(() -> {
                 context.callJavaScript(
                         "window.showSwitchSuccess",
                         context.escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message(
@@ -311,7 +359,7 @@ public class CodexProviderOperations {
             });
         } catch (Exception e) {
             LOG.error("[ProviderHandler] Failed to switch to Codex CLI login: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() ->
+            invokeLaterOrRun(() ->
                     context.callJavaScript(
                             "window.showError",
                             context.escapeJs(
@@ -393,6 +441,19 @@ public class CodexProviderOperations {
         enrichedProvider.addProperty("localConfigConflictDetected", localConfigConflictDetected);
         enrichedProvider.addProperty("finalModelProvider", forcedModelProvider);
         return enrichedProvider;
+    }
+
+    /**
+     * 在 IDE Application 可用时切回 EDT；单元测试缺少 Application 时直接同步执行，避免因为 invokeLater 不可用而吞掉回调。
+     *
+     * @param action 需要执行的 UI/bridge 回调逻辑
+     */
+    private void invokeLaterOrRun(Runnable action) {
+        if (ApplicationManager.getApplication() == null) {
+            action.run();
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(action, ModalityState.any());
     }
 
     /**

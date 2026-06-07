@@ -1,9 +1,16 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig, CodexProviderConfig, CodexCustomModel } from '../../../types/provider';
-import { STORAGE_KEYS } from '../../../types/provider';
+import type {
+  ProviderConfig,
+  CodexProviderConfig,
+  CodexCustomModel,
+  CodexModelCatalogItem,
+  CodexModelVisibilityConfig,
+} from '../../../types/provider';
+import { SPECIAL_PROVIDER_IDS, STORAGE_KEYS } from '../../../types/provider';
 import ProviderManageSection from '../ProviderManageSection';
 import CodexProviderSection from '../CodexProviderSection';
+import CodexModelVisibilitySection from '../CodexModelVisibilitySection';
 import CustomModelDialog from '../CustomModelDialog';
 import { usePluginModels } from '../hooks/usePluginModels';
 import styles from './style.module.less';
@@ -25,6 +32,8 @@ interface ProviderTabSectionProps {
   // Codex provider props
   codexProviders: CodexProviderConfig[];
   codexLoading: boolean;
+  codexModelCatalog: CodexModelCatalogItem[];
+  codexModelCatalogLoading: boolean;
   testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
   onCreateCodexProviderFromAlias?: (providerDraft: Partial<CodexProviderConfig>) => void;
@@ -32,7 +41,10 @@ interface ProviderTabSectionProps {
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onSwitchCodexProvider: (id: string) => void;
+  onAuthorizeCodexLocalConfig: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
+  onRefreshCodexModelCatalog: () => void;
+  onSaveCodexModelVisibility: (visibilityConfig: CodexModelVisibilityConfig) => void;
   // Shared
   addToast: (message: string, type: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -47,6 +59,8 @@ const ProviderTabSection = ({
   onSwitchProvider,
   codexProviders,
   codexLoading,
+  codexModelCatalog,
+  codexModelCatalogLoading,
   testingCodexProviderId,
   onAddCodexProvider,
   onCreateCodexProviderFromAlias,
@@ -54,7 +68,10 @@ const ProviderTabSection = ({
   onDeleteCodexProvider,
   onTestCodexProvider,
   onSwitchCodexProvider,
+  onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
+  onRefreshCodexModelCatalog,
+  onSaveCodexModelVisibility,
   addToast,
 }: ProviderTabSectionProps) => {
   const { t } = useTranslation();
@@ -86,6 +103,9 @@ const ProviderTabSection = ({
 
   const activeModels = dialogTarget === 'claude' ? claudeModels : codexModels;
   const isCodexDialogTarget = dialogTarget === 'codex';
+  const cliLoginProvider = codexProviders.find(
+    (provider) => provider.id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN
+  ) as (CodexProviderConfig & { isAuthorized?: boolean }) | undefined;
 
   /**
    * 基于当前模型别名生成一个新的 Codex provider 草稿。
@@ -235,6 +255,7 @@ const ProviderTabSection = ({
         </div>
         <CodexProviderSection
           codexProviders={codexProviders}
+          codexLocalConfigAuthorized={cliLoginProvider?.isAuthorized === true}
           codexLoading={codexLoading}
           testingCodexProviderId={testingCodexProviderId}
           onAddCodexProvider={onAddCodexProvider}
@@ -242,8 +263,15 @@ const ProviderTabSection = ({
           onDeleteCodexProvider={onDeleteCodexProvider}
           onTestCodexProvider={onTestCodexProvider}
           onSwitchCodexProvider={onSwitchCodexProvider}
+          onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
           onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
           showHeader={false}
+        />
+        <CodexModelVisibilitySection
+          catalog={codexModelCatalog}
+          loading={codexModelCatalogLoading}
+          onRefresh={onRefreshCodexModelCatalog}
+          onSaveVisibility={onSaveCodexModelVisibility}
         />
       </div>
 

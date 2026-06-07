@@ -8,7 +8,7 @@ import {
   strip1MContextSuffix,
 } from '../components/ChatInputBox/types';
 import type { PermissionMode } from '../components/ChatInputBox/types';
-import { isSpecialProviderId } from '../types/provider';
+import { isSpecialProviderId, parseCodexModelCatalogKey } from '../types/provider';
 import { useClaudeProvider } from './providers/useClaudeProvider';
 import { useCodexProvider } from './providers/useCodexProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
@@ -313,17 +313,20 @@ export function useModelProviderState({
     }
 
     if (currentProvider === 'codex') {
+      const parsedCatalogSelection = parseCodexModelCatalogKey(modelId);
+      const targetProviderId = parsedCatalogSelection?.providerId ?? activeCodexProviderId;
+      const targetModelId = parsedCatalogSelection?.modelId ?? modelId;
       const savedCodexCustomModels = getCustomModels('codex-custom-models');
       const resolvedCodexModelId = resolveRestorableModelId(
-        modelId,
+        targetModelId,
         [{ id: selectedCodexModel }, { id: defaultCodexModelFromConfig ?? '' }],
         savedCodexCustomModels,
-      ) ?? modelId;
+      ) ?? targetModelId;
       shouldAdoptCodexDefaultModelRef.current = false;
       setSelectedCodexModel(resolvedCodexModelId);
       sendBridgeEvent('set_model', resolvedCodexModelId);
-      sendBridgeEvent('set_selected_codex_model', JSON.stringify({
-        providerId: activeCodexProviderId,
+      sendBridgeEvent('select_codex_model', JSON.stringify({
+        providerId: targetProviderId,
         modelId: resolvedCodexModelId,
       }));
       // Codex 模型一旦切换，必须同步放弃旧 threadId，避免后续消息仍沿用旧模型会话。

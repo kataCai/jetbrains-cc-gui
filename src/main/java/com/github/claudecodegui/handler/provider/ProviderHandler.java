@@ -32,6 +32,7 @@ public class ProviderHandler extends BaseMessageHandler {
             "update_codex_provider",
             "delete_codex_provider",
             "switch_codex_provider",
+            "authorize_codex_local_config",
             "revoke_codex_local_config_authorization",
             "get_active_codex_provider",
             "test_codex_provider",
@@ -117,6 +118,9 @@ public class ProviderHandler extends BaseMessageHandler {
                 return true;
             case "switch_codex_provider":
                 codexOps.handleSwitchCodexProvider(content);
+                return true;
+            case "authorize_codex_local_config":
+                codexOps.handleAuthorizeCodexLocalConfig(content);
                 return true;
             case "revoke_codex_local_config_authorization":
                 codexOps.handleRevokeCodexLocalConfigAuthorization(content);

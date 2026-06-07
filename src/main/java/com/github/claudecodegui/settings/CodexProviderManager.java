@@ -75,7 +75,9 @@ public class CodexProviderManager {
 
         // Add CLI Login virtual provider at the top
         result.add(createCodexCliLoginProviderObject(
-                CODEX_CLI_LOGIN_PROVIDER_ID.equals(currentId) && cliLoginAuthorized));
+                CODEX_CLI_LOGIN_PROVIDER_ID.equals(currentId) && cliLoginAuthorized,
+                cliLoginAuthorized
+        ));
 
         if (!config.has(CODEX_KEY)) {
             return result;
@@ -196,7 +198,7 @@ public class CodexProviderManager {
             if (!isCodexCliLoginAuthorized(config)) {
                 return null;
             }
-            return createCodexCliLoginProviderObject(false);
+            return createCodexCliLoginProviderObject(false, true);
         }
 
         if (!codex.has(PROVIDERS_KEY) || !codex.get(PROVIDERS_KEY).isJsonObject()) {
@@ -474,6 +476,57 @@ public class CodexProviderManager {
     }
 
     /**
+     * 原子切换 Codex 当前运行时 provider 与 selectedModel。
+     * 该方法用于聊天区统一模型目录的选择事件，确保一次操作内同时更新 `codex.current`
+     * 和 `codex.selectedModel`，避免出现界面显示已切换 provider/model，
+     * 但后端仍沿用旧 active provider 的不一致状态。
+     *
+     * @param providerId 目标 provider id
+     * @param modelId 目标 model id
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void selectModel(String providerId, String modelId) throws IOException {
+        String normalizedProviderId = safeTrim(providerId);
+        String normalizedModelId = safeTrim(modelId);
+        if (normalizedProviderId.isEmpty()) {
+            throw new IllegalArgumentException("Provider id is required");
+        }
+        if (normalizedModelId.isEmpty()) {
+            throw new IllegalArgumentException("Model id is required");
+        }
+
+        JsonObject config = configReader.apply(null);
+        JsonObject codex = ensureCodexSection(config);
+
+        if (CODEX_CLI_LOGIN_PROVIDER_ID.equals(normalizedProviderId)) {
+            if (!isCodexCliLoginAuthorized(config)) {
+                throw new IllegalStateException("Codex CLI login is not authorized");
+            }
+        } else {
+            JsonObject providers = codex.getAsJsonObject(PROVIDERS_KEY);
+            if (providers == null || !providers.has(normalizedProviderId) || !providers.get(normalizedProviderId).isJsonObject()) {
+                throw new IllegalArgumentException("Provider with id '" + normalizedProviderId + "' not found");
+            }
+
+            JsonObject provider = providers.getAsJsonObject(normalizedProviderId);
+            if (!providerContainsModel(provider, normalizedModelId)) {
+                throw new IllegalArgumentException(
+                        "Model '" + normalizedModelId + "' not found for provider '" + normalizedProviderId + "'"
+                );
+            }
+        }
+
+        codex.addProperty(CURRENT_KEY, normalizedProviderId);
+        JsonObject selectedModel = new JsonObject();
+        selectedModel.addProperty("providerId", normalizedProviderId);
+        selectedModel.addProperty("modelId", normalizedModelId);
+        codex.add(SELECTED_MODEL_KEY, selectedModel);
+        configWriter.accept(config);
+        LOG.info("[CodexProviderManager] Selected model atomically: provider=" + normalizedProviderId
+                + ", model=" + normalizedModelId);
+    }
+
+    /**
      * Batch save providers
      * @param providers List of providers to save
      * @return Number of successfully saved providers
@@ -590,14 +643,60 @@ public class CodexProviderManager {
     }
 
     /**
+     * 判断 provider 是否声明了指定 model id。
+     * 这里同时兼容当前主 schema 的 `models` 与历史 `customModels`，
+     * 避免旧配置尚未迁移完成时阻断统一模型目录的选择事件。
+     *
+     * @param provider provider 配置
+     * @param modelId 待校验的模型 id
+     * @return 存在时返回 true，否则返回 false
+     */
+    private boolean providerContainsModel(JsonObject provider, String modelId) {
+        JsonArray models = provider.has(MODELS_KEY) && provider.get(MODELS_KEY).isJsonArray()
+                ? provider.getAsJsonArray(MODELS_KEY)
+                : provider.has(CUSTOM_MODELS_KEY) && provider.get(CUSTOM_MODELS_KEY).isJsonArray()
+                ? provider.getAsJsonArray(CUSTOM_MODELS_KEY)
+                : null;
+        if (models == null) {
+            return false;
+        }
+
+        for (JsonElement modelElement : models) {
+            if (modelElement == null || !modelElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject model = modelElement.getAsJsonObject();
+            if (model.has("id") && !model.get("id").isJsonNull()
+                    && modelId.equals(safeTrim(model.get("id").getAsString()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Create virtual CLI Login provider object.
      * Unlike regular providers, this is not stored in config but generated dynamically.
      */
     private JsonObject createCodexCliLoginProviderObject(boolean isActive) {
+        return createCodexCliLoginProviderObject(isActive, isActive);
+    }
+
+    /**
+     * 创建虚拟的 Codex CLI Login provider 对象。
+     * 该 provider 不落盘在 providers 列表内，而是根据授权状态动态注入，
+     * 以便设置页同时区分“已授权”和“当前是否在用”两种语义。
+     *
+     * @param isActive 当前是否作为运行时 active provider 生效
+     * @param isAuthorized 当前是否允许读取本地 `~/.codex` 配置
+     * @return 供前端消费的虚拟 provider 描述
+     */
+    private JsonObject createCodexCliLoginProviderObject(boolean isActive, boolean isAuthorized) {
         JsonObject provider = new JsonObject();
         provider.addProperty("id", CODEX_CLI_LOGIN_PROVIDER_ID);
         provider.addProperty("name", ClaudeCodeGuiBundle.message("provider.codexCliLogin.name"));
         provider.addProperty("isActive", isActive);
+        provider.addProperty("isAuthorized", isAuthorized);
         provider.addProperty("isCodexCliLoginProvider", true);
         return provider;
     }

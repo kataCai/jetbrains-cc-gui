@@ -167,31 +167,32 @@ describe('useModelProviderState', () => {
     expect(result.current.defaultCodexModelFromConfig).toBeNull();
   });
 
-  it('persists the selected codex model with the active codex provider id', () => {
-    // 持久化 Codex 下拉框选中值时，必须带上真实 active provider id，
-    // 否则 provider 切换后会把模型错误归属到当前瞬时 provider，导致恢复结果串味。
+  it('uses the provider id encoded in the composite catalog key for codex selection', () => {
+    /**
+     * 验证目标：
+     * 聊天区模型下拉切到统一 catalog 后，Codex 选项 value 应改为 `providerId::modelId`。
+     *
+     * 断言意图：
+     * 1. hook 需要从复合 key 中拆出 providerId 和 modelId；
+     * 2. 只发送新的 select_codex_model 事件；
+     * 3. 前端本地 selectedCodexModel 仍保持真实 modelId，避免影响现有显示链路。
+     */
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
     }));
 
     act(() => {
-      runtimeProviderMock.emitActiveCodexProvider({
-        id: 'managed-openai',
-        name: 'Managed OpenAI',
-      });
-    });
-
-    act(() => {
       result.current.handleProviderSelect('codex');
     });
 
     act(() => {
-      result.current.handleModelSelect('gpt-5.5');
+      result.current.handleModelSelect('managed-openai::gpt-5.5');
     });
 
+    expect(result.current.selectedCodexModel).toBe('gpt-5.5');
     expect(sendBridgeEvent).toHaveBeenCalledWith(
-      'set_selected_codex_model',
+      'select_codex_model',
       JSON.stringify({
         providerId: 'managed-openai',
         modelId: 'gpt-5.5',
@@ -205,7 +206,15 @@ describe('useModelProviderState', () => {
    * 即使前一个 provider 已经选过模型，新的选择事件也必须落到当前激活 provider 上，
    * 否则恢复 selected model 或后端摘要时就会把模型错归到旧 provider。
    */
-  it('uses the latest active codex provider id after provider switching', () => {
+  it('falls back to the latest active codex provider id for plain model ids', () => {
+    /**
+     * 验证目标：
+     * 统一 catalog 落地过程中，仍兼容极少数旧调用方继续传纯 modelId。
+     *
+     * 断言意图：
+     * 当 value 中没有 provider 维度时，hook 仍应回退到最新 active provider，
+     * 同时事件名也要统一升级为 select_codex_model。
+     */
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
@@ -236,14 +245,14 @@ describe('useModelProviderState', () => {
     });
 
     expect(sendBridgeEvent).toHaveBeenCalledWith(
-      'set_selected_codex_model',
+      'select_codex_model',
       JSON.stringify({
         providerId: 'provider-a',
         modelId: 'gpt-5.4',
       }),
     );
     expect(sendBridgeEvent).toHaveBeenCalledWith(
-      'set_selected_codex_model',
+      'select_codex_model',
       JSON.stringify({
         providerId: 'provider-b',
         modelId: 'gpt-5.5',

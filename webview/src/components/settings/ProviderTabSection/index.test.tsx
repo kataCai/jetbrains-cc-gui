@@ -1,24 +1,23 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CodexModelCatalogItem } from '../../../types/provider';
 import ProviderTabSection from './index';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => {
       const translations: Record<string, string> = {
-        'settings.providers': '供应商管理',
-        'settings.providersDesc': '管理 Claude 和 Codex 供应商配置',
+        'settings.providers': 'Providers',
+        'settings.providersDesc': 'Manage Claude and Codex providers',
         'settings.providerTab.claude': 'Claude Code',
         'settings.providerTab.codex': 'Codex',
-        'settings.pluginModels.title': '自定义模型',
-        'settings.pluginModels.manage': '管理模型',
-        'settings.codexProvider.quickCreateTitle': '新增供应商',
-        'settings.codexProvider.quickCreateDescription': '为 Codex 配置可运行的供应商、Base URL、API Key 和模型列表',
-        'settings.codexProvider.aliasTitle': '模型别名（高级）',
-        'settings.codexProvider.aliasDescription': '只补充模型选择列表展示项，不保存供应商、密钥和请求地址',
-        'common.add': '添加',
-        'settings.codexProvider.title': 'Codex Provider',
-        'settings.codexProvider.description': 'Manage Codex providers',
+        'settings.pluginModels.title': 'Custom Models',
+        'settings.pluginModels.manage': 'Manage Models',
+        'settings.codexProvider.quickCreateTitle': 'Add Provider',
+        'settings.codexProvider.quickCreateDescription': 'Create a runnable Codex provider with Base URL, API Key, and models',
+        'settings.codexProvider.aliasTitle': 'Model Aliases (Advanced)',
+        'settings.codexProvider.aliasDescription': 'Only affect model picker display entries',
+        'common.add': 'Add',
       };
       return translations[key] ?? key;
     },
@@ -32,10 +31,14 @@ vi.mock('../ProviderManageSection', () => ({
 vi.mock('../CodexProviderSection', () => ({
   default: ({ onAddCodexProvider }: { onAddCodexProvider: () => void }) => (
     <div data-testid="codex-provider-section">
-      <button type="button" onClick={onAddCodexProvider}>列表添加</button>
+      <button type="button" onClick={onAddCodexProvider}>List Add</button>
       Codex Provider Section
     </div>
   ),
+}));
+
+vi.mock('../CodexModelVisibilitySection', () => ({
+  default: () => <div data-testid="codex-model-visibility-section">Codex Model Visibility Section</div>,
 }));
 
 vi.mock('../CustomModelDialog', () => ({
@@ -62,19 +65,18 @@ vi.mock('../CustomModelDialog', () => ({
             description: 'Alias Desc',
           })}
         >
-          创建供应商
+          Create Provider
         </button>
       )}
     </div>
   ) : null),
 }));
 
+const emptyCatalog: CodexModelCatalogItem[] = [];
+
 /**
  * ProviderTabSection 的 Codex 入口回归测试。
- * 这些测试覆盖三件事：
- * 1. 设置页主入口首先暴露“新增供应商”。
- * 2. 模型别名入口被明确降级为高级辅助能力。
- * 3. 历史别名可以直接升级为 provider 草稿，而不是继续停留在 alias 层。
+ * 这些测试覆盖新增 provider 入口、模型别名高级入口，以及从别名直接生成 provider 草稿的链路。
  */
 describe('ProviderTabSection', () => {
   const onAddProvider = vi.fn();
@@ -87,7 +89,10 @@ describe('ProviderTabSection', () => {
   const onDeleteCodexProvider = vi.fn();
   const onTestCodexProvider = vi.fn();
   const onSwitchCodexProvider = vi.fn();
+  const onAuthorizeCodexLocalConfig = vi.fn();
   const onRevokeCodexLocalConfigAuthorization = vi.fn();
+  const onRefreshCodexModelCatalog = vi.fn();
+  const onSaveCodexModelVisibility = vi.fn();
   const addToast = vi.fn();
 
   beforeEach(() => {
@@ -96,9 +101,9 @@ describe('ProviderTabSection', () => {
   });
 
   /**
-   * 验证 Codex 主入口优先走新增供应商，而不是打开别名弹窗。
+   * 验证 Codex 主入口优先暴露新增 provider，而不是直接打开模型别名对话框。
    */
-  it('应优先展示 Codex 新增供应商主入口并允许直接创建 provider', () => {
+  it('shows Codex quick-create entry and allows direct provider creation', () => {
     render(
       <ProviderTabSection
         currentProvider="codex"
@@ -110,29 +115,34 @@ describe('ProviderTabSection', () => {
         onSwitchProvider={onSwitchProvider}
         codexProviders={[]}
         codexLoading={false}
+        codexModelCatalog={emptyCatalog}
+        codexModelCatalogLoading={false}
         onAddCodexProvider={onAddCodexProvider}
         onCreateCodexProviderFromAlias={onCreateCodexProviderFromAlias}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
+        onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+        onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
+        onSaveCodexModelVisibility={onSaveCodexModelVisibility}
         addToast={addToast}
       />,
     );
 
-    expect(screen.getByText('新增供应商')).toBeTruthy();
-    expect(screen.getByText('为 Codex 配置可运行的供应商、Base URL、API Key 和模型列表')).toBeTruthy();
+    expect(screen.getByText('Add Provider')).toBeTruthy();
+    expect(screen.getByText('Create a runnable Codex provider with Base URL, API Key, and models')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
     expect(onAddCodexProvider).toHaveBeenCalledTimes(1);
   });
 
   /**
-   * 验证 Codex 插件级模型入口被明确标识为“模型别名（高级）”。
+   * 验证模型别名入口被明确标记为高级能力，并仍保留独立入口。
    */
-  it('应将 Codex 插件级模型入口降级为模型别名高级入口', () => {
+  it('keeps model alias management as an advanced Codex entry', () => {
     render(
       <ProviderTabSection
         currentProvider="codex"
@@ -144,26 +154,30 @@ describe('ProviderTabSection', () => {
         onSwitchProvider={onSwitchProvider}
         codexProviders={[]}
         codexLoading={false}
+        codexModelCatalog={emptyCatalog}
+        codexModelCatalogLoading={false}
         onAddCodexProvider={onAddCodexProvider}
         onCreateCodexProviderFromAlias={onCreateCodexProviderFromAlias}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
+        onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+        onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
+        onSaveCodexModelVisibility={onSaveCodexModelVisibility}
         addToast={addToast}
       />,
     );
 
-    expect(screen.getByText('模型别名（高级）')).toBeTruthy();
-    expect(screen.getByText('只补充模型选择列表展示项，不保存供应商、密钥和请求地址')).toBeTruthy();
+    expect(screen.getByText('Model Aliases (Advanced)')).toBeTruthy();
+    expect(screen.getByText('Only affect model picker display entries')).toBeTruthy();
   });
 
   /**
-   * 验证别名弹窗可以直接把当前模型升级为 provider 草稿。
-   * 这里要求上层拿到的是结构化草稿，后续由 provider 表单继续补完 baseUrl 和鉴权信息。
+   * 验证从 Codex 模型别名入口可以直接生成 provider 草稿，供上层继续补全鉴权和地址配置。
    */
-  it('应支持从 Codex 模型别名直接创建供应商草稿', () => {
+  it('creates a provider draft directly from a Codex model alias', () => {
     render(
       <ProviderTabSection
         currentProvider="codex"
@@ -175,19 +189,24 @@ describe('ProviderTabSection', () => {
         onSwitchProvider={onSwitchProvider}
         codexProviders={[]}
         codexLoading={false}
+        codexModelCatalog={emptyCatalog}
+        codexModelCatalogLoading={false}
         onAddCodexProvider={onAddCodexProvider}
         onCreateCodexProviderFromAlias={onCreateCodexProviderFromAlias}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
         onSwitchCodexProvider={onSwitchCodexProvider}
+        onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+        onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
+        onSaveCodexModelVisibility={onSaveCodexModelVisibility}
         addToast={addToast}
       />,
     );
 
-    fireEvent.click(screen.getByText('模型别名（高级）'));
-    fireEvent.click(screen.getByRole('button', { name: '创建供应商' }));
+    fireEvent.click(screen.getByText('Model Aliases (Advanced)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Provider' }));
 
     expect(onCreateCodexProviderFromAlias).toHaveBeenCalledWith({
       name: 'Alias Model',

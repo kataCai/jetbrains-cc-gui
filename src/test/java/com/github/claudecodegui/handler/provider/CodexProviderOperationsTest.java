@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -202,6 +203,21 @@ public class CodexProviderOperationsTest {
         assertEquals("LocalOpenAI", payload.get("finalModelProvider").getAsString());
     }
 
+    @Test
+    public void shouldAuthorizeLocalConfigWithoutForcingProviderSwitchWhenManagedProviderIsActive() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingSettingsService settingsService = new TrackingSettingsService(createManagedProvider(), new JsonObject());
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback)
+        );
+
+        operations.handleAuthorizeCodexLocalConfig("");
+
+        assertTrue(settingsService.localConfigAuthorized);
+        assertFalse(settingsService.switchCodexProviderCalled);
+        assertEquals("window.updateActiveCodexProvider", jsCallback.lastFunctionName);
+    }
+
     private static HandlerContext createContext(
             CodemossSettingsService settingsService,
             CodexSDKBridge codexSDKBridge,
@@ -264,6 +280,32 @@ public class CodexProviderOperationsTest {
         @Override
         public JsonObject getActiveCodexProvider() throws IOException {
             return provider == null ? null : provider.deepCopy();
+        }
+    }
+
+    private static class TrackingSettingsService extends TestSettingsService {
+        private boolean localConfigAuthorized;
+        private boolean switchCodexProviderCalled;
+
+        TrackingSettingsService(JsonObject provider, JsonObject localModelState) {
+            super(provider, localModelState);
+        }
+
+        @Override
+        public void setCodexLocalConfigAuthorized(boolean authorized) {
+            this.localConfigAuthorized = authorized;
+        }
+
+        @Override
+        public void switchCodexProvider(String id) {
+            this.switchCodexProviderCalled = true;
+        }
+
+        @Override
+        public JsonObject getCurrentCodexConfig() {
+            JsonObject config = new JsonObject();
+            config.addProperty("authorized", localConfigAuthorized);
+            return config;
         }
     }
 

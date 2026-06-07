@@ -5,9 +5,12 @@ import { resetLinkifyCapabilities, setLinkifyCapabilities } from '../utils/linki
 
 vi.mock('../hooks/useDialogResize', () => ({
   useDialogResize: () => ({
-    isResizing: false,
-    dialogSize: { width: 840, height: 620 },
-    handleMouseDown: vi.fn(),
+    // PlanApprovalDialog 已切换到新的拖拽尺寸 hook 返回结构，这里保持测试桩与真实接口一致，
+    // 只关心渲染与交互，不在该用例里覆盖拖拽行为本身。
+    dialogRef: { current: null },
+    dialogHeight: null,
+    setDialogHeight: vi.fn(),
+    handleResizeStart: vi.fn(),
   }),
 }));
 

@@ -6,8 +6,10 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.skill.SlashCommandRegistry;
 import com.github.claudecodegui.util.EditorFileUtils;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.util.concurrency.AppExecutorUtil;
 
@@ -129,6 +131,89 @@ public class ModelProviderHandler {
         }
     }
 
+    /**
+     * 返回统一的 Codex 模型目录配置。
+     * 该接口会把后端可发现模型、可见性配置与运行时可用性一次性回传给前端，
+     * 供聊天区下拉和设置页 Models 面板共享。
+     */
+    public void handleGetCodexModelCatalog() {
+        try {
+            JsonObject catalogConfig = context.getSettingsService().getCodexModelDisplayConfig();
+            JsonArray catalog = catalogConfig.has("catalog") && catalogConfig.get("catalog").isJsonArray()
+                    ? catalogConfig.getAsJsonArray("catalog")
+                    : new JsonArray();
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.updateCodexModelCatalog", context.escapeJs(catalog.toString()))
+            );
+        } catch (Exception e) {
+            LOG.error("[ModelProviderHandler] Failed to load Codex model catalog: " + e.getMessage(), e);
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.updateCodexModelCatalog", context.escapeJs(new JsonArray().toString()))
+            );
+        }
+    }
+
+    /**
+     * 保存 Codex 模型显示开关配置。
+     * 该入口只负责更新 `codex.modelDisplay`，并在保存成功后把最新目录重新推送给前端，
+     * 避免设置页与聊天区各自持有旧缓存。
+     *
+     * @param content 前端传入的可见性配置 JSON
+     */
+    public void handleSetCodexModelVisibility(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            context.getSettingsService().saveCodexModelDisplayConfig(json == null ? new JsonObject() : json);
+            handleGetCodexModelCatalog();
+        } catch (Exception e) {
+            LOG.error("[ModelProviderHandler] Failed to save Codex model visibility: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() ->
+                    context.callJavaScript("window.showError", context.escapeJs(e.getMessage()))
+            );
+        }
+    }
+
+    /**
+     * 原子切换 Codex provider 与 model。
+     * 该入口用于聊天区统一模型目录的选择事件，除更新配置外，还会同步刷新当前 session 上的 provider/model，
+     * 并清空旧 thread 绑定，确保下一条消息新建线程而不是复用旧 provider 的会话。
+     *
+     * @param content 包含 providerId 与 modelId 的 JSON
+     */
+    public void handleSelectCodexModel(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            String providerId = json != null && json.has("providerId") && !json.get("providerId").isJsonNull()
+                    ? json.get("providerId").getAsString().trim()
+                    : "";
+            String modelId = json != null && json.has("modelId") && !json.get("modelId").isJsonNull()
+                    ? json.get("modelId").getAsString().trim()
+                    : "";
+
+            context.getSettingsService().selectCodexModel(providerId, modelId);
+            context.setCurrentProvider("codex");
+            context.setCurrentModel(modelId);
+
+            if (context.getSession() != null) {
+                context.getSession().setProvider("codex");
+                context.getSession().setModel(modelId);
+                context.getSession().setSessionInfo(null, context.getSession().getCwd());
+                context.getSession().getState().setCodexSessionBinding(null);
+            }
+
+            ApplicationManager.getApplication().invokeLater(() -> {
+                context.callJavaScript("window.onModelConfirmed", context.escapeJs(modelId), context.escapeJs("codex"));
+                handleGetActiveCodexProvider();
+                handleGetCodexModelCatalog();
+            });
+        } catch (Exception e) {
+            LOG.error("[ModelProviderHandler] Failed to select Codex model atomically: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() ->
+                    context.callJavaScript("window.showError", context.escapeJs(e.getMessage()))
+            );
+        }
+    }
+
     public void handleSetProvider(String content) {
         try {
             String provider = content;
@@ -189,14 +274,41 @@ public class ModelProviderHandler {
     public void handleGetCodexModelState() {
         try {
             JsonObject modelState = context.getSettingsService().getCurrentCodexModelState();
-            ApplicationManager.getApplication().invokeLater(() ->
+            invokeLaterOrRun(() ->
                 context.callJavaScript("window.updateCodexModelState", context.escapeJs(modelState.toString()))
             );
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to load Codex model state: " + e.getMessage(), e);
-            ApplicationManager.getApplication().invokeLater(() ->
+            invokeLaterOrRun(() ->
                 context.callJavaScript("window.updateCodexModelState", context.escapeJs(new JsonObject().toString()))
             );
+        }
+    }
+
+    /**
+     * 在 IDE Application 可用时切回 EDT；测试环境没有 Application 时直接同步执行，避免新回调协议测试被空指针打断。
+     *
+     * @param action 待执行的 bridge 回调
+     */
+    private void invokeLaterOrRun(Runnable action) {
+        if (ApplicationManager.getApplication() == null) {
+            action.run();
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(action, ModalityState.any());
+    }
+
+    /**
+     * 把当前 active Codex provider 摘要重新推送给前端。
+     * 该逻辑与 settings 页的 provider 回调保持一致，供聊天区统一模型目录切换后复用。
+     */
+    private void handleGetActiveCodexProvider() {
+        try {
+            JsonObject provider = context.getSettingsService().getActiveCodexProvider();
+            JsonObject payload = provider == null ? new JsonObject() : provider;
+            context.callJavaScript("window.updateActiveCodexProvider", context.escapeJs(payload.toString()));
+        } catch (Exception e) {
+            LOG.warn("[ModelProviderHandler] Failed to refresh active Codex provider: " + e.getMessage(), e);
         }
     }
 

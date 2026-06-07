@@ -591,6 +591,13 @@ interface Window {
    */
   updateCodexModelState?: (json: string) => void;
 
+  /**
+   * 更新 Codex 统一模型目录。
+   * 后端会把 provider 维度拍平后的 catalog 一次性回推给前端，
+   * 供聊天区和设置页共享同一份可见/可运行模型列表。
+   */
+  updateCodexModelCatalog?: (json: string) => void;
+
 // ============================================================================
   // Streaming Callbacks
   // ============================================================================

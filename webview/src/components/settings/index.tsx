@@ -243,16 +243,21 @@ const SettingsView = ({
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
+    codexModelCatalog,
+    codexModelCatalogLoading,
     loadCodexProviders,
+    loadCodexModelCatalog,
     updateCodexProviders,
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
+    updateCodexModelCatalog,
     handleAddCodexProvider,
     handleAddCodexProviderWithDraft,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleSwitchCodexProvider,
+    handleAuthorizeCodexLocalConfig,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
@@ -262,6 +267,8 @@ const SettingsView = ({
     setCodexLoading,
     setCodexConfigLoading,
     setTestingCodexProviderId,
+    saveCodexModelVisibility,
+    setCodexModelCatalogLoading,
   } = useCodexProviderManagement({
     onSuccess: (msg) => addToast(msg, 'success'),
   });
@@ -320,11 +327,13 @@ const SettingsView = ({
     setLoading,
     setCodexLoading,
     setCodexConfigLoading,
+    setCodexModelCatalogLoading,
     setTestingCodexProviderId,
     updateProviders,
     updateActiveProvider,
     loadProviders,
     loadCodexProviders,
+    loadCodexModelCatalog,
     loadAgents,
     updateAgents,
     handleAgentOperationResult,
@@ -334,6 +343,7 @@ const SettingsView = ({
     updateCodexProviders,
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
+    updateCodexModelCatalog,
     cleanupAgentsTimeout,
     showAlert,
     addToast,
@@ -572,6 +582,8 @@ const SettingsView = ({
               onSwitchProvider={handleSwitchProvider}
               codexProviders={codexProviders}
               codexLoading={codexLoading}
+              codexModelCatalog={codexModelCatalog}
+              codexModelCatalogLoading={codexModelCatalogLoading}
               testingCodexProviderId={testingCodexProviderId}
               onAddCodexProvider={handleAddCodexProvider}
               onCreateCodexProviderFromAlias={handleAddCodexProviderWithDraft}
@@ -579,9 +591,12 @@ const SettingsView = ({
               onDeleteCodexProvider={handleDeleteCodexProvider}
               onTestCodexProvider={handleTestCodexProvider}
               onSwitchCodexProvider={handleSwitchCodexProvider}
-                onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
-                addToast={addToast}
-              />
+              onAuthorizeCodexLocalConfig={handleAuthorizeCodexLocalConfig}
+              onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
+              onRefreshCodexModelCatalog={loadCodexModelCatalog}
+              onSaveCodexModelVisibility={saveCodexModelVisibility}
+              addToast={addToast}
+            />
           </div>
 
           {/* SDK dependency management */}

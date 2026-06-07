@@ -130,7 +130,16 @@ describe('ButtonArea', () => {
     expect(within(dropdown as HTMLElement).queryByText('Plan')).toBeNull();
   });
 
-  it('uses active Codex provider models before built-in models', () => {
+  it('uses codex catalog entries with provider labels before falling back to built-in models', () => {
+    /**
+     * 验证目标：
+     * 聊天区接入统一 catalog 后，应优先渲染后端回推的 catalog，而不是继续拼 active provider models。
+     *
+     * 断言意图：
+     * 1. 下拉展示 catalog 中的模型项；
+     * 2. 同一项上可看到 provider 标签；
+     * 3. 不再回退显示内置 GPT 列表。
+     */
     const { container } = render(
       <ButtonArea
         hasInputContent
@@ -143,17 +152,25 @@ describe('ButtonArea', () => {
     );
 
     act(() => {
-      window.updateActiveCodexProvider?.(JSON.stringify({
-        id: 'minimax-cn',
-        name: 'MiniMax CN',
-        models: [{ id: 'MiniMax-M2.7', label: 'MiniMax M2.7', reasoningEffort: 'medium' }],
-      }));
+      window.updateCodexModelCatalog?.(JSON.stringify([
+        {
+          key: 'minimax-cn::MiniMax-M2.7',
+          providerId: 'minimax-cn',
+          providerName: 'MiniMax CN',
+          modelId: 'MiniMax-M2.7',
+          label: 'MiniMax M2.7',
+          visible: true,
+          runnable: true,
+          source: 'managed_provider',
+        },
+      ]));
     });
 
     fireEvent.click(screen.getByRole('button', { name: /MiniMax/i }));
     const dropdown = container.querySelector('.selector-dropdown');
     expect(dropdown).toBeTruthy();
     expect(within(dropdown as HTMLElement).getByText('MiniMax M2.7')).toBeTruthy();
+    expect(within(dropdown as HTMLElement).getByText('MiniMax CN')).toBeTruthy();
     expect(within(dropdown as HTMLElement).queryByText('GPT-5.4')).toBeNull();
   });
 
@@ -180,24 +197,12 @@ describe('ButtonArea', () => {
     expect(screen.getByText('chat.codexModelConfigRequired')).toBeTruthy();
   });
 
-  it('merges plugin-level custom Codex models before active provider models', () => {
+  it('keeps the currently selected codex model visible when catalog does not include it yet', () => {
     /**
      * 验证目标：
-     * 插件级自定义模型已经迁移到 localStorage 统一管理后，即使当前激活的是带有 models 的托管 provider，
-     * 聊天区模型下拉也必须把这些自定义模型显示出来，并保持它们排在 provider 模型前面。
-     *
-     * 前置条件：
-     * 1. localStorage 中已有一个 Codex 自定义模型；
-     * 2. 当前激活的 Codex provider 也返回了一组 provider-owned models。
-     *
-     * 断言意图：
-     * 1. 下拉列表中同时能看到自定义模型和 provider 模型；
-     * 2. 自定义模型位置在 provider 模型之前，避免设置页新增模型后聊天区“看不到”的回归。
+     * 当前会话模型可能来自旧状态恢复，而 catalog 回推稍后才到。
+     * 这时聊天区不能把当前选中值从按钮和下拉里“吃掉”。
      */
-    localStorage.setItem('codex-custom-models', JSON.stringify([
-      { id: 'custom-codex-model', label: 'Custom Codex Model' },
-    ]));
-
     const { container } = render(
       <ButtonArea
         hasInputContent
@@ -210,6 +215,18 @@ describe('ButtonArea', () => {
     );
 
     act(() => {
+      window.updateCodexModelCatalog?.(JSON.stringify([
+        {
+          key: 'minimax-cn::MiniMax-M2.7',
+          providerId: 'minimax-cn',
+          providerName: 'MiniMax CN',
+          modelId: 'MiniMax-M2.7',
+          label: 'MiniMax M2.7',
+          visible: true,
+          runnable: true,
+          source: 'managed_provider',
+        },
+      ]));
       window.updateActiveCodexProvider?.(JSON.stringify({
         id: 'minimax-cn',
         name: 'MiniMax CN',
@@ -217,17 +234,17 @@ describe('ButtonArea', () => {
       }));
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Custom Codex Model/i }));
+    fireEvent.click(screen.getByRole('button', { name: /custom-codex-model/i }));
     const dropdown = container.querySelector('.selector-dropdown');
     expect(dropdown).toBeTruthy();
 
     const renderedOptions = Array.from((dropdown as HTMLElement).querySelectorAll('.selector-option'));
-    expect(within(dropdown as HTMLElement).getByText('Custom Codex Model')).toBeTruthy();
+    expect(within(dropdown as HTMLElement).getByText('custom-codex-model')).toBeTruthy();
     expect(within(dropdown as HTMLElement).getByText('MiniMax M2.7')).toBeTruthy();
-    expect(renderedOptions[0]?.textContent).toContain('Custom Codex Model');
+    expect(renderedOptions[0]?.textContent).toContain('custom-codex-model');
   });
 
-  it('refreshes the dropdown model list after active Codex provider switching', () => {
+  it('refreshes the dropdown model list after codex catalog switching', () => {
     /**
      * 验证目标：
      * 当用户切换 active Codex provider 后，聊天区模型下拉必须立即切换到新 provider 的模型集合，
@@ -249,11 +266,18 @@ describe('ButtonArea', () => {
     );
 
     act(() => {
-      window.updateActiveCodexProvider?.(JSON.stringify({
-        id: 'provider-a',
-        name: 'Provider A',
-        models: [{ id: 'provider-a-model', label: 'Provider A Model' }],
-      }));
+      window.updateCodexModelCatalog?.(JSON.stringify([
+        {
+          key: 'provider-a::provider-a-model',
+          providerId: 'provider-a',
+          providerName: 'Provider A',
+          modelId: 'provider-a-model',
+          label: 'Provider A Model',
+          visible: true,
+          runnable: true,
+          source: 'managed_provider',
+        },
+      ]));
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Provider A Model/i }));
@@ -276,11 +300,18 @@ describe('ButtonArea', () => {
     );
 
     act(() => {
-      window.updateActiveCodexProvider?.(JSON.stringify({
-        id: 'provider-b',
-        name: 'Provider B',
-        models: [{ id: 'provider-b-model', label: 'Provider B Model' }],
-      }));
+      window.updateCodexModelCatalog?.(JSON.stringify([
+        {
+          key: 'provider-b::provider-b-model',
+          providerId: 'provider-b',
+          providerName: 'Provider B',
+          modelId: 'provider-b-model',
+          label: 'Provider B Model',
+          visible: true,
+          runnable: true,
+          source: 'managed_provider',
+        },
+      ]));
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Provider B Model/i }));

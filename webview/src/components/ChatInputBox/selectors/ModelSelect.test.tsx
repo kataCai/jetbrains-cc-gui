@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelSelect } from './ModelSelect';
 import { CLAUDE_MODELS, CODEX_MODELS } from '../types';
@@ -188,6 +188,69 @@ describe('ModelSelect', () => {
 
     expect(screen.getByText('Custom OpenAI base URL')).toBeTruthy();
     expect(screen.getByText('https://rayplus.site may not support all model selections.')).toBeTruthy();
+  });
+
+  /**
+   * 验证统一 catalog 场景下，Codex 下拉项可以同时展示模型名和 provider 标签。
+   * 这样用户在多 provider 并存时，能够直接区分同名模型来自哪个 provider。
+   */
+  it('会在 Codex catalog 模型项上展示 provider 标签', () => {
+    const { container } = render(
+      <ModelSelect
+        value="managed-openai::gpt-5.5"
+        onChange={vi.fn()}
+        models={[{
+          id: 'managed-openai::gpt-5.5',
+          rawModelId: 'gpt-5.5',
+          label: 'gpt-5.5',
+          providerId: 'managed-openai',
+          providerLabel: 'Managed OpenAI',
+          runnable: true,
+        }]}
+        currentProvider="codex"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    const dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    expect(within(dropdown as HTMLElement).getByText('Managed OpenAI')).toBeTruthy();
+  });
+
+  /**
+   * 验证 CLI 未授权等“可见但不可运行”的 catalog 项会以 disabled 形式展示。
+   * 这样聊天区可以告知用户该模型存在，但在授权完成前不能直接切换使用。
+   */
+  it('会禁用不可运行的 Codex catalog 模型项', () => {
+    const onChange = vi.fn();
+
+    const { container } = render(
+      <ModelSelect
+        value="managed-openai::gpt-5.5"
+        onChange={onChange}
+        models={[
+          {
+            id: 'managed-openai::gpt-5.5',
+            rawModelId: 'gpt-5.5',
+            label: 'gpt-5.5',
+            providerId: 'managed-openai',
+            providerLabel: 'Managed OpenAI',
+            runnable: false,
+          },
+        ]}
+        currentProvider="codex"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    const dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    const option = within(dropdown as HTMLElement).getByText('Managed OpenAI').closest('.selector-option');
+    expect(option?.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(option as HTMLElement);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   /**

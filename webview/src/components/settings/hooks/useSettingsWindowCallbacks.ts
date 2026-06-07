@@ -29,6 +29,7 @@ import type { ToastMessage } from '../../Toast';
 import {
   subscribeActiveCodexProvider,
   subscribeActiveProvider,
+  subscribeCodexModelCatalog,
   subscribeCodexProviderList,
   subscribeProviderList,
 } from '../../../utils/runtimeProviderCapabilities';
@@ -59,6 +60,7 @@ export interface SettingsWindowCallbacksDeps {
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
+  setCodexModelCatalogLoading: (loading: boolean) => void;
   setTestingCodexProviderId: (providerId: string) => void;
   setCommitGenerationEnabled?: (enabled: boolean) => void;
   setAiTitleGenerationEnabled?: (enabled: boolean) => void;
@@ -77,6 +79,7 @@ export interface SettingsWindowCallbacksDeps {
   updateActiveProvider: (provider: ProviderConfig) => void;
   loadProviders: () => void;
   loadCodexProviders: () => void;
+  loadCodexModelCatalog: () => void;
   loadAgents: () => void;
   updateAgents: (agents: AgentConfig[]) => void;
   handleAgentOperationResult: (result: { success: boolean; operation?: string; error?: string }) => void;
@@ -87,6 +90,7 @@ export interface SettingsWindowCallbacksDeps {
   updateCodexProviders: (providers: CodexProviderConfig[]) => void;
   updateActiveCodexProvider: (provider: CodexProviderConfig) => void;
   updateCurrentCodexConfig: (config: unknown) => void;
+  updateCodexModelCatalog: (catalog: import('../../../types/provider').CodexModelCatalogItem[]) => void;
   cleanupAgentsTimeout: () => void;
 
   loadPrompts?: () => void;
@@ -143,6 +147,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       try {
         const providersList: CodexProviderConfig[] = JSON.parse(jsonStr);
         d().updateCodexProviders(providersList);
+        d().loadCodexModelCatalog();
       } catch (error) {
         console.error('[SettingsView] Failed to parse Codex providers:', error);
         d().setCodexLoading(false);
@@ -157,6 +162,16 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         }
       } catch (error) {
         console.error('[SettingsView] Failed to parse active Codex provider:', error);
+      }
+    });
+
+    const unsubscribeCodexModelCatalog = subscribeCodexModelCatalog((jsonStr: string) => {
+      try {
+        const catalog = JSON.parse(jsonStr);
+        d().updateCodexModelCatalog(catalog);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex model catalog:', error);
+        d().setCodexModelCatalogLoading(false);
       }
     });
 
@@ -486,6 +501,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     d().loadProviders();
     d().loadCodexProviders();
+    d().loadCodexModelCatalog();
     d().loadAgents();
     d().loadPrompts?.();
     sendToJava('get_node_path:');
@@ -504,6 +520,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_ai_title_generation_enabled:');
     sendToJava('get_status_bar_widget_enabled:');
     sendToJava('get_task_completion_notification_enabled:');
+    sendToJava('get_current_codex_config:');
 
     return () => {
       d().cleanupAgentsTimeout();
@@ -512,6 +529,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       unsubscribeActiveProvider();
       unsubscribeCodexProviders();
       unsubscribeActiveCodexProvider();
+      unsubscribeCodexModelCatalog();
 
       window.showError = undefined;
       window.showSwitchSuccess = undefined;

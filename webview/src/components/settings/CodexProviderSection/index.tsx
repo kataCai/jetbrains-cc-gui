@@ -54,6 +54,7 @@ function buildProviderMetaItems(
 
 interface CodexProviderSectionProps {
   codexProviders: CodexProviderConfig[];
+  codexLocalConfigAuthorized?: boolean;
   codexLoading: boolean;
   testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
@@ -61,12 +62,14 @@ interface CodexProviderSectionProps {
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onSwitchCodexProvider: (id: string) => void;
+  onAuthorizeCodexLocalConfig?: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   showHeader?: boolean;
 }
 
 const CodexProviderSection = ({
   codexProviders,
+  codexLocalConfigAuthorized = false,
   codexLoading,
   testingCodexProviderId,
   onAddCodexProvider,
@@ -74,6 +77,7 @@ const CodexProviderSection = ({
   onDeleteCodexProvider,
   onTestCodexProvider,
   onSwitchCodexProvider,
+  onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
   showHeader = true,
 }: CodexProviderSectionProps) => {
@@ -108,10 +112,13 @@ const CodexProviderSection = ({
   });
 
   const cliLoginProvider = useMemo(
-    () => codexProviders.find((p) => p.id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN),
+    () => codexProviders.find((p) => p.id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN) as
+      | (CodexProviderConfig & { isAuthorized?: boolean })
+      | undefined,
     [codexProviders]
   );
   const isCliLoginActive = cliLoginProvider?.isActive === true;
+  const isCliLoginAuthorized = codexLocalConfigAuthorized || cliLoginProvider?.isAuthorized === true;
 
   return (
     <div className={styles.configSection}>
@@ -147,10 +154,10 @@ const CodexProviderSection = ({
                 className={sharedStyles.btnPrimary}
                 onClick={() => {
                   setShowCliLoginConfirm(false);
-                  onSwitchCodexProvider(SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN);
+                  onAuthorizeCodexLocalConfig?.();
                 }}
               >
-                {t('settings.provider.authorizeAndEnable')}
+                {t('settings.codexProvider.cliLogin.authorizeOnly')}
               </button>
             </div>
           </div>
@@ -226,6 +233,22 @@ const CodexProviderSection = ({
                   <div className={sharedStyles.website} title={t('settings.codexProvider.dialog.cliLoginProviderDescription')}>
                     {t('settings.codexProvider.dialog.cliLoginProviderDescription')}
                   </div>
+                  <div className={styles.providerMeta}>
+                    <span className={styles.providerMetaItem}>
+                      {t('settings.codexProvider.cliLogin.authorizationStatus')}: {t(
+                        isCliLoginAuthorized
+                          ? 'settings.codexProvider.cliLogin.authorized'
+                          : 'settings.codexProvider.cliLogin.notAuthorized'
+                      )}
+                    </span>
+                    <span className={styles.providerMetaItem}>
+                      {t('settings.codexProvider.cliLogin.currentUsageStatus')}: {t(
+                        isCliLoginActive
+                          ? 'settings.codexProvider.cliLogin.currentlyUsed'
+                          : 'settings.codexProvider.cliLogin.notInUse'
+                      )}
+                    </span>
+                  </div>
                 </div>
 
                 <div className={sharedStyles.cardActions}>
@@ -237,14 +260,31 @@ const CodexProviderSection = ({
                       <span className="codicon codicon-circle-slash" />
                       {t('settings.provider.revokeAuthorization')}
                     </button>
-                  ) : (
+                  ) : !isCliLoginAuthorized ? (
                     <button
                       className={sharedStyles.useButton}
                       onClick={() => setShowCliLoginConfirm(true)}
                     >
-                      <span className="codicon codicon-play" />
-                      {t('settings.provider.authorizeAndEnable')}
+                      <span className="codicon codicon-key" />
+                      {t('settings.codexProvider.cliLogin.authorizeOnly')}
                     </button>
+                  ) : (
+                    <>
+                      <button
+                        className={sharedStyles.useButton}
+                        onClick={() => onSwitchCodexProvider(SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN)}
+                      >
+                        <span className="codicon codicon-play" />
+                        {t('settings.codexProvider.cliLogin.useForRequests')}
+                      </button>
+                      <button
+                        className={sharedStyles.revokeButton}
+                        onClick={() => setShowCliLoginDisableConfirm(true)}
+                      >
+                        <span className="codicon codicon-circle-slash" />
+                        {t('settings.provider.revokeAuthorization')}
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

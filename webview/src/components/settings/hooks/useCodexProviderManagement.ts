@@ -1,6 +1,10 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { CodexProviderConfig } from '../../../types/provider';
+import type {
+  CodexModelCatalogItem,
+  CodexModelVisibilityConfig,
+  CodexProviderConfig,
+} from '../../../types/provider';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -58,6 +62,10 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   // Codex configuration (reserved for future display)
   const [_codexConfig, setCodexConfig] = useState<any>(null);
   const [_codexConfigLoading, setCodexConfigLoading] = useState(false);
+  // 统一模型目录状态，供设置页 Models 面板直接消费。
+  // 当前聊天区后续也会复用这份目录，避免继续从 active provider 临时拼接模型列表。
+  const [codexModelCatalog, setCodexModelCatalog] = useState<CodexModelCatalogItem[]>([]);
+  const [codexModelCatalogLoading, setCodexModelCatalogLoading] = useState(true);
 
   // Codex provider dialog state
   const [codexProviderDialog, setCodexProviderDialog] = useState<CodexProviderDialogState>({
@@ -104,6 +112,32 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   const updateCurrentCodexConfig = useCallback((config: any) => {
     setCodexConfig(config);
     setCodexConfigLoading(false);
+  }, []);
+
+  /**
+   * 主动拉取统一的 Codex 模型目录。
+   * 该目录由后端聚合 CLI Login、managed provider 等多个来源，设置页只消费聚合结果。
+   */
+  const loadCodexModelCatalog = useCallback(() => {
+    setCodexModelCatalogLoading(true);
+    sendToJava('get_codex_model_catalog:');
+  }, []);
+
+  /**
+   * 用后端返回的统一模型目录刷新本地状态。
+   * @param catalog 后端返回的完整目录数组
+   */
+  const updateCodexModelCatalog = useCallback((catalog: CodexModelCatalogItem[]) => {
+    setCodexModelCatalog(catalog);
+    setCodexModelCatalogLoading(false);
+  }, []);
+
+  /**
+   * 保存模型显示开关配置。
+   * @param visibilityConfig 以 composite key 为主键的可见性配置
+   */
+  const saveCodexModelVisibility = useCallback((visibilityConfig: CodexModelVisibilityConfig) => {
+    sendToJava(`set_codex_model_visibility:${JSON.stringify(visibilityConfig)}`);
   }, []);
 
   // Open add Codex provider dialog
@@ -177,6 +211,17 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     setCodexLoading(true);
   }, []);
 
+  /**
+   * 仅授权读取本地 Codex 配置，不直接切换当前运行时 provider。
+   * 当前前端先按计划约定的事件名发出请求，等待后端补齐独立授权桥接。
+   */
+  const handleAuthorizeCodexLocalConfig = useCallback(() => {
+    sendToJava('authorize_codex_local_config:');
+    setCodexLoading(true);
+    setCodexConfigLoading(true);
+    setCodexModelCatalogLoading(true);
+  }, []);
+
   const handleRevokeCodexLocalConfigAuthorization = useCallback((fallbackProviderId?: string) => {
     const data = {
       fallbackProviderId: fallbackProviderId ?? '',
@@ -184,6 +229,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     sendToJava(`revoke_codex_local_config_authorization:${JSON.stringify(data)}`);
     setCodexLoading(true);
     setCodexConfigLoading(true);
+    setCodexModelCatalogLoading(true);
   }, []);
 
   const handleTestCodexProvider = useCallback((provider: CodexProviderConfig) => {
@@ -220,26 +266,33 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     codexProviderDialog,
     deleteCodexConfirm,
     testingCodexProviderId,
+    codexModelCatalog,
+    codexModelCatalogLoading,
     // Methods
     loadCodexProviders,
+    loadCodexModelCatalog,
     updateCodexProviders,
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
+    updateCodexModelCatalog,
     handleAddCodexProvider,
     handleAddCodexProviderWithDraft,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
+    handleAuthorizeCodexLocalConfig,
     handleSwitchCodexProvider,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
+    saveCodexModelVisibility,
     // Setter
     setCodexLoading,
     setCodexConfigLoading,
     setTestingCodexProviderId,
+    setCodexModelCatalogLoading,
   };
 }
 

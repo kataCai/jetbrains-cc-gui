@@ -65,6 +65,14 @@ public class CodemossSettingsService {
     private static final String FEISHU_KEY = "feishu";
     private static final String COMMIT_AI_KEY = "commitAi";
     private static final String PROMPT_ENHANCER_KEY = "promptEnhancer";
+    private static final String CODEX_MODEL_DISPLAY_KEY = "modelDisplay";
+    private static final String CODEX_MODEL_DISPLAY_VISIBLE_KEY = "visible";
+    private static final String CODEX_MODEL_DISPLAY_CATALOG_KEY = "catalog";
+    private static final String CODEX_MODEL_DISPLAY_VISIBILITY_KEY = "visibility";
+    private static final String CODEX_MODEL_DESCRIPTION_KEY = "description";
+    private static final String CODEX_MODEL_REASONING_EFFORT_KEY = "reasoningEffort";
+    private static final String CODEX_MODEL_SOURCE_KEY = "source";
+    private static final String CODEX_MODEL_RUNNABLE_KEY = "runnable";
     private static final String AI_FEATURE_PROVIDER_KEY = "provider";
     private static final String AI_FEATURE_MODELS_KEY = "models";
     private static final String AI_FEATURE_EFFECTIVE_PROVIDER_KEY = "effectiveProvider";
@@ -277,7 +285,10 @@ public class CodemossSettingsService {
     }
 
     /**
-     * Create default config.
+     * 创建默认配置。
+     * 这里需要同时初始化 Claude、Codex 与基础功能配置，避免首次启动时各模块读取到缺失节点。
+     *
+     * @return 包含默认根结构的配置对象
      */
     private JsonObject createDefaultConfig() {
         JsonObject config = new JsonObject();
@@ -294,6 +305,7 @@ public class CodemossSettingsService {
         JsonObject codex = new JsonObject();
         codex.addProperty("current", "");
         codex.add("providers", new JsonObject());
+        codex.add(CODEX_MODEL_DISPLAY_KEY, new JsonObject());
         codex.addProperty("localConfigAuthorized", false);
         config.add("codex", codex);
 
@@ -1999,6 +2011,64 @@ public class CodemossSettingsService {
     }
 
     /**
+     * 原子切换 Codex 当前运行时 provider 与 selectedModel。
+     * 统一模型目录选择事件需要一次性更新 `codex.current` 与 `codex.selectedModel`，
+     * 避免界面已切换到新模型，但后端下一条消息仍沿用旧 active provider。
+     *
+     * @param providerId 目标 provider id
+     * @param modelId 目标 model id
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void selectCodexModel(String providerId, String modelId) throws IOException {
+        codexProviderManager.selectModel(providerId, modelId);
+    }
+
+    /**
+     * 读取 Codex 模型展示配置。
+     * 该方法会基于当前 codex.providers[*].models 动态构造后端 schema，并把缺失的可见性配置迁移为 visible=true，
+     * 以便与前端 `providerId::modelId` 复合 key 约定保持一致。
+     *
+     * @return 包含 catalog 与 visibility 的模型展示配置
+     * @throws IOException 配置读写失败时抛出
+     */
+    public JsonObject getCodexModelDisplayConfig() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonArray catalog = collectCodexModelDisplayCatalog(codex);
+        JsonObject persistedVisibility = ensureCodexModelDisplayObject(codex);
+        JsonObject normalizedVisibility = normalizeCodexModelDisplayVisibility(persistedVisibility, catalog, true);
+
+        // 只有当补齐缺失模型或清洗掉非法结构时才落盘，避免无意义改写配置文件。
+        if (!normalizedVisibility.equals(persistedVisibility)) {
+            codex.add(CODEX_MODEL_DISPLAY_KEY, normalizedVisibility);
+            writeConfig(config);
+        }
+
+        applyCodexModelDisplayVisibility(catalog, normalizedVisibility);
+
+        JsonObject result = new JsonObject();
+        result.add(CODEX_MODEL_DISPLAY_CATALOG_KEY, catalog);
+        result.add(CODEX_MODEL_DISPLAY_VISIBILITY_KEY, normalizedVisibility.deepCopy());
+        return result;
+    }
+
+    /**
+     * 保存 Codex 模型展示可见性配置。
+     * 该接口只持久化合法的 `providerId::modelId -> { visible: boolean }` 结构，忽略空 key、非对象 value
+     * 以及缺失 visible 字段的节点，其余缺失模型会在后续读取时按默认可见补齐。
+     *
+     * @param visibilityConfig 前端提交的模型可见性配置
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void saveCodexModelDisplayConfig(JsonObject visibilityConfig) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject normalizedVisibility = normalizeCodexModelDisplayVisibility(visibilityConfig, null, false);
+        codex.add(CODEX_MODEL_DISPLAY_KEY, normalizedVisibility);
+        writeConfig(config);
+    }
+
+    /**
      * 保存 Codex 会话绑定元数据。
      * 该映射把 session/thread id 与当时命中的 provider/model/requestMode 绑定，
      * 用于历史恢复后继续发送时保持运行时一致性，避免误用当前 active provider。
@@ -2077,19 +2147,412 @@ public class CodemossSettingsService {
 
     /**
      * 确保 codex 根配置对象存在。
+     * 对旧配置还会顺手补齐 modelDisplay 空对象，避免新的展示配置接口读到缺失节点。
      *
      * @param config 整体配置对象
      * @return 可写入的 codex 配置对象
      */
     private JsonObject ensureCodexConfigObject(JsonObject config) {
         if (config.has("codex") && config.get("codex").isJsonObject()) {
-            return config.getAsJsonObject("codex");
+            JsonObject codex = config.getAsJsonObject("codex");
+            ensureCodexModelDisplayObject(codex);
+            return codex;
         }
         JsonObject codex = new JsonObject();
         codex.addProperty("current", "");
         codex.add("providers", new JsonObject());
+        codex.add(CODEX_MODEL_DISPLAY_KEY, new JsonObject());
         config.add("codex", codex);
         return codex;
+    }
+
+    /**
+     * 确保 codex.modelDisplay 为对象节点。
+     * 旧配置可能完全缺失该字段，或被外部手工改成了错误类型；这里统一兜底为空对象，方便后续安全写入。
+     *
+     * @param codex codex 根配置对象
+     * @return 可直接写入的 modelDisplay 对象
+     */
+    private JsonObject ensureCodexModelDisplayObject(JsonObject codex) {
+        if (codex.has(CODEX_MODEL_DISPLAY_KEY) && codex.get(CODEX_MODEL_DISPLAY_KEY).isJsonObject()) {
+            return codex.getAsJsonObject(CODEX_MODEL_DISPLAY_KEY);
+        }
+        JsonObject modelDisplay = new JsonObject();
+        codex.add(CODEX_MODEL_DISPLAY_KEY, modelDisplay);
+        return modelDisplay;
+    }
+
+    /**
+     * 从当前 codex.providers[*].models 收集模型目录。
+     * 该目录是后端返回给前端的等价 schema，字段名与前端类型保持一致，便于直接复用 `providerId::modelId`
+     * 的展示与筛选逻辑。
+     *
+     * @param codex codex 根配置对象
+     * @return 发现到的模型目录数组
+     */
+    private JsonArray collectCodexModelDisplayCatalog(JsonObject codex) {
+        JsonArray catalog = new JsonArray();
+        appendCodexCliLoginCatalogItems(catalog, codex);
+        appendManagedProviderCatalogItems(catalog, codex);
+        appendLocalConfigCatalogItems(catalog, codex);
+        return catalog;
+    }
+
+    /**
+     * 构造单个模型目录项。
+     * visible 初始值先按默认 true 写入，最终状态由可见性配置统一覆盖，避免目录生成与配置应用交织在一起。
+     *
+     * @param providerId provider 标识
+     * @param providerName provider 展示名
+     * @param model 模型原始配置节点
+     * @return 前端约定的 catalog 项
+     */
+    private JsonObject createCodexModelCatalogItem(
+            String providerId,
+            String providerName,
+            JsonObject model,
+            String source,
+            boolean runnable
+    ) {
+        String modelId = normalizeString(getOptionalString(model, "id"), "");
+        String label = normalizeString(getOptionalString(model, "label"), modelId);
+
+        JsonObject item = new JsonObject();
+        item.addProperty("key", buildCodexModelDisplayKey(providerId, modelId));
+        item.addProperty("providerId", providerId);
+        item.addProperty("providerName", providerName);
+        item.addProperty("modelId", modelId);
+        item.addProperty("label", label);
+        item.addProperty(CODEX_MODEL_SOURCE_KEY, source);
+        item.addProperty(CODEX_MODEL_RUNNABLE_KEY, runnable);
+        item.addProperty(CODEX_MODEL_DISPLAY_VISIBLE_KEY, true);
+
+        if (model.has(CODEX_MODEL_DESCRIPTION_KEY) && !model.get(CODEX_MODEL_DESCRIPTION_KEY).isJsonNull()) {
+            item.add(CODEX_MODEL_DESCRIPTION_KEY, model.get(CODEX_MODEL_DESCRIPTION_KEY).deepCopy());
+        }
+        if (model.has(CODEX_MODEL_REASONING_EFFORT_KEY) && !model.get(CODEX_MODEL_REASONING_EFFORT_KEY).isJsonNull()) {
+            item.add(CODEX_MODEL_REASONING_EFFORT_KEY, model.get(CODEX_MODEL_REASONING_EFFORT_KEY).deepCopy());
+        }
+        return item;
+    }
+
+    /**
+     * 追加 CLI Login 默认模型目录项。
+     * 这些模型来自当前产品内建的 Codex 默认模型集合，用于让聊天区和设置页在未选中 managed provider 时，
+     * 仍能稳定展示 GPT 默认模型，并通过 runnable 区分当前是否已授权读取本地 `~/.codex` 配置。
+     *
+     * @param catalog 待写入的目录数组
+     * @param codex codex 根配置对象
+     */
+    private void appendCodexCliLoginCatalogItems(JsonArray catalog, JsonObject codex) {
+        boolean cliLoginAuthorized = codex.has("localConfigAuthorized")
+                && !codex.get("localConfigAuthorized").isJsonNull()
+                && codex.get("localConfigAuthorized").getAsBoolean();
+        String providerId = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID;
+        String providerName = ClaudeCodeGuiBundle.message("provider.codexCliLogin.name");
+        for (JsonElement modelElement : buildBuiltinCodexCliModels()) {
+            if (modelElement == null || !modelElement.isJsonObject()) {
+                continue;
+            }
+            catalog.add(createCodexModelCatalogItem(
+                    providerId,
+                    providerName,
+                    modelElement.getAsJsonObject(),
+                    "codex_cli_login",
+                    cliLoginAuthorized
+            ));
+        }
+    }
+
+    /**
+     * 追加 managed provider 声明的模型目录项。
+     *
+     * @param catalog 待写入的目录数组
+     * @param codex codex 根配置对象
+     */
+    private void appendManagedProviderCatalogItems(JsonArray catalog, JsonObject codex) {
+        if (!codex.has("providers") || !codex.get("providers").isJsonObject()) {
+            return;
+        }
+
+        JsonObject providers = codex.getAsJsonObject("providers");
+        for (Map.Entry<String, JsonElement> providerEntry : providers.entrySet()) {
+            String providerId = normalizeString(providerEntry.getKey(), "");
+            if (providerId.isEmpty() || !providerEntry.getValue().isJsonObject()) {
+                continue;
+            }
+
+            JsonObject provider = providerEntry.getValue().getAsJsonObject();
+            JsonArray models = readProviderModels(provider);
+            if (models.size() == 0) {
+                continue;
+            }
+
+            String providerName = normalizeString(getOptionalString(provider, "name"), providerId);
+            for (JsonElement modelElement : models) {
+                if (modelElement == null || modelElement.isJsonNull() || !modelElement.isJsonObject()) {
+                    continue;
+                }
+
+                JsonObject model = modelElement.getAsJsonObject();
+                String modelId = normalizeString(getOptionalString(model, "id"), "");
+                if (modelId.isEmpty()) {
+                    continue;
+                }
+
+                catalog.add(createCodexModelCatalogItem(
+                        providerId,
+                        providerName,
+                        model,
+                        "managed_provider",
+                        true
+                ));
+            }
+        }
+    }
+
+    /**
+     * 追加本地 `~/.codex/config.toml` 中当前生效、但未被其他来源覆盖的模型兜底项。
+     * 该兜底项只解决“当前模型无法显示”的问题，不扩展为未知 provider 的完整目录。
+     *
+     * @param catalog 待写入的目录数组
+     * @param codex codex 根配置对象
+     */
+    private void appendLocalConfigCatalogItems(JsonArray catalog, JsonObject codex) {
+        boolean cliLoginAuthorized = codex.has("localConfigAuthorized")
+                && !codex.get("localConfigAuthorized").isJsonNull()
+                && codex.get("localConfigAuthorized").getAsBoolean();
+        if (!cliLoginAuthorized) {
+            return;
+        }
+
+        JsonObject localState;
+        try {
+            localState = codexSettingsManager.getCurrentCodexModelState();
+        } catch (IOException e) {
+            LOG.warn("[CodemossSettings] Failed to read local Codex model state for catalog fallback: " + e.getMessage());
+            return;
+        }
+
+        String localModelId = normalizeString(getOptionalString(localState, "model"), "");
+        if (localModelId.isEmpty()) {
+            return;
+        }
+
+        String providerId = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID;
+        String compositeKey = buildCodexModelDisplayKey(providerId, localModelId);
+        if (catalogContainsKey(catalog, compositeKey)) {
+            return;
+        }
+
+        JsonObject model = new JsonObject();
+        model.addProperty("id", localModelId);
+        model.addProperty("label", localModelId);
+        String reasoningEffort = normalizeString(getOptionalString(localState, "reasoningEffort"), "");
+        if (!reasoningEffort.isEmpty()) {
+            model.addProperty(CODEX_MODEL_REASONING_EFFORT_KEY, reasoningEffort);
+        }
+
+        catalog.add(createCodexModelCatalogItem(
+                providerId,
+                ClaudeCodeGuiBundle.message("provider.codexCliLogin.name"),
+                model,
+                "local_config",
+                true
+        ));
+    }
+
+    /**
+     * 构造内建的 Codex CLI 默认模型节点。
+     *
+     * @return 内建模型数组
+     */
+    private JsonArray buildBuiltinCodexCliModels() {
+        JsonArray models = new JsonArray();
+        models.add(createBuiltinCodexModel("gpt-5.5", "gpt-5.5",
+                "Frontier model for complex coding, research, and real-world work.", null));
+        models.add(createBuiltinCodexModel("gpt-5.4", "gpt-5.4",
+                "Strong model for everyday coding.", null));
+        models.add(createBuiltinCodexModel("gpt-5.2-codex", "gpt-5.2-codex",
+                "Frontier agentic coding model.", null));
+        models.add(createBuiltinCodexModel("gpt-5.1-codex-max", "gpt-5.1-codex-max",
+                "Codex-optimized flagship for deep and fast reasoning.", null));
+        models.add(createBuiltinCodexModel("gpt-5.4-mini", "gpt-5.4-mini",
+                "Small, fast, and cost-efficient model for simpler coding tasks.", null));
+        models.add(createBuiltinCodexModel("gpt-5.3-codex", "gpt-5.3-codex",
+                "Coding-optimized model.", null));
+        models.add(createBuiltinCodexModel("gpt-5.3-codex-spark", "gpt-5.3-codex-spark",
+                "Ultra-fast coding model.", null));
+        models.add(createBuiltinCodexModel("gpt-5.2", "gpt-5.2",
+                "Optimized for professional work and long-running agents.", null));
+        models.add(createBuiltinCodexModel("gpt-5.1-codex-mini", "gpt-5.1-codex-mini",
+                "Optimized for Codex. Cheaper, faster, but less capable.", null));
+        return models;
+    }
+
+    /**
+     * 构造单个内建 Codex 模型节点。
+     *
+     * @param modelId 模型 id
+     * @param label 模型显示名
+     * @param description 模型说明
+     * @param reasoningEffort 默认推理强度，可为空
+     * @return 可直接复用的模型节点
+     */
+    private JsonObject createBuiltinCodexModel(
+            String modelId,
+            String label,
+            String description,
+            String reasoningEffort
+    ) {
+        JsonObject model = new JsonObject();
+        model.addProperty("id", modelId);
+        model.addProperty("label", label);
+        if (description != null && !description.trim().isEmpty()) {
+            model.addProperty(CODEX_MODEL_DESCRIPTION_KEY, description.trim());
+        }
+        if (reasoningEffort != null && !reasoningEffort.trim().isEmpty()) {
+            model.addProperty(CODEX_MODEL_REASONING_EFFORT_KEY, reasoningEffort.trim());
+        }
+        return model;
+    }
+
+    /**
+     * 统一读取 provider 的模型数组。
+     * 优先读取当前 schema 的 `models`，并兼容历史 `customModels`。
+     *
+     * @param provider provider 配置
+     * @return 模型数组；不存在时返回空数组
+     */
+    private JsonArray readProviderModels(JsonObject provider) {
+        if (provider.has("models") && provider.get("models").isJsonArray()) {
+            return provider.getAsJsonArray("models");
+        }
+        if (provider.has("customModels") && provider.get("customModels").isJsonArray()) {
+            return provider.getAsJsonArray("customModels");
+        }
+        return new JsonArray();
+    }
+
+    /**
+     * 判断目录中是否已经存在指定复合 key。
+     *
+     * @param catalog 当前目录数组
+     * @param key 待匹配的复合 key
+     * @return 存在时返回 true
+     */
+    private boolean catalogContainsKey(JsonArray catalog, String key) {
+        for (JsonElement element : catalog) {
+            if (element == null || element.isJsonNull() || !element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            if (key.equals(normalizeString(getOptionalString(item, "key"), ""))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 生成与前端一致的模型展示复合 key。
+     * Java 端当前只负责稳定生成，不承担解析职责，因此直接按 `providerId::modelId` 拼接即可。
+     *
+     * @param providerId provider 标识
+     * @param modelId 模型标识
+     * @return 复合模型 key
+     */
+    private String buildCodexModelDisplayKey(String providerId, String modelId) {
+        return providerId + "::" + modelId;
+    }
+
+    /**
+     * 归一化并可选补齐模型可见性配置。
+     * 读取场景下会按已发现模型补全缺失项并默认 visible=true；保存场景下只保留合法输入，避免把脏数据直接落盘。
+     *
+     * @param source 原始可见性配置，允许为 null
+     * @param catalog 已发现模型目录；仅读取并补齐缺失项时使用
+     * @param fillMissingCatalogEntries 是否按目录补齐缺失模型
+     * @return 清洗后的可见性配置
+     */
+    private JsonObject normalizeCodexModelDisplayVisibility(
+            JsonObject source,
+            JsonArray catalog,
+            boolean fillMissingCatalogEntries
+    ) {
+        JsonObject normalized = new JsonObject();
+        if (source != null) {
+            for (Map.Entry<String, JsonElement> entry : source.entrySet()) {
+                String key = normalizeString(entry.getKey(), "");
+                if (key.isEmpty() || entry.getValue() == null || !entry.getValue().isJsonObject()) {
+                    continue;
+                }
+
+                JsonObject rawVisibility = entry.getValue().getAsJsonObject();
+                if (!rawVisibility.has(CODEX_MODEL_DISPLAY_VISIBLE_KEY)
+                        || rawVisibility.get(CODEX_MODEL_DISPLAY_VISIBLE_KEY).isJsonNull()) {
+                    continue;
+                }
+                JsonElement rawVisibleValue = rawVisibility.get(CODEX_MODEL_DISPLAY_VISIBLE_KEY);
+                if (!rawVisibleValue.isJsonPrimitive() || !rawVisibleValue.getAsJsonPrimitive().isBoolean()) {
+                    continue;
+                }
+
+                JsonObject visibility = new JsonObject();
+                visibility.addProperty(
+                        CODEX_MODEL_DISPLAY_VISIBLE_KEY,
+                        rawVisibleValue.getAsBoolean()
+                );
+                normalized.add(key, visibility);
+            }
+        }
+
+        if (fillMissingCatalogEntries && catalog != null) {
+            // 缺省迁移规则：凡是当前能发现到的模型，如果历史配置里还没有记录，就默认补成可见并回写。
+            for (JsonElement catalogElement : catalog) {
+                if (catalogElement == null || catalogElement.isJsonNull() || !catalogElement.isJsonObject()) {
+                    continue;
+                }
+                JsonObject catalogItem = catalogElement.getAsJsonObject();
+                String key = normalizeString(getOptionalString(catalogItem, "key"), "");
+                if (key.isEmpty() || normalized.has(key)) {
+                    continue;
+                }
+                JsonObject visibility = new JsonObject();
+                visibility.addProperty(CODEX_MODEL_DISPLAY_VISIBLE_KEY, true);
+                normalized.add(key, visibility);
+            }
+        }
+        return normalized;
+    }
+
+    /**
+     * 把可见性配置回填到 catalog。
+     * catalog 是前端直接消费的列表视图，因此需要把最终 visible 状态同步到每个目录项，避免前端自行二次推导。
+     *
+     * @param catalog 模型目录数组
+     * @param visibility 归一化后的可见性配置
+     */
+    private void applyCodexModelDisplayVisibility(JsonArray catalog, JsonObject visibility) {
+        for (JsonElement catalogElement : catalog) {
+            if (catalogElement == null || catalogElement.isJsonNull() || !catalogElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject catalogItem = catalogElement.getAsJsonObject();
+            String key = normalizeString(getOptionalString(catalogItem, "key"), "");
+            boolean visible = true;
+            if (!key.isEmpty()
+                    && visibility.has(key)
+                    && visibility.get(key).isJsonObject()
+                    && visibility.getAsJsonObject(key).has(CODEX_MODEL_DISPLAY_VISIBLE_KEY)
+                    && !visibility.getAsJsonObject(key).get(CODEX_MODEL_DISPLAY_VISIBLE_KEY).isJsonNull()) {
+                JsonElement rawVisibleValue = visibility.getAsJsonObject(key).get(CODEX_MODEL_DISPLAY_VISIBLE_KEY);
+                if (rawVisibleValue.isJsonPrimitive() && rawVisibleValue.getAsJsonPrimitive().isBoolean()) {
+                    visible = rawVisibleValue.getAsBoolean();
+                }
+            }
+            catalogItem.addProperty(CODEX_MODEL_DISPLAY_VISIBLE_KEY, visible);
+        }
     }
 
     /**

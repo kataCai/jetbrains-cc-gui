@@ -49,14 +49,12 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   userPausedRef: { current: false },
   suppressNextStatusToastRef: { current: false },
   streamingContentRef: { current: '' },
+  // streamingCallbacks 现已同时维护 content/thinking 两路流式缓冲，测试夹具需要补齐 thinking ref。
+  // 否则 onStreamStart/onStreamEnd 在重置 thinking 缓冲时会因依赖缺失而抛错，无法覆盖真正要验证的流结束收口逻辑。
+  streamingThinkingRef: { current: '' },
   isStreamingRef: { current: false },
   useBackendStreamingRenderRef: { current: false },
   autoExpandedThinkingKeysRef: { current: new Set<string>() },
-  streamingTextSegmentsRef: { current: [] },
-  activeTextSegmentIndexRef: { current: -1 },
-  streamingThinkingSegmentsRef: { current: [] },
-  activeThinkingSegmentIndexRef: { current: -1 },
-  seenToolUseCountRef: { current: 0 },
   streamingMessageIndexRef: { current: -1 },
   streamingTurnIdRef: { current: -1 },
   turnIdCounterRef: { current: 0 },

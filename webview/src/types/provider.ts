@@ -369,6 +369,86 @@ export interface CodexSelectedModel {
 }
 
 /**
+ * Codex 模型目录项。
+ * 该结构用于把 provider 维度下的可发现模型拍平成前端稳定列表，
+ * 便于后续 settings UI、聊天模型下拉和桥接事件共享同一套展示数据。
+ */
+export interface CodexModelCatalogItem {
+  /** 复合主键，固定格式为 providerId::modelId */
+  key: string;
+  /** 模型所属 provider id */
+  providerId: string;
+  /** 模型所属 provider 展示名 */
+  providerName: string;
+  /** 模型 id */
+  modelId: string;
+  /** 模型展示名 */
+  label: string;
+  /** 模型说明，可选 */
+  description?: string;
+  /** 目录项来源，用于后续区分 CLI 默认模型、托管 provider 模型和本地配置兜底模型 */
+  source: 'codex_cli_login' | 'managed_provider' | 'plugin_custom' | 'local_config';
+  /** 默认推理强度，可用于 settings 与聊天区共享展示 */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
+  /** 当前模型是否对用户可见 */
+  visible: boolean;
+  /** 当前模型是否可直接运行；未授权或缺少运行条件时可先展示但禁用 */
+  runnable: boolean;
+}
+
+/**
+ * Codex 模型显示配置。
+ * 外层 key 使用复合主键，值用于声明该模型在前端展示层是否可见。
+ */
+export type CodexModelVisibilityConfig = Record<string, { visible: boolean }>;
+
+/**
+ * Codex 模型目录复合 key 分隔符。
+ * 前后端必须共享同一个字面量，避免展示配置和目录项关联失败。
+ */
+export const CODEX_MODEL_CATALOG_KEY_DELIMITER = '::';
+
+/**
+ * 构造 provider 维度的模型复合 key。
+ * 该 key 会作为 modelDisplay 配置的主键，因此这里统一裁剪空白并要求两段都非空。
+ *
+ * @param providerId provider 标识
+ * @param modelId 模型标识
+ * @returns 固定格式的复合 key
+ */
+export function buildCodexModelCatalogKey(providerId: string, modelId: string): string {
+  const normalizedProviderId = providerId.trim();
+  const normalizedModelId = modelId.trim();
+  if (!normalizedProviderId || !normalizedModelId) {
+    throw new Error('Codex model catalog key requires non-empty providerId and modelId');
+  }
+  return `${normalizedProviderId}${CODEX_MODEL_CATALOG_KEY_DELIMITER}${normalizedModelId}`;
+}
+
+/**
+ * 解析 provider 维度的模型复合 key。
+ * 解析时只按第一个 `::` 拆分，保证模型 id 内继续包含冒号时仍可正常恢复。
+ *
+ * @param compositeKey 复合 key
+ * @returns 成功时返回 providerId/modelId，失败时返回 null
+ */
+export function parseCodexModelCatalogKey(compositeKey: string): CodexSelectedModel | null {
+  if (!compositeKey || typeof compositeKey !== 'string') {
+    return null;
+  }
+  const delimiterIndex = compositeKey.indexOf(CODEX_MODEL_CATALOG_KEY_DELIMITER);
+  if (delimiterIndex <= 0) {
+    return null;
+  }
+  const providerId = compositeKey.slice(0, delimiterIndex).trim();
+  const modelId = compositeKey.slice(delimiterIndex + CODEX_MODEL_CATALOG_KEY_DELIMITER.length).trim();
+  if (!providerId || !modelId) {
+    return null;
+  }
+  return { providerId, modelId };
+}
+
+/**
  * Codex provider configuration
  */
 export interface CodexProviderConfig {

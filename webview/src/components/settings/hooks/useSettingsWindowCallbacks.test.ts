@@ -51,6 +51,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setLoading: vi.fn(),
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
+    setCodexModelCatalogLoading: vi.fn(),
     setTestingCodexProviderId: vi.fn(),
     setCommitGenerationEnabled: vi.fn(),
     setAiTitleGenerationEnabled: vi.fn(),
@@ -64,6 +65,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     updateActiveProvider: vi.fn(),
     loadProviders: vi.fn(),
     loadCodexProviders: vi.fn(),
+    loadCodexModelCatalog: vi.fn(),
     loadAgents: vi.fn(),
     updateAgents: vi.fn(),
     handleAgentOperationResult: vi.fn(),
@@ -72,6 +74,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     updateCodexProviders: vi.fn(),
     updateActiveCodexProvider: vi.fn(),
     updateCurrentCodexConfig: vi.fn(),
+    updateCodexModelCatalog: vi.fn(),
     cleanupAgentsTimeout: vi.fn(),
     showAlert: vi.fn(),
     addToast: vi.fn(),
@@ -107,6 +110,20 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_commit_ai_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_prompt_enhancer_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_sound_notification_config:');
+  });
+
+  /**
+   * 验证 Codex provider 列表回调会主动刷新统一模型目录。
+   * 断言意图：provider 增删改、授权状态变化或排序后，Models 面板不需要用户手动二次刷新。
+   */
+  it('reloads Codex model catalog after provider list callback updates', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.updateCodexProviders?.(JSON.stringify([{ id: 'provider-a', name: 'Provider A' }]));
+
+    expect(deps.updateCodexProviders).toHaveBeenCalledWith([{ id: 'provider-a', name: 'Provider A' }]);
+    expect(deps.loadCodexModelCatalog).toHaveBeenCalled();
   });
 
   /**
