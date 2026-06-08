@@ -50,7 +50,8 @@ export const STORAGE_KEYS = {
  */
 export const CLAUDE_MODEL_MAPPING_ENV_KEYS = [
   'ANTHROPIC_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL', // legacy – kept for backward compat
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
   'ANTHROPIC_DEFAULT_OPUS_MODEL',
 ] as const;
@@ -139,7 +140,7 @@ export interface ProviderConfig {
       ANTHROPIC_MODEL?: string;
       ANTHROPIC_DEFAULT_SONNET_MODEL?: string;
       ANTHROPIC_DEFAULT_OPUS_MODEL?: string;
-      ANTHROPIC_DEFAULT_HAIKU_MODEL?: string;
+      ANTHROPIC_SMALL_FAST_MODEL?: string;
       [key: string]: any;
     };
     alwaysThinkingEnabled?: boolean;
@@ -170,10 +171,286 @@ export interface CodexCustomModel {
   label: string;
   /** Model description */
   description?: string;
+  /** Default reasoning effort for this model */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
+}
+
+export type CodexAuthMode = 'api_key' | 'api_key_env' | 'codex_cli_login' | 'proxy' | 'oauth';
+
+export type CodexRequestMode = 'codex_sdk' | 'cc_switch_proxy' | 'custom_adapter';
+
+/**
+ * CC Switch Proxy 模式专属配置。
+ * 该结构用于描述“请求先打到本地/远端 cc-switch 代理，再由代理转发到真实 provider”的场景。
+ * 当前阶段它主要承担 schema 边界声明和配置持久化职责，真正运行时发送器将在后续任务中消费这些字段。
+ */
+export interface CodexCcSwitchProxyConfig {
+  /** cc-switch 代理入口地址 */
+  proxyEndpoint?: string;
+  /** 代理层内部的目标 provider 路由名 */
+  providerRoute?: string;
+  /** 可选的代理请求路径，用于兼容不同代理入口 */
+  requestPath?: string;
+  /** 需要透传给代理层的额外请求头 */
+  requestHeaders?: Record<string, string>;
 }
 
 /**
- * Single environment variable entry
+ * Custom Adapter 模式专属配置。
+ * 该结构用于描述“先进入自定义 adapter，再由 adapter 自行完成协议转换与上游调用”的场景。
+ * 当前阶段先固化字段边界，后续运行时发送器再基于这些字段接入真实请求链路。
+ */
+export interface CodexCustomAdapterConfig {
+  /** adapter 标识符，用于区分不同转换器实现 */
+  adapterId?: string;
+  /** adapter HTTP 入口地址 */
+  adapterEndpoint?: string;
+  /** 需要透传给 adapter 的额外请求头 */
+  adapterHeaders?: Record<string, string>;
+  /** 需要透传给 adapter 的额外 JSON 参数 */
+  adapterExtras?: Record<string, unknown>;
+}
+
+/**
+ * Codex provider 字段分组。
+ * 该结构把“所有模式通用字段”和“某个 requestMode 专属字段”显式拆开，供后续 UI 动态渲染与校验规则复用。
+ */
+export interface CodexProviderModeFieldGroups {
+  commonFields: string[];
+  modeFields: string[];
+}
+
+const CODEX_PROVIDER_COMMON_FIELDS: string[] = [
+  'id',
+  'name',
+  'providerType',
+  'presetId',
+  'remark',
+  'websiteUrl',
+  'apiKeyApplyUrl',
+  'createdAt',
+  'isActive',
+  'authMode',
+  'requestMode',
+  'apiKey',
+  'apiKeyEnv',
+  'apiKeyMasked',
+  'configToml',
+  'authJson',
+  'customModels',
+  'autoActivate',
+];
+
+const CODEX_PROVIDER_MODE_FIELDS: Record<CodexRequestMode, string[]> = {
+  codex_sdk: ['baseUrl', 'models'],
+  cc_switch_proxy: [
+    'models',
+    'ccSwitchProxy.proxyEndpoint',
+    'ccSwitchProxy.providerRoute',
+    'ccSwitchProxy.requestPath',
+    'ccSwitchProxy.requestHeaders',
+  ],
+  custom_adapter: [
+    'models',
+    'customAdapter.adapterId',
+    'customAdapter.adapterEndpoint',
+    'customAdapter.adapterHeaders',
+    'customAdapter.adapterExtras',
+  ],
+};
+
+/**
+ * 返回指定请求模式的字段分组。
+ * 该方法只负责声明 schema 边界，不参与运行时分发；后续 Task 8 会复用它驱动表单动态渲染与校验。
+ *
+ * @param requestMode 当前 provider 的请求模式
+ * @return 通用字段与模式专属字段列表
+ */
+export function getCodexProviderModeFieldGroups(requestMode: CodexRequestMode): CodexProviderModeFieldGroups {
+  return {
+    commonFields: [...CODEX_PROVIDER_COMMON_FIELDS],
+    modeFields: [...CODEX_PROVIDER_MODE_FIELDS[requestMode]],
+  };
+}
+
+/**
+ * 判断当前请求模式是否已经在现有运行时链路中真正落地。
+ * 现阶段只有 `codex_sdk` 已具备完整发送链路；
+ * `cc_switch_proxy` 与 `custom_adapter` 仍处于 schema / UI 预留阶段，
+ * 因此只能作为历史兼容值保留，不能继续作为可运行能力误导用户。
+ *
+ * @param requestMode 当前 provider 选择的请求模式
+ * @return `true` 表示当前版本已实现；`false` 表示仍为预留模式
+ */
+export function isCodexRequestModeImplemented(requestMode?: CodexRequestMode | string): boolean {
+  return !requestMode || requestMode === 'codex_sdk';
+}
+
+/**
+ * 运行时来源标签的稳定枚举。
+ * 该值只服务于前端展示层，用于把后端诊断字段折叠成用户能快速理解的四类来源状态。
+ */
+export type CodexRuntimeSource =
+  | 'managedProvider'
+  | 'codexLocalConfig'
+  | 'sdkDefault'
+  | 'proxyFallback';
+
+/**
+ * 运行时来源诊断输入。
+ * 该结构被 `CodexProviderConfig` 与 `CodexProviderTestResult` 共用，
+ * 这样设置页、聊天区和测试结果弹窗可以复用同一套映射逻辑。
+ */
+export interface CodexRuntimeSourceDiagnosticInput {
+  effectiveConfigSource?: string;
+  endpointSource?: string;
+  fallbackDetected?: boolean;
+  forcedModelProvider?: string;
+  localCodexModelProvider?: string;
+  localConfigConflictDetected?: boolean;
+  finalModelProvider?: string;
+}
+
+/**
+ * 判断当前对象是否已经携带运行时来源诊断字段。
+ * 这里不能只看 `fallbackDetected`，因为 `false` 也是一个有意义的显式诊断结果。
+ *
+ * @param input 候选诊断对象
+ * @return `true` 表示可以安全渲染 runtime source；`false` 表示当前对象还没有来源诊断摘要
+ */
+export function hasCodexRuntimeSourceDiagnostics(input?: CodexRuntimeSourceDiagnosticInput | null): boolean {
+  if (!input) {
+    return false;
+  }
+  return typeof input.fallbackDetected === 'boolean'
+    || typeof input.effectiveConfigSource === 'string' && input.effectiveConfigSource.trim().length > 0
+    || typeof input.endpointSource === 'string' && input.endpointSource.trim().length > 0;
+}
+
+/**
+ * 将底层诊断字段折叠成稳定的前端 runtime source 分类。
+ * 规则优先级说明：
+ * 1. 只要后端显式标记发生 fallback，就优先展示为 `proxyFallback`；
+ * 2. CLI Login / 本地 Codex 配置读取路径展示为 `codexLocalConfig`；
+ * 3. 没有 provider endpoint、直接落到 SDK 默认值时展示为 `sdkDefault`；
+ * 4. 其余情况统一视为命中托管 provider。
+ *
+ * @param input 后端返回的运行时诊断摘要
+ * @return 适合前端展示的来源分类
+ */
+export function resolveCodexRuntimeSource(input?: CodexRuntimeSourceDiagnosticInput | null): CodexRuntimeSource {
+  if (input?.fallbackDetected) {
+    return 'proxyFallback';
+  }
+  if (input?.effectiveConfigSource === 'codex_cli_login'
+    || input?.endpointSource === 'codex_cli_login'
+    || input?.endpointSource === 'codex_local_config') {
+    return 'codexLocalConfig';
+  }
+  if (input?.endpointSource === 'sdk_default') {
+    return 'sdkDefault';
+  }
+  return 'managedProvider';
+}
+
+/**
+ * 将运行时来源枚举转换为 i18n key 后缀，供不同界面复用。
+ *
+ * @param source 已归一化的运行时来源分类
+ * @return 对应翻译 key 的尾部标识
+ */
+export function getCodexRuntimeSourceTranslationKey(source: CodexRuntimeSource): string {
+  return source;
+}
+
+export interface CodexSelectedModel {
+  providerId: string;
+  modelId: string;
+}
+
+/**
+ * Codex 模型目录项。
+ * 该结构用于把 provider 维度下的可发现模型拍平成前端稳定列表，
+ * 便于后续 settings UI、聊天模型下拉和桥接事件共享同一套展示数据。
+ */
+export interface CodexModelCatalogItem {
+  /** 复合主键，固定格式为 providerId::modelId */
+  key: string;
+  /** 模型所属 provider id */
+  providerId: string;
+  /** 模型所属 provider 展示名 */
+  providerName: string;
+  /** 模型 id */
+  modelId: string;
+  /** 模型展示名 */
+  label: string;
+  /** 模型说明，可选 */
+  description?: string;
+  /** 目录项来源，用于后续区分 CLI 默认模型、托管 provider 模型和本地配置兜底模型 */
+  source: 'codex_cli_login' | 'managed_provider' | 'plugin_custom' | 'local_config';
+  /** 默认推理强度，可用于 settings 与聊天区共享展示 */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
+  /** 当前模型是否对用户可见 */
+  visible: boolean;
+  /** 当前模型是否可直接运行；未授权或缺少运行条件时可先展示但禁用 */
+  runnable: boolean;
+}
+
+/**
+ * Codex 模型显示配置。
+ * 外层 key 使用复合主键，值用于声明该模型在前端展示层是否可见。
+ */
+export type CodexModelVisibilityConfig = Record<string, { visible: boolean }>;
+
+/**
+ * Codex 模型目录复合 key 分隔符。
+ * 前后端必须共享同一个字面量，避免展示配置和目录项关联失败。
+ */
+export const CODEX_MODEL_CATALOG_KEY_DELIMITER = '::';
+
+/**
+ * 构造 provider 维度的模型复合 key。
+ * 该 key 会作为 modelDisplay 配置的主键，因此这里统一裁剪空白并要求两段都非空。
+ *
+ * @param providerId provider 标识
+ * @param modelId 模型标识
+ * @returns 固定格式的复合 key
+ */
+export function buildCodexModelCatalogKey(providerId: string, modelId: string): string {
+  const normalizedProviderId = providerId.trim();
+  const normalizedModelId = modelId.trim();
+  if (!normalizedProviderId || !normalizedModelId) {
+    throw new Error('Codex model catalog key requires non-empty providerId and modelId');
+  }
+  return `${normalizedProviderId}${CODEX_MODEL_CATALOG_KEY_DELIMITER}${normalizedModelId}`;
+}
+
+/**
+ * 解析 provider 维度的模型复合 key。
+ * 解析时只按第一个 `::` 拆分，保证模型 id 内继续包含冒号时仍可正常恢复。
+ *
+ * @param compositeKey 复合 key
+ * @returns 成功时返回 providerId/modelId，失败时返回 null
+ */
+export function parseCodexModelCatalogKey(compositeKey: string): CodexSelectedModel | null {
+  if (!compositeKey || typeof compositeKey !== 'string') {
+    return null;
+  }
+  const delimiterIndex = compositeKey.indexOf(CODEX_MODEL_CATALOG_KEY_DELIMITER);
+  if (delimiterIndex <= 0) {
+    return null;
+  }
+  const providerId = compositeKey.slice(0, delimiterIndex).trim();
+  const modelId = compositeKey.slice(delimiterIndex + CODEX_MODEL_CATALOG_KEY_DELIMITER.length).trim();
+  if (!providerId || !modelId) {
+    return null;
+  }
+  return { providerId, modelId };
+}
+
+/**
+ * Codex 子进程环境变量条目。
+ * 设置页使用该结构保存用户显式声明的附加环境变量，后端会按用途分别注入消息发送进程和 MCP 工具发现进程。
  */
 export interface EnvVarEntry {
   /** Environment variable name */
@@ -183,7 +460,8 @@ export interface EnvVarEntry {
 }
 
 /**
- * Codex protected environment variable names that cannot be overridden by custom env vars.
+ * Codex 内置环境变量保护名单。
+ * 用户自定义变量不能覆盖这些关键变量，避免破坏 SDK 启动、权限隔离、会话绑定或系统路径解析。
  */
 export const CODEX_PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   'CODEX_USE_STDIN',
@@ -207,15 +485,17 @@ export const CODEX_PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Maximum length for env var values. Long values risk exceeding the OS
- * ARG_MAX limit when the child process is spawned.
- * Must stay in sync with MAX_ENV_VAR_VALUE_LENGTH in CodexSDKBridge.java.
+ * 环境变量值长度上限。
+ * 该值需要和后端 `CodexSDKBridge.java` 中的 MAX_ENV_VAR_VALUE_LENGTH 保持一致，
+ * 避免子进程启动时触发操作系统环境块长度限制。
  */
 export const ENV_VAR_VALUE_MAX_LENGTH = 16 * 1024;
 
 /**
- * Validate whether an env var key name is valid.
- * Must start with letter or underscore, followed by letters, digits, or underscores.
+ * 校验环境变量名是否符合跨平台安全子集。
+ *
+ * @param key 候选环境变量名
+ * @return `true` 表示变量名可以保存；`false` 表示格式非法
  */
 export function isValidEnvVarKey(key: string): boolean {
   if (!key || typeof key !== 'string') return false;
@@ -223,12 +503,12 @@ export function isValidEnvVarKey(key: string): boolean {
 }
 
 /**
- * Check if an env var key is a protected Codex built-in variable.
+ * 判断环境变量名是否命中 Codex 保护名单。
+ * 为了兼容 Windows 环境变量大小写不敏感的行为，这里统一按大写比较，
+ * 也会拒绝大小写变体形式的内置变量。
  *
- * NOTE: comparison is case-insensitive (key is uppercased before lookup).
- * On Linux/macOS env vars are case-sensitive, but we conservatively reject
- * any case-variant of a protected name to keep behavior consistent across
- * platforms (Windows env vars are case-insensitive).
+ * @param key 候选环境变量名
+ * @return `true` 表示该变量不允许由用户覆盖
  */
 export function isProtectedEnvVarKey(key: string): boolean {
   return CODEX_PROTECTED_ENV_KEYS.has(key.toUpperCase());
@@ -242,8 +522,11 @@ export interface EnvVarValidationIssue {
 }
 
 /**
- * Validate a list of EnvVarEntry. Returns the first issue per row, if any.
- * Empty keys are skipped (will be filtered before saving).
+ * 校验一组环境变量条目。
+ * 空 key 会在保存前被过滤，因此这里跳过空 key；非空 key 需要满足格式、保护名单和重复性约束。
+ *
+ * @param entries 当前编辑器中的环境变量条目
+ * @return 每个问题条目的第一条校验错误，返回空数组表示全部合法
  */
 export function validateEnvVarEntries(entries: EnvVarEntry[]): EnvVarValidationIssue[] {
   const issues: EnvVarValidationIssue[] = [];
@@ -286,12 +569,38 @@ export interface CodexProviderConfig {
   id: string;
   /** Provider name */
   name: string;
+  /** Provider type used to distinguish preset source or custom gateway type */
+  providerType?: string;
+  /** Preset identifier selected in the structured creation form */
+  presetId?: string;
   /** Remark */
   remark?: string;
+  /** Provider official website */
+  websiteUrl?: string;
+  /** API key application page */
+  apiKeyApplyUrl?: string;
   /** Creation timestamp (milliseconds) */
   createdAt?: number;
   /** Whether this is the currently active provider */
   isActive?: boolean;
+  /** Authentication mode used by request-level runtime resolution */
+  authMode?: CodexAuthMode;
+  /** Request path used by the runtime bridge */
+  requestMode?: CodexRequestMode;
+  /** Request-level endpoint for managed providers */
+  baseUrl?: string;
+  /** Local API key value, shown only as masked text in UI */
+  apiKey?: string;
+  /** Environment variable name used to resolve API key at send time */
+  apiKeyEnv?: string;
+  /** Runtime model list owned by this provider */
+  models?: CodexCustomModel[];
+  /** cc-switch 代理模式专属配置 */
+  ccSwitchProxy?: CodexCcSwitchProxyConfig;
+  /** 自定义 adapter 模式专属配置 */
+  customAdapter?: CodexCustomAdapterConfig;
+  /** Optional masked API key preview used by UI */
+  apiKeyMasked?: string;
   /** config.toml content (raw string) */
   configToml?: string;
   /** auth.json content (raw string) */
@@ -302,6 +611,45 @@ export interface CodexProviderConfig {
   messageEnvVars?: EnvVarEntry[];
   /** Environment variables for getMcpServerTools subprocess */
   mcpEnvVars?: EnvVarEntry[];
+  /** 当前运行时实际生效的配置来源，用于界面提示是否命中托管 provider 或本地配置 */
+  effectiveConfigSource?: string;
+  /** 当前运行时 endpoint 的来源，用于区分 provider、本地配置或 SDK 默认值 */
+  endpointSource?: string;
+  /** 是否在运行时解析阶段发生了 fallback，用于显式暴露“看起来没走托管配置”的情况 */
+  fallbackDetected?: boolean;
+  /** 当前请求级强制注入的 model_provider 诊断值 */
+  forcedModelProvider?: string;
+  /** 本地 ~/.codex/config.toml 中声明的 model_provider */
+  localCodexModelProvider?: string;
+  /** 当前托管 provider 是否与本地 CLI 默认 provider 存在冲突风险 */
+  localConfigConflictDetected?: boolean;
+  /** 诊断语义下最终应生效的 model_provider */
+  finalModelProvider?: string;
+  /** Whether to auto-activate after saving */
+  autoActivate?: boolean;
+}
+
+/**
+ * Codex provider 连通性测试结果。
+ * 该结构用于把后端真实运行时解析结果返回给设置页，便于用户确认实际命中的 provider、endpoint 与凭据来源。
+ */
+export interface CodexProviderTestResult {
+  success: boolean;
+  providerId: string;
+  requestMode: string;
+  model: string;
+  resolvedBaseUrl: string;
+  credentialSource: string;
+  transport: string;
+  effectiveConfigSource: string;
+  fallbackDetected: boolean;
+  authMode?: string;
+  endpointSource?: string;
+  forcedModelProvider?: string;
+  localCodexModelProvider?: string;
+  localConfigConflictDetected?: boolean;
+  finalModelProvider?: string;
+  message: string;
 }
 
 // ============ Provider Presets ============
@@ -336,7 +684,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.7',
+      ANTHROPIC_SMALL_FAST_MODEL: 'glm-4.7',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.7',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-4.7',
     },
@@ -347,7 +695,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://api.moonshot.cn/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'kimi-k2.5',
+      ANTHROPIC_SMALL_FAST_MODEL: 'kimi-k2.5',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'kimi-k2.5',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'kimi-k2.5',
     },
@@ -358,6 +706,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_SMALL_FAST_MODEL: 'deepseek-v4-flash',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-pro[1m]',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-pro[1m]',
@@ -375,7 +724,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M2.1',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M2.1',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'MiniMax-M2.1',
+      ANTHROPIC_SMALL_FAST_MODEL: 'MiniMax-M2.1',
     },
   },
   {
@@ -384,6 +733,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_SMALL_FAST_MODEL: 'mimo-v2.5-pro',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.5-pro',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.5-pro',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.5-pro',
@@ -395,6 +745,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_SMALL_FAST_MODEL: 'mimo-v2.5-pro',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.5-pro',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.5-pro',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.5-pro',
@@ -406,7 +757,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://dashscope.aliyuncs.com/apps/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'qwen3-max',
+      ANTHROPIC_SMALL_FAST_MODEL: 'qwen3-max',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'qwen3-max',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'qwen3-max',
     },
@@ -417,7 +768,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
       ANTHROPIC_AUTH_TOKEN: '',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'anthropic/claude-haiku-4.5',
+      ANTHROPIC_SMALL_FAST_MODEL: 'anthropic/claude-haiku-4.5',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'anthropic/claude-sonnet-4.5',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'anthropic/claude-opus-4.5',
     },

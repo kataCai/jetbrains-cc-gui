@@ -16,6 +16,12 @@ interface CustomModelDialogProps {
   onClose: () => void;
   /** If provided, opens in add-model mode directly */
   initialAddMode?: boolean;
+  /** Optional custom title for provider-specific alias flows */
+  title?: string;
+  /** Optional custom description for provider-specific alias flows */
+  description?: string;
+  /** Optional upgrade action that turns a model alias into a provider draft */
+  onCreateProviderFromModel?: (model: CodexCustomModel) => void;
 }
 
 /**
@@ -39,6 +45,9 @@ export function CustomModelDialog({
   onModelsChange,
   onClose,
   initialAddMode = false,
+  title,
+  description,
+  onCreateProviderFromModel,
 }: CustomModelDialogProps) {
   const { t } = useTranslation();
 
@@ -158,6 +167,16 @@ export function CustomModelDialog({
     onModelsChange(models.filter(m => m.id !== id));
   }, [models, onModelsChange]);
 
+  /**
+   * 基于当前模型别名创建 provider 草稿。
+   * 这里只把选中的模型对象回传给上层，由设置页统一决定如何打开 provider 表单并补全默认值。
+   *
+   * @param model 当前选中的模型别名
+   */
+  const handleCreateProviderFromModel = useCallback((model: CodexCustomModel) => {
+    onCreateProviderFromModel?.(model);
+  }, [onCreateProviderFromModel]);
+
   const handleCancelEdit = useCallback(() => {
     setEditingModel(null);
     setNewModelId('');
@@ -173,14 +192,14 @@ export function CustomModelDialog({
     <div className="dialog-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dialog provider-dialog" style={DIALOG_STYLE}>
         <div className="dialog-header">
-          <h3>{t('settings.pluginModels.dialogTitle')}</h3>
+          <h3>{title || t('settings.pluginModels.dialogTitle')}</h3>
           <button className="close-btn" onClick={onClose} title={t('common.close')}>
             <span className="codicon codicon-close" />
           </button>
         </div>
 
         <div className="dialog-body">
-          <p className="dialog-desc">{t('settings.pluginModels.description')}</p>
+          <p className="dialog-desc">{description || t('settings.pluginModels.description')}</p>
 
           {/* Model list */}
           <div className={styles.modelList} role="list" aria-label={t('settings.pluginModels.dialogTitle')}>
@@ -205,6 +224,15 @@ export function CustomModelDialog({
                     )}
                   </div>
                   <div className={styles.modelItemActions}>
+                    {onCreateProviderFromModel && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleCreateProviderFromModel(model)}
+                      >
+                        {t('settings.pluginModels.createProviderFromModel', { defaultValue: 'Create Provider' })}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={styles.iconBtn}

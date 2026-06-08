@@ -13,7 +13,6 @@ import {
   preserveMessageIdentity,
   preserveRecentlyEndedStreamingTurn,
   preserveStreamingAssistantContent,
-  preserveLatestMessagesOnShrink,
   stripDuplicateTrailingToolMessages,
   stripUuidFromRaw,
 } from '../messageSync';
@@ -939,10 +938,6 @@ describe('ensureStreamingAssistantInList', () => {
 // ---------------------------------------------------------------------------
 
 describe('preserveStreamingAssistantContent — raw blocks protection', () => {
-  // Helper: extract text from raw blocks
-  const getRawTextAt = (msg: ClaudeMessage, blockIdx = 0): string | undefined =>
-    ((msg.raw as any)?.message?.content?.[blockIdx] as any)?.text;
-
   it('protects raw text blocks from backend regression when content string is also protected', () => {
     const prev = [makeAssistantMsg('ABCDE', {
       isStreaming: true,

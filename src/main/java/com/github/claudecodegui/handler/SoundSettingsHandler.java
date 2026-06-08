@@ -7,6 +7,7 @@ import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.util.SoundNotificationService;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
@@ -411,12 +412,13 @@ public class SoundSettingsHandler {
      * 测试环境下如果 Application 尚未初始化，则直接执行，避免调用链卡死。
      */
     private void invokeLaterSafe(Runnable runnable) {
-        if (ApplicationManager.getApplication() == null) {
-            // 单元测试或极早期初始化阶段 Application 可能还没挂好，
-            // 这时直接执行可以避免因为 invokeLater 不可用导致测试挂死。
+        Application application = ApplicationManager.getApplication();
+        if (application == null || application.isDisposed() || application.isUnitTestMode()) {
+            // 单元测试模式下直接同步执行，避免 bridge 回调仍滞留在 invokeLater 队列里，
+            // 导致测试线程在断言 updateTaskReminderConfig/updateSoundNotificationConfig 时拿到空结果。
             runnable.run();
             return;
         }
-        ApplicationManager.getApplication().invokeLater(runnable);
+        application.invokeLater(runnable);
     }
 }

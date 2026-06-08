@@ -663,6 +663,12 @@ export interface ChatInputBoxProps {
   onOpenPromptSettings?: () => void;
   /** Open model settings (navigate to provider management to add models) */
   onOpenModelSettings?: () => void;
+  /** Open Codex provider creation flow from model selector */
+  onOpenCodexProviderSettings?: () => void;
+  /** Open current active Codex provider model management */
+  onOpenCodexProviderModelManagement?: () => void;
+  /** Open Codex advanced model alias dialog */
+  onOpenCodexModelAliasSettings?: () => void;
 
   /** Whether has messages (for rewind button display) */
   hasMessages?: boolean;
@@ -757,6 +763,12 @@ export interface ButtonAreaProps {
   onOpenAgentSettings?: () => void;
   /** Navigate to model management to add models */
   onAddModel?: () => void;
+  /** Open Codex provider creation flow from model selector */
+  onOpenCodexProviderSettings?: () => void;
+  /** Open current active Codex provider model management */
+  onOpenCodexProviderModelManagement?: () => void;
+  /** Open Codex advanced model alias dialog */
+  onOpenCodexModelAliasSettings?: () => void;
   /** Whether long context (1M) is enabled */
   longContextEnabled?: boolean;
   /** Toggle long context callback */

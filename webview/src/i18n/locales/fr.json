@@ -89,16 +89,7 @@
     "attachmentsUploaded": "[Pièces jointes téléchargées]",
     "streamingConnected": "{{provider}} connecté, en train de comprendre votre question",
     "showEarlierMessages": "Afficher {{count}} messages précédents",
-    "totalDuration": "Cette réponse a pris",
-    "compactSummary": {
-      "summarizedConversation": "Conversation résumée",
-      "compactSummary": "Résumé compact",
-      "messagesUpTo": "{{count}} messages résumés jusqu'à ce point",
-      "messagesFrom": "{{count}} messages résumés à partir de ce point",
-      "userContext": "Contexte : « {{context}} »",
-      "expand": "Développer le résumé",
-      "collapse": "Réduire le résumé"
-    }
+    "totalDuration": "Cette réponse a pris"
   },
   "settings": {
     "title": "Paramètres",
@@ -121,7 +112,6 @@
       },
       "language": {
         "label": "Langue de l'interface",
-        "followIde": "Suivre l'IDE",
         "simplifiedChinese": "简体中文",
         "traditionalChinese": "繁體中文",
         "english": "English",
@@ -212,11 +202,6 @@
         "cmdEnter": "⌘/Ctrl+Entrée pour envoyer",
         "cmdEnterDesc": "Appuyez sur ⌘/Ctrl+Entrée pour envoyer le message, Entrée pour nouvelle ligne"
       },
-      "permissionDialogTimeout": {
-        "label": "Délai d'expiration des dialogues de permission et de question",
-        "unit": "secondes",
-        "hint": "Définissez le délai d'expiration pour les dialogues de questions de Claude et les dialogues de demande de permission (30~3600 secondes). Après expiration, le dialogue se fermera automatiquement et Claude continuera."
-      },
       "chatBgColor": {
         "label": "Couleur de fond du chat",
         "custom": "Personnalisé",
@@ -296,11 +281,6 @@
         "label": "Additional Prompt",
         "placeholder": "Add your extra requirements here, e.g., generate commit in English, include issue number, etc...",
         "hint": "The plugin has built-in CCG Commits specification prompts. Content you add here will be used as additional requirements, and AI will prioritize your instructions."
-      },
-      "projectPrompt": {
-        "label": "Prompt supplémentaire spécifique au projet",
-        "placeholder": "Ajoutez ici les exigences spécifiques au projet, par exemple : le scope doit utiliser le nom du module, le body du commit doit inclure la portée de l'impact, etc...",
-        "hint": "Ce prompt s'applique uniquement au projet actuel et est combiné avec le prompt supplémentaire global. En cas de conflit, le prompt du projet prévaut. Les différents projets peuvent être configurés indépendamment."
       },
       "codeReview": {
         "comingSoon": "Coming Soon",
@@ -602,7 +582,38 @@
         "envKeyProtected": "Cannot set built-in variable: {{key}}",
         "envKeyDuplicate": "Duplicate key: {{key}}",
         "envValueTooLong": "Valeur trop longue (max {{max}} caractères)"
-      }
+      },
+      "cliLogin": {
+        "title": "Use local Codex CLI profile",
+        "description": "Read your existing Codex CLI login and default settings so you can use them in CC-GUI.",
+        "readonlyHint": "Read-only access. The plugin never overwrites ~/.codex/config.toml or auth.json.",
+        "authorizationStatus": "Authorization",
+        "currentUsageStatus": "Request Source",
+        "authorized": "Authorized",
+        "notAuthorized": "Not authorized",
+        "currentlyUsed": "Currently used",
+        "notInUse": "Not in use",
+        "authorizeOnly": "Authorize",
+        "useForRequests": "Use for requests",
+        "currentlyUsingAction": "Currently in use"
+      },
+      "modelsTitle": "Models",
+      "modelsDescription": "Control which Codex models appear in the chat model picker.",
+      "modelsSearchPlaceholder": "Search by model or provider",
+      "modelsEmpty": "No matching models",
+      "modelsViewAll": "View All Models",
+      "modelsCollapse": "Collapse",
+      "modelsVisibleSectionTitle": "Visible models",
+      "modelsAllSectionTitle": "All matching models",
+      "modelsUnavailable": "Available after authorization",
+      "modelsSource": {
+        "codex_cli_login": "CLI Login",
+        "managed_provider": "Managed Provider",
+        "plugin_custom": "Model Alias",
+        "local_config": "Local Config"
+      },
+      "requestModeUnavailableBadge": "Coming Soon",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled."
     },
     "agent": {
       "title": "Agents",
@@ -739,8 +750,7 @@
       "WebSearch": "Recherche web",
       "WebFetch": "Récupérer web",
       "execute": "Exécuter {{toolName}}",
-      "readDirectory": "Lire le répertoire",
-      "timeoutWarning": "Veuillez répondre rapidement, la boîte de dialogue se fermera dans {{seconds}} secondes"
+      "readDirectory": "Lire le répertoire"
     }
   },
   "askUserQuestion": {
@@ -1234,7 +1244,7 @@
       },
       "opus46_1m": {
         "label": "Opus 4.6",
-        "description": "Opus 4.6 · Modèle de raisonnement haute performance"
+        "description": "Opus 4.6 pour les longues sessions"
       },
       "haiku45": {
         "label": "Haiku 4.5",
@@ -1463,33 +1473,5 @@
     "providerNotConfigured": "Fournisseur non configuré",
     "providerNotConfiguredDesc": "Aucun fournisseur IA n'est encore configuré, ou l'utilisation de la configuration locale n'a pas été autorisée. Veuillez terminer la configuration dans les paramètres de gestion des fournisseurs avant de commencer une conversation.",
     "goToProviderSettings": "Aller aux paramètres"
-  },
-  "errorDiagnostic": {
-    "copyCommand": "Copier",
-    "copied": "Copié",
-    "openDependencySettings": "Ouvrir la gestion des dépendances",
-    "recommended": "Recommandé",
-    "codexThreadResume": {
-      "title": "Le thread de session n'est plus valide",
-      "intro": "La création d'une nouvelle session résoudra ce problème. L'identifiant de thread de la session actuelle n'existe plus sur le serveur Codex.",
-      "reason": "Codex supprime les anciens threads après un certain temps, ce qui peut déclencher cette erreur lors de la reprise d'une session précédente."
-    },
-    "sdkNativeBinaryMissing": {
-      "title": "Installation du SDK incomplète — binaire natif manquant",
-      "intro": "Il s'agit d'un problème connu du miroir npm de Taobao (ce n'est pas un bug du plugin). Le miroir n'a pas entièrement synchronisé les fichiers spécifiques à la plateforme. Vous pouvez le résoudre manuellement avec l'une des options ci-dessous :",
-      "reason": "Ce problème disparaîtra automatiquement une fois la synchronisation du miroir Taobao terminée — aucune action supplémentaire n'est nécessaire.",
-      "solutions": {
-        "switchRegistry": {
-          "title": "Option 1 : Basculer temporairement vers le registre officiel et réinstaller",
-          "step0": "1. Exécutez dans votre terminal (passage au registre npm officiel) :",
-          "step1": "2. Ouvrez les paramètres de gestion des dépendances du plugin et cliquez sur Réinstaller :",
-          "step2": "3. Une fois la réinstallation terminée, revenez au miroir Taobao :"
-        },
-        "downgrade": {
-          "title": "Option 2 : Revenir à une version antérieure",
-          "step0": "Dans Gestion des dépendances, passez la version du SDK à v0.2.112 ou antérieure. Redémarrez IDEA après le changement."
-        }
-      }
-    }
   }
 }

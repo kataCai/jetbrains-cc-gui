@@ -35,9 +35,9 @@ const sidebarItems: SidebarItem[] = [
   { key: 'usage', icon: 'codicon-graph', labelKey: 'settings.usage' },
   { key: 'mcp', icon: 'codicon-server', labelKey: 'settings.mcp' },
   { key: 'permissions', icon: 'codicon-shield', labelKey: 'settings.permissions' },
+  // 远程协作在设置侧边栏中只保留一个入口，避免相同功能被重复渲染。
   { key: 'remote', icon: 'codicon-device-mobile', labelKey: 'settings.remoteCollab.title' },
   { key: 'promptEnhancer', icon: 'codicon-sparkle', labelKey: 'settings.promptEnhancer.title' },
-  { key: 'remote', icon: 'codicon-device-mobile', labelKey: 'settings.remoteCollab.title' },
   { key: 'commit', icon: 'codicon-git-commit', labelKey: 'settings.commit.title' },
   { key: 'agents', icon: 'codicon-robot', labelKey: 'settings.agents' },
   { key: 'prompts', icon: 'codicon-notebook', labelKey: 'settings.prompts' },

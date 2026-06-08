@@ -8,12 +8,13 @@ import {
   strip1MContextSuffix,
 } from '../components/ChatInputBox/types';
 import type { PermissionMode } from '../components/ChatInputBox/types';
-import { isSpecialProviderId } from '../types/provider';
+import { isSpecialProviderId, parseCodexModelCatalogKey } from '../types/provider';
 import { useClaudeProvider } from './providers/useClaudeProvider';
 import { useCodexProvider } from './providers/useCodexProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
 import { useProviderSettings } from './providers/useProviderSettings';
 import { useModelStatePersistence } from './providers/useModelStatePersistence';
+import { subscribeActiveCodexProvider } from '../utils/runtimeProviderCapabilities';
 
 export type ViewMode = 'chat' | 'history' | 'settings';
 
@@ -85,6 +86,7 @@ function resolveRestorableModelId(
 export interface UseModelProviderStateOptions {
   addToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   t: TFunction;
+  onCodexConversationConfigChanged?: (reason: 'provider' | 'model' | 'activeProvider') => void;
 }
 
 /**
@@ -100,12 +102,17 @@ export interface UseModelProviderStateOptions {
  * @param t i18n 翻译函数
  * @return 扁平的状态、ref 与处理函数集合
  */
-export function useModelProviderState({ addToast, t }: UseModelProviderStateOptions) {
+export function useModelProviderState({
+  addToast,
+  t,
+  onCodexConversationConfigChanged,
+}: UseModelProviderStateOptions) {
   const [currentProvider, setCurrentProvider] = useState('claude');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('bypassPermissions');
   const [defaultCodexModelFromConfig, setDefaultCodexModelFromConfig] = useState<string | null>(null);
   const [codexBaseUrl, setCodexBaseUrl] = useState<string | null>(null);
   const [codexUsesCustomBaseUrl, setCodexUsesCustomBaseUrl] = useState(false);
+  const [activeCodexProviderId, setActiveCodexProviderId] = useState('');
 
   const currentProviderRef = useRef(currentProvider);
   currentProviderRef.current = currentProvider;
@@ -172,6 +179,36 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   useEffect(() => {
     activeProviderConfigRef.current = activeProviderConfig;
   }, [activeProviderConfig]);
+
+  useEffect(() => {
+    /**
+     * 跟踪当前激活的 Codex provider id。
+     * 持久化 selectedCodexModel 时需要把模型绑定到具体 provider，避免切换 provider 后恢复串味。
+     */
+    let previousProviderId = '';
+    const unsubscribe = subscribeActiveCodexProvider((jsonStr: string) => {
+      try {
+        const provider = JSON.parse(jsonStr) as { id?: string | null };
+        const nextProviderId = typeof provider?.id === 'string' ? provider.id.trim() : '';
+        if (
+          previousProviderId
+          && nextProviderId
+          && previousProviderId !== nextProviderId
+          && currentProviderRef.current === 'codex'
+        ) {
+          // 当聊天区当前已处于 Codex provider 时，如果设置页把 active provider 切到了另一家，
+          // 下一条消息必须放弃旧 threadId，否则会继续挂到旧 provider 的历史线程上。
+          onCodexConversationConfigChanged?.('activeProvider');
+        }
+        previousProviderId = nextProviderId;
+        setActiveCodexProviderId(nextProviderId);
+      } catch {
+        previousProviderId = '';
+        setActiveCodexProviderId('');
+      }
+    });
+    return unsubscribe;
+  }, [onCodexConversationConfigChanged]);
 
   const notifyCodexPlanDowngrade = useCallback(() => {
     addToast(
@@ -276,20 +313,31 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     }
 
     if (currentProvider === 'codex') {
+      const parsedCatalogSelection = parseCodexModelCatalogKey(modelId);
+      const targetProviderId = parsedCatalogSelection?.providerId ?? activeCodexProviderId;
+      const targetModelId = parsedCatalogSelection?.modelId ?? modelId;
       const savedCodexCustomModels = getCustomModels('codex-custom-models');
       const resolvedCodexModelId = resolveRestorableModelId(
-        modelId,
+        targetModelId,
         [{ id: selectedCodexModel }, { id: defaultCodexModelFromConfig ?? '' }],
         savedCodexCustomModels,
-      ) ?? modelId;
+      ) ?? targetModelId;
       shouldAdoptCodexDefaultModelRef.current = false;
       setSelectedCodexModel(resolvedCodexModelId);
       sendBridgeEvent('set_model', resolvedCodexModelId);
+      sendBridgeEvent('select_codex_model', JSON.stringify({
+        providerId: targetProviderId,
+        modelId: resolvedCodexModelId,
+      }));
+      // Codex 模型一旦切换，必须同步放弃旧 threadId，避免后续消息仍沿用旧模型会话。
+      onCodexConversationConfigChanged?.('model');
     }
   }, [
+    activeCodexProviderId,
     currentProvider,
     defaultCodexModelFromConfig,
     longContextEnabled,
+    onCodexConversationConfigChanged,
     selectedCodexModel,
     setSelectedClaudeModel,
     setSelectedCodexModel,
@@ -318,6 +366,11 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
       ? selectedCodexModel
       : apply1MContextSuffix(selectedClaudeModel, longContextEnabled);
     sendBridgeEvent('set_model', newModel);
+    if (providerId === 'codex' || currentProvider === 'codex') {
+      // 只要本次 provider 切换涉及 Codex，就需要强制新会话；
+      // 否则 UI 虽然切到了新 provider，但底层仍可能沿用旧 Codex thread。
+      onCodexConversationConfigChanged?.('provider');
+    }
 
     if (shouldNotifyCodexPlanDowngrade) {
       notifyCodexPlanDowngrade();
@@ -325,8 +378,10 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
   }, [
     claudePermissionMode,
     codexPermissionMode,
+    currentProvider,
     longContextEnabled,
     notifyCodexPlanDowngrade,
+    onCodexConversationConfigChanged,
     permissionMode,
     selectedClaudeModel,
     selectedCodexModel,

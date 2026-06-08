@@ -86,13 +86,18 @@ public class NodeDetectorWslTest {
     // buildNodeScriptCommand
     // =========================================================================
 
+    /**
+     * 验证常规 Node 可执行名不会被识别为 WSL 路径。
+     * 这里显式使用 `node` 而不是 `/usr/local/bin/node`，避免测试在 Windows 主机上
+     * 因 `isWslPath("/usr/...") == true` 的平台契约而误把“WSL 路径”当成“非 WSL 路径”。
+     */
     @Test
     public void buildNodeScriptCommand_nonWslPath_returnsNodeAndScript() {
         List<String> cmd = NodeDetector.buildNodeScriptCommand(
-                "/usr/local/bin/node", "/path/to/script.js");
+                "node", "/path/to/script.js");
         assertNotNull(cmd);
         assertEquals(2, cmd.size());
-        assertEquals("/usr/local/bin/node", cmd.get(0));
+        assertEquals("node", cmd.get(0));
         assertEquals("/path/to/script.js", cmd.get(1));
     }
 
@@ -119,13 +124,17 @@ public class NodeDetectorWslTest {
     // buildNodeInlineCommand
     // =========================================================================
 
+    /**
+     * 验证常规 Node 可执行名走“直接执行 + -e 脚本”分支。
+     * 该断言覆盖的是真正的非 WSL 契约，而不是依赖当前测试机操作系统来解释 Unix 路径。
+     */
     @Test
     public void buildNodeInlineCommand_nonWslPath_returnsNodeEvalScript() {
         List<String> cmd = NodeDetector.buildNodeInlineCommand(
-                "/usr/local/bin/node", "console.log('hi');");
+                "node", "console.log('hi');");
         assertNotNull(cmd);
         assertEquals(3, cmd.size());
-        assertEquals("/usr/local/bin/node", cmd.get(0));
+        assertEquals("node", cmd.get(0));
         assertEquals("-e", cmd.get(1));
         assertEquals("console.log('hi');", cmd.get(2));
     }

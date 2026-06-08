@@ -34,9 +34,13 @@ public class SettingsHandler extends BaseMessageHandler {
         "get_mode",
         "set_mode",
         "set_model",
+        "set_selected_codex_model",
+        "select_codex_model",
         "set_provider",
         "set_reasoning_effort",
         "get_codex_model_state",
+        "get_codex_model_catalog",
+        "set_codex_model_visibility",
         "get_node_path",
         "set_node_path",
         "get_usage_statistics",
@@ -154,6 +158,12 @@ public class SettingsHandler extends BaseMessageHandler {
             case "set_model":
                 modelProviderHandler.handleSetModel(content);
                 return true;
+            case "set_selected_codex_model":
+                modelProviderHandler.handleSetSelectedCodexModel(content);
+                return true;
+            case "select_codex_model":
+                modelProviderHandler.handleSelectCodexModel(content);
+                return true;
             case "set_provider":
                 modelProviderHandler.handleSetProvider(content);
                 return true;
@@ -162,6 +172,12 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "get_codex_model_state":
                 modelProviderHandler.handleGetCodexModelState();
+                return true;
+            case "get_codex_model_catalog":
+                modelProviderHandler.handleGetCodexModelCatalog();
+                return true;
+            case "set_codex_model_visibility":
+                modelProviderHandler.handleSetCodexModelVisibility(content);
                 return true;
             // Node path
             case "get_node_path":

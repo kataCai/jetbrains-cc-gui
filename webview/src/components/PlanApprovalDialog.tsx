@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDialogCountdownTimeout } from '../hooks/useDialogCountdownTimeout';
 import { useDialogResize } from '../hooks/useDialogResize';
@@ -55,6 +55,7 @@ const PlanApprovalDialog = ({
 }: PlanApprovalDialogProps) => {
   const { t } = useTranslation();
   const [selectedMode, setSelectedMode] = useState('default');
+  const selectedModeRef = useRef('default');
   const [isCollapsed, setIsCollapsed] = useState(false);
   const { dialogRef, dialogHeight, setDialogHeight, handleResizeStart } = useDialogResize({ minHeight: 200 });
 
@@ -73,8 +74,8 @@ const PlanApprovalDialog = ({
 
   const handleApprove = useCallback(() => {
     if (!request || !markSubmitted()) return;
-    onApprove(request.requestId, selectedMode);
-  }, [request, selectedMode, markSubmitted, onApprove]);
+    onApprove(request.requestId, selectedModeRef.current);
+  }, [request, markSubmitted, onApprove]);
 
   const handleReject = useCallback(() => {
     if (!request || !markSubmitted()) return;
@@ -84,13 +85,16 @@ const PlanApprovalDialog = ({
   useEffect(() => {
     if (isOpen && request) {
       setSelectedMode('default');
+      selectedModeRef.current = 'default';
       setIsCollapsed(false);
       // 测试 mock 可能不提供完整的 dialog resize API，真实运行时才会执行重置。
       if (typeof setDialogHeight === 'function') {
         setDialogHeight(null);
       }
     }
-  }, [isOpen, request?.requestId, setDialogHeight]);
+  // 只在弹窗打开或请求切换时重置审批状态。
+  // resize hook 在测试或未来实现中可能返回新函数引用，不能让它触发模式回退。
+  }, [isOpen, request?.requestId]);
 
   useEffect(() => {
     if (!isOpen || !request) return undefined;
@@ -133,6 +137,9 @@ const PlanApprovalDialog = ({
   }
 
   const handleModeChange = (modeId: string) => {
+    // 连续点击“选择模式 -> 批准”时，React 状态可能仍处于批处理队列中；
+    // 同步 ref 保证批准动作读取到用户刚刚选择的执行模式。
+    selectedModeRef.current = modeId;
     setSelectedMode(modeId);
   };
 

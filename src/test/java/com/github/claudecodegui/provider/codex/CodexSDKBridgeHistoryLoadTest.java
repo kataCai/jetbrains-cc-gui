@@ -43,16 +43,18 @@ public class CodexSDKBridgeHistoryLoadTest {
 
             assertFalse(messages.isEmpty());
             assertEquals("assistant", messages.get(0).get("type").getAsString());
+            assertEquals("Hello from Codex", messages.get(0).get("content").getAsString());
             assertEquals("Hello from Codex",
-                    messages.get(0).getAsJsonObject("message")
+                    messages.get(0).getAsJsonObject("raw")
                             .getAsJsonArray("content")
                             .get(0)
                             .getAsJsonObject()
                             .get("text")
                             .getAsString());
             assertEquals("user", messages.get(1).get("type").getAsString());
+            assertEquals("Explain the previous answer", messages.get(1).get("content").getAsString());
             assertEquals("Explain the previous answer",
-                    messages.get(1).getAsJsonObject("message")
+                    messages.get(1).getAsJsonObject("raw")
                             .getAsJsonArray("content")
                             .get(0)
                             .getAsJsonObject()

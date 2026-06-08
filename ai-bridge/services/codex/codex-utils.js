@@ -38,6 +38,15 @@ export const CODEX_CLI_ENV_BLOCKLIST = new Set([
   'CODEX_SANDBOX_NETWORK_DISABLED',
   'CODEX_CI'
 ]);
+export const MANAGED_PROVIDER_ENV_BLOCKLIST = new Set([
+  'OPENAI_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_ORG_ID',
+  'OPENAI_ORGANIZATION',
+  'OPENAI_PROJECT',
+  'CODEX_API_KEY',
+  'CODEX_BASE_URL'
+]);
 
 /**
  * Reads sandbox mode override from environment variables.
@@ -72,12 +81,20 @@ export function resolveApprovalPolicyOverride() {
 }
 
 /**
- * Builds a sanitized environment map for Codex CLI to avoid inherited
- * polluted variables that can break approval policy behavior.
+ * 构建传给 Codex SDK/CLI 的隔离环境变量。
+ * 这里需要区分两类运行时：
+ * 1. `CLI Login` 模式：允许继承本地 `~/.codex` 与 shell 环境，用于继续复用用户本地 Codex 登录态。
+ * 2. 托管 provider 模式：禁止继承会改变 OpenAI/Codex 路由的环境变量，避免请求被静默带回本地代理。
+ *
+ * @param {object} baseEnv 父进程环境变量
+ * @param {object} runtimeProfile 当前请求的运行时 profile
+ * @returns {{cliEnv: object, removedKeys: string[]}} 过滤后的环境变量与被移除字段列表
  */
-export function buildCodexCliEnvironment(baseEnv) {
+export function buildCodexCliEnvironment(baseEnv, runtimeProfile = {}) {
   const cliEnv = {};
   const removedKeys = [];
+  const isCliLogin = runtimeProfile?.authMode === 'codex_cli_login' ||
+    runtimeProfile?.effectiveConfigSource === 'codex_cli_login';
 
   if (!baseEnv || typeof baseEnv !== 'object') {
     return { cliEnv, removedKeys };
@@ -88,6 +105,10 @@ export function buildCodexCliEnvironment(baseEnv) {
       continue;
     }
     if (CODEX_CLI_ENV_BLOCKLIST.has(key)) {
+      removedKeys.push(key);
+      continue;
+    }
+    if (!isCliLogin && MANAGED_PROVIDER_ENV_BLOCKLIST.has(key)) {
       removedKeys.push(key);
       continue;
     }
@@ -222,6 +243,8 @@ export function buildErrorPayload(error, metadata = {}) {
     details: {
       rawError,
       errorName,
+      errorCode: metadata.errorCode || error?.code || null,
+      requestMode: metadata.requestMode || error?.requestMode || null,
       isAuthError,
       isNetworkError,
       recoveryCategory: metadata.recoveryCategory || null,

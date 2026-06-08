@@ -12,6 +12,7 @@ const createOptions = (currentProvider: string, permissionMode: PermissionMode) 
   t: ((key: string) => key) as any,
   addToast: vi.fn(),
   currentProvider,
+  selectedModel: 'test-model',
   permissionMode,
   selectedAgent: null,
   sdkStatusLoaded: true,
@@ -29,6 +30,8 @@ const createOptions = (currentProvider: string, permissionMode: PermissionMode) 
   setSettingsInitialTab: vi.fn(),
   setCurrentView: vi.fn(),
   forceCreateNewSession: vi.fn(),
+  openContextUsageDialog: vi.fn(),
+  closeContextUsageDialog: vi.fn(() => false),
 });
 
 describe('useMessageSender', () => {

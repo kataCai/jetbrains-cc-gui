@@ -123,7 +123,7 @@ export function registerMessageCallbacks(
   };
 
   if (window.__pendingUpdateRaf != null) {
-    clearTimeout(window.__pendingUpdateRaf);
+    cancelAnimationFrame(window.__pendingUpdateRaf);
     window.__pendingUpdateRaf = null;
     window.__pendingUpdateJson = null;
     window.__pendingUpdateSequence = null;
@@ -134,7 +134,7 @@ export function registerMessageCallbacks(
 
   const cancelPendingUpdateMessages = () => {
     if (pendingUpdateRaf !== null) {
-      clearTimeout(pendingUpdateRaf);
+      cancelAnimationFrame(pendingUpdateRaf);
     }
     pendingUpdateRaf = null;
     pendingUpdateJson = null;
@@ -351,7 +351,7 @@ export function registerMessageCallbacks(
       window.__pendingUpdateJson = json;
       window.__pendingUpdateSequence = sequence;
       if (pendingUpdateRaf === null) {
-        const timerId = setTimeout(() => {
+        const timerId = requestAnimationFrame(() => {
           pendingUpdateRaf = null;
           window.__pendingUpdateRaf = null;
           const latestJson = pendingUpdateJson;
@@ -363,7 +363,7 @@ export function registerMessageCallbacks(
           if (latestJson) {
             processUpdateMessages(latestJson, latestSequence);
           }
-        }, 16);
+        });
         pendingUpdateRaf = timerId as unknown as number;
         window.__pendingUpdateRaf = timerId as unknown as number;
       }
@@ -509,7 +509,7 @@ export function registerMessageCallbacks(
 
   window.clearMessages = () => {
     if (pendingUpdateRaf !== null) {
-      clearTimeout(pendingUpdateRaf);
+      cancelAnimationFrame(pendingUpdateRaf);
       pendingUpdateRaf = null;
       pendingUpdateJson = null;
       pendingUpdateSequence = null;

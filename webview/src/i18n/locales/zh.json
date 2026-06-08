@@ -49,6 +49,16 @@
     "codexCustomBaseUrlWarning": "当前使用自定义 OpenAI base URL：{{baseUrl}}。上游服务可能不完全支持模型切换。",
     "codexCustomBaseUrlWarningTitle": "自定义 OpenAI base URL",
     "codexCustomBaseUrlWarningDescription": "{{baseUrl}} 可能不支持全部模型选择。",
+    "addCodexProviderAction": "新增 Codex 供应商配置...",
+    "manageCurrentCodexProviderModelsAction": "管理当前供应商模型...",
+    "addCodexModelAliasAction": "添加模型别名（高级）...",
+    "codexRuntimeSourceLabel": "运行时来源：{{source}}",
+    "codexRuntimeSource": {
+      "managedProvider": "托管供应商",
+      "codexLocalConfig": "Codex 本地配置",
+      "sdkDefault": "SDK 默认值",
+      "proxyFallback": "代理回退"
+    },
     "removeAttachment": "移除附件",
     "closePreview": "关闭预览",
     "loadingDropdown": "加载中...",
@@ -112,16 +122,7 @@
       "completed": "已完成",
       "final_error": "需处理"
     },
-    "totalDuration": "本次耗时",
-    "compactSummary": {
-      "summarizedConversation": "已总结的对话",
-      "compactSummary": "对话摘要",
-      "messagesUpTo": "已总结此节点之前的 {{count}} 条消息",
-      "messagesFrom": "已总结此节点之后的 {{count}} 条消息",
-      "userContext": "补充说明：「{{context}}」",
-      "expand": "展开摘要",
-      "collapse": "折叠摘要"
-    }
+    "totalDuration": "本次耗时"
   },
   "settings": {
     "title": "设置",
@@ -153,8 +154,7 @@
         "japanese": "日本語",
         "russian": "Русский",
         "korean": "한국어",
-        "portuguese": "Português (Brasil)",
-        "followIde": "跟随 IDE"
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Node.js 路径",
@@ -315,11 +315,6 @@
         "balloonNotificationsHint": "Balloon 是否可见还受 IDE Notifications 设置影响：Settings | Appearance & Behavior | Notifications。",
         "testPopup": "测试弹窗",
         "testBalloon": "测试气泡"
-      },
-      "permissionDialogTimeout": {
-        "label": "权限与提问对话框超时时间",
-        "unit": "秒",
-        "hint": "设置 Claude 提问对话框和权限请求对话框的超时时间（30~3600 秒）。超时后对话框将自动关闭，Claude 会继续执行。"
       }
     },
     "providers": "供应商管理",
@@ -336,7 +331,8 @@
       "title": "自定义模型",
       "description": "添加的自定义模型将在所有供应商下可见，显示在模型选择列表的最前面",
       "dialogTitle": "管理自定义模型",
-      "manage": "管理模型"
+      "manage": "管理模型",
+      "createProviderFromModel": "创建供应商"
     },
     "dependencies": "SDK 依赖",
     "dependenciesDesc": "管理 AI SDK 依赖包的安装和更新",
@@ -416,11 +412,6 @@
         "label": "Code Review AI 附加提示词",
         "placeholder": "此功能正在开发中，敬请期待...",
         "hint": "Code Review AI 将帮助您自动审查代码，识别潜在问题并提供改进建议。您可以在此配置审查偏好和关注重点。"
-      },
-      "projectPrompt": {
-        "label": "项目级附加提示词",
-        "placeholder": "在此添加当前项目的专属要求，例如：scope 必须使用模块名、commit body 需包含影响范围等...",
-        "hint": "此提示词仅对当前项目生效，与全局附加提示词同时拼接。当两者内容矛盾时，以项目提示词为准。不同项目可独立配置。"
       }
     },
     "agents": "Agents",
@@ -693,34 +684,79 @@
     "skillsComingSoon": "Skills配置功能即将推出...",
     "codexProvider": {
       "title": "Codex 供应商管理",
-      "description": "管理 Codex 供应商配置，配置将写入 ~/.codex/ 目录",
+      "description": "管理 CC-GUI 自有的 Codex 运行时配置，默认不会改写 ~/.codex/ 实时配置",
       "emptyProvider": "暂无 Codex 供应商配置，点击添加按钮创建",
+      "quickCreateTitle": "新增供应商",
+      "quickCreateDescription": "为 Codex 配置可运行的供应商、Base URL、API Key 和模型列表",
+      "aliasTitle": "模型别名（高级）",
+      "aliasDescription": "只补充模型选择列表展示项，不保存供应商、密钥和请求地址",
+      "noActiveProviderForManage": "当前没有可编辑的激活 Codex 供应商，请先新增或启用一个供应商。",
+      "providerTypeMeta": "模板：{{type}}",
+      "baseUrlMeta": "Base URL：{{baseUrl}}",
+      "modelCountMeta": "模型数：{{count}}",
+      "runtimeSourceLabel": "运行时来源：{{source}}",
+      "runtimeSource": {
+        "managedProvider": "托管供应商",
+        "codexLocalConfig": "Codex 本地配置",
+        "sdkDefault": "SDK 默认值",
+        "proxyFallback": "代理回退"
+      },
+      "testResult": {
+        "guiProviderConfirmed": "当前请求已命中 GUI 托管 provider：{{provider}}",
+        "localConfigConflict": "本地 Codex CLI 默认 provider 仍可能造成冲突：{{provider}}"
+      },
       "deleteConfirmTitle": "确认删除",
       "deleteConfirmMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。",
       "dialog": {
         "addTitle": "添加 Codex 供应商",
         "editTitle": "编辑供应商: {{name}}",
-        "addDescription": "配置新的 Codex 供应商信息，将写入 ~/.codex/ 目录",
-        "editDescription": "更新配置后将立即应用到 ~/.codex/ 目录",
+        "addDescription": "配置新的 Codex 运行时供应商信息，数据将保存到 CC-GUI 本地配置",
+        "editDescription": "更新后仅影响 CC-GUI 请求级运行时配置，不会直接覆盖 ~/.codex/",
+        "providerPreset": "供应商模板",
+        "providerPresetPlaceholder": "选择模板",
         "providerName": "供应商名称",
         "providerNamePlaceholder": "例如：Codex 官方",
-        "configJson": "配置",
-        "authJsonLabel": "配置",
-        "formatJson": "格式化",
-        "formatSuccess": "格式化成功",
-        "formatError": "格式化失败，JSON 格式错误",
+        "websiteUrl": "官网链接",
+        "websiteUrlPlaceholder": "例如：https://platform.example.com",
+        "apiKeyApplyUrl": "获取 API Key",
+        "apiKeyApplyUrlPlaceholder": "例如：https://platform.example.com/token",
         "nameRequired": "请输入供应商名称",
-        "configJsonError": "config.toml JSON 格式错误",
-        "authJsonError": "auth.json JSON 格式错误",
-        "configJsonHint": "包含 model_provider、model、model_providers 等配置项的 JSON 对象",
-        "authJsonHint": "包含 OPENAI_API_KEY 等认证信息的 JSON 对象",
-        "customModels": "自定义模型",
-        "customModelsHint": "添加此供应商支持的额外模型，自定义模型将显示在模型选择列表的最前面",
+        "authMode": "鉴权模式",
+        "authModeHint": "区分 CC-GUI 请求级配置与 Codex CLI 本地登录态的来源。",
+        "requestMode": "请求模式",
+        "requestModeHint": "定义当前 provider 的请求链路；非 codex_sdk 模式目前仅作后续代理或适配器扩展预留。",
+        "requestModeUnavailableHint": "当前模式暂未落地，请先切换到 Codex SDK。",
+        "requestModeUnavailableOptionSuffix": "（开发中）",
+        "baseUrl": "Base URL",
+        "baseUrlPlaceholder": "例如：https://api.openai.com/v1",
+        "baseUrlHint": "请求级 endpoint，仅在当前 provider 发送消息时生效。",
+        "apiKey": "API Key",
+        "apiKeyPlaceholder": "请输入本地保存的 API Key",
+        "apiKeyEnv": "API Key 环境变量",
+        "apiKeyEnvPlaceholder": "例如：OPENAI_API_KEY",
+        "apiKeyEnvHint": "运行时会优先读取此环境变量；为空时可回退到本地保存的 API Key。",
+        "apiKeyMaskedHint": "当前保存值：{{masked}}",
+        "apiKeyOrEnvRequired": "请至少配置 API Key 或 API Key 环境变量",
+        "baseUrlRequired": "当前请求模式需要配置 Base URL",
+        "models": "模型列表",
+        "modelsHint": "使用 JSON 数组编辑当前 provider 的模型列表，例如 [{\"id\":\"gpt-5.4\",\"label\":\"GPT-5.4\"}]。",
+        "modelList": "模型列表",
+        "modelAliasHelp": "模型列表决定该 provider 在聊天区可选的模型项。",
+        "modelsRequired": "请至少配置一个模型",
         "noCustomModels": "暂无自定义模型",
         "addModel": "添加模型",
-        "modelIdPlaceholder": "模型 ID（必填，如 gpt-4o）",
+        "addModelRow": "添加模型",
+        "modelIdPlaceholder": "模型 ID（必填，如 gpt-5.4）",
         "modelLabelPlaceholder": "显示名称（可选）",
+        "modelDescriptionPlaceholder": "模型描述（可选）",
         "modelDescPlaceholder": "模型描述（可选）",
+        "reasoningEffortPlaceholder": "默认推理强度",
+        "advancedJsonToggle": "高级 JSON 编辑",
+        "advancedJsonHelp": "可批量粘贴模型 JSON 数组后同步到结构化列表。",
+        "modelsJsonLabel": "模型 JSON",
+        "applyModelsJson": "应用 JSON",
+        "modelsJsonInvalid": "模型 JSON 格式无效",
+        "saveAndActivate": "保存并激活",
         "cliLoginProviderName": "使用本地配置信息",
         "cliLoginProviderDescription": "显式授权读取：~/.codex/config.toml 和 auth.json",
         "cliLoginAuthorizeTitle": "授权读取本地 Codex 配置",
@@ -728,6 +764,21 @@
         "cliLoginAuthorizeDetail": "此操作不会修改或覆盖您的 config.toml 和 auth.json，您可以随时取消授权。",
         "cliLoginDisableTitle": "取消本地 Codex 配置授权",
         "cliLoginDisableMessage": "插件将停止读取 ~/.codex/config.toml 和 auth.json。",
+        "authModeOptions": {
+          "api_key": "本地 API Key",
+          "api_key_env": "环境变量 API Key",
+          "codex_cli_login": "Codex CLI Login",
+          "proxy": "代理鉴权",
+          "oauth": "OAuth"
+        },
+        "requestModeOptions": {
+          "codex_sdk": "Codex SDK",
+          "cc_switch_proxy": "CC Switch Proxy",
+          "custom_adapter": "Custom Adapter"
+        },
+        "testProvider": "测试连接",
+        "requestModeUnavailableBadge": "开发中",
+        "requestModeUnavailableTooltip": "当前请求模式尚未落地，暂不可测试或启用",
         "modelIdRequired": "请输入模型 ID",
         "modelIdInvalid": "模型 ID 格式无效（仅允许字母、数字、点、连字符、下划线、斜杠和冒号）",
         "modelIdDuplicate": "模型 ID 已存在",
@@ -743,7 +794,42 @@
         "envKeyProtected": "无法设置内置变量：{{key}}",
         "envKeyDuplicate": "重复的变量名：{{key}}",
         "envValueTooLong": "变量值过长（最大 {{max}} 字符）"
+      },
+      "cliLogin": {
+        "title": "使用本地 Codex 配置",
+        "description": "读取本机已有的 Codex CLI 登录信息和默认配置，不会修改原始文件。",
+        "readonlyHint": "只读访问。插件不会覆盖 ~/.codex/config.toml 或 auth.json。",
+        "authorizationStatus": "授权状态",
+        "currentUsageStatus": "当前请求来源",
+        "authorized": "已授权",
+        "notAuthorized": "未授权",
+        "currentlyUsed": "当前用于请求",
+        "notInUse": "当前未使用",
+        "authorizeOnly": "授权",
+        "useForRequests": "用于请求",
+        "currentlyUsingAction": "当前使用中"
+      },
+      "modelsTitle": "Models",
+      "modelsDescription": "控制聊天区模型下拉中显示哪些 Codex 模型。",
+      "modelsSearchPlaceholder": "按模型或供应商搜索",
+      "modelsEmpty": "没有匹配的模型",
+      "modelsViewAll": "查看全部模型",
+      "modelsCollapse": "收起",
+      "modelsVisibleSectionTitle": "当前显示的模型",
+      "modelsAllSectionTitle": "全部匹配模型",
+      "modelsUnavailable": "授权后可用",
+      "modelsSource": {
+        "codex_cli_login": "CLI Login",
+        "managed_provider": "托管 Provider",
+        "plugin_custom": "模型别名",
+        "local_config": "本地配置"
       }
+      ,
+      "requestModeUnavailableBadge": "开发中",
+      "requestModeUnavailableTooltip": "当前请求模式尚未落地，暂不可测试或启用"
+    },
+    "chat": {
+      "codexModelConfigRequired": "请先在 Codex Provider 中配置模型"
     },
     "agent": {
       "title": "智能体",
@@ -1047,8 +1133,7 @@
       "WebSearch": "网页搜索",
       "WebFetch": "获取网页",
       "execute": "执行 {{toolName}}",
-      "readDirectory": "读取目录",
-      "timeoutWarning": "请尽快回答，对话框将在 {{seconds}} 秒后自动关闭"
+      "readDirectory": "读取目录"
     }
   },
   "askUserQuestion": {
@@ -1094,6 +1179,8 @@
     "newSessionCreatedReady": "新会话已创建，可以开始提问",
     "providerSwitchSuccess": "供应商切换成功！",
     "providerSwitchFailed": "切换供应商失败",
+    "testResultPassed": "测试通过",
+    "testResultFailed": "测试失败",
     "operationSuccess": "操作成功",
     "pleaseEnterProviderName": "请输入供应商名称",
     "invalidJsonConfig": "配置 JSON 格式错误，请修正后再保存",
@@ -1601,12 +1688,16 @@
     },
     "codex": {
       "gpt55": {
-        "label": "GPT-5.5",
-        "description": "最新前沿模型，能力进一步增强"
+        "label": "gpt-5.5",
+        "description": "适用于复杂编码、研究和真实工作场景的前沿模型。"
       },
       "gpt53codex": {
         "label": "GPT-5.3-Codex",
         "description": "最新前沿智能编程模型，能力全面增强"
+      },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "最新前沿模型，能力进一步增强"
       },
       "gpt54": {
         "label": "gpt-5.4",
@@ -1827,67 +1918,5 @@
     "retry": "重试",
     "close": "关闭",
     "later": "稍后处理"
-  },
-  "contextUsage": {
-    "title": "上下文使用",
-    "loading": "正在加载上下文使用情况...",
-    "autoCompactEnabled": "自动压缩已启用",
-    "autoCompactEnabledWithThreshold": "自动压缩已启用 ({{threshold}}%)",
-    "notAvailable": "不可用",
-    "categories": {
-      "systemPrompt": "系统提示词",
-      "systemTools": "系统工具",
-      "mcpTools": "MCP 工具",
-      "customAgents": "自定义智能体",
-      "memoryFiles": "记忆文件",
-      "skills": "Skills",
-      "messages": "消息",
-      "autoCompactBuffer": "自动压缩缓冲区",
-      "freeSpace": "空闲空间"
-    },
-    "sections": {
-      "mcpTools": "MCP 工具 ({{count}})",
-      "agents": "智能体 ({{count}})",
-      "memoryFiles": "记忆文件 ({{count}})",
-      "skills": "Skills ({{included}}/{{total}})"
-    },
-    "table": {
-      "tool": "工具",
-      "server": "服务器",
-      "tokens": "令牌",
-      "agent": "智能体",
-      "source": "来源",
-      "type": "类型",
-      "path": "路径",
-      "skill": "Skill"
-    }
-  },
-  "errorDiagnostic": {
-    "copyCommand": "复制",
-    "copied": "已复制",
-    "openDependencySettings": "打开依赖管理",
-    "recommended": "推荐",
-    "codexThreadResume": {
-      "title": "会话线程已失效",
-      "intro": "新建会话即可解决此问题。当前会话的线程 ID 在 Codex 服务端已不存在。",
-      "reason": "Codex 服务端会在一段时间后清除旧线程，继续上一次会话时可能触发此错误。"
-    },
-    "sdkNativeBinaryMissing": {
-      "title": "SDK 安装不完整 — 缺少 native 二进制文件",
-      "intro": "这是淘宝 npm 镜像源的已知问题（非插件 bug）。镜像源未完整同步 platform 文件。可手动按以下方案处理：",
-      "reason": "淘宝源同步完成后此问题会自动消失，无需担心。",
-      "solutions": {
-        "switchRegistry": {
-          "title": "方案一：临时切换官方源重装",
-          "step0": "1. 在终端运行（切换到 npm 官方源）：",
-          "step1": "2. 打开插件设置中的「依赖管理」，点击重装：",
-          "step2": "3. 重装完成后，切回淘宝源："
-        },
-        "downgrade": {
-          "title": "方案二：版本回退",
-          "step0": "在「依赖管理」中将 SDK 版本切换到 v0.2.112 或更早版本，切换后需要重启 IDEA。"
-        }
-      }
-    }
   }
 }

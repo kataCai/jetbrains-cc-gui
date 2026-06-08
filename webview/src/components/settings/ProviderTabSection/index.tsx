@@ -1,9 +1,16 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
-import { STORAGE_KEYS } from '../../../types/provider';
+import type {
+  ProviderConfig,
+  CodexProviderConfig,
+  CodexCustomModel,
+  CodexModelCatalogItem,
+  CodexModelVisibilityConfig,
+} from '../../../types/provider';
+import { SPECIAL_PROVIDER_IDS, STORAGE_KEYS } from '../../../types/provider';
 import ProviderManageSection from '../ProviderManageSection';
 import CodexProviderSection from '../CodexProviderSection';
+import CodexModelVisibilitySection from '../CodexModelVisibilitySection';
 import CustomModelDialog from '../CustomModelDialog';
 import { usePluginModels } from '../hooks/usePluginModels';
 import styles from './style.module.less';
@@ -25,11 +32,19 @@ interface ProviderTabSectionProps {
   // Codex provider props
   codexProviders: CodexProviderConfig[];
   codexLoading: boolean;
+  codexModelCatalog: CodexModelCatalogItem[];
+  codexModelCatalogLoading: boolean;
+  testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
+  onCreateCodexProviderFromAlias?: (providerDraft: Partial<CodexProviderConfig>) => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
+  onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onSwitchCodexProvider: (id: string) => void;
+  onAuthorizeCodexLocalConfig: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
+  onRefreshCodexModelCatalog: () => void;
+  onSaveCodexModelVisibility: (visibilityConfig: CodexModelVisibilityConfig) => void;
   // Shared
   addToast: (message: string, type: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -44,11 +59,19 @@ const ProviderTabSection = ({
   onSwitchProvider,
   codexProviders,
   codexLoading,
+  codexModelCatalog,
+  codexModelCatalogLoading,
+  testingCodexProviderId,
   onAddCodexProvider,
+  onCreateCodexProviderFromAlias,
   onEditCodexProvider,
   onDeleteCodexProvider,
+  onTestCodexProvider,
   onSwitchCodexProvider,
+  onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
+  onRefreshCodexModelCatalog,
+  onSaveCodexModelVisibility,
   addToast,
 }: ProviderTabSectionProps) => {
   const { t } = useTranslation();
@@ -79,6 +102,39 @@ const ProviderTabSection = ({
   }, []);
 
   const activeModels = dialogTarget === 'claude' ? claudeModels : codexModels;
+  const isCodexDialogTarget = dialogTarget === 'codex';
+  const cliLoginProvider = codexProviders.find(
+    (provider) => provider.id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN
+  ) as (CodexProviderConfig & { isAuthorized?: boolean }) | undefined;
+
+  /**
+   * 基于当前模型别名生成一个新的 Codex provider 草稿。
+   * 这里只预填 provider 名称和模型列表，不自动补齐 Base URL / API Key，
+   * 目的是把“历史别名”升级为真正可运行的配置，同时避免做不安全的自动迁移。
+   *
+   * @param model 当前选中的模型别名
+   */
+  const handleCreateCodexProviderFromAlias = useCallback((model: CodexCustomModel) => {
+    if (!onCreateCodexProviderFromAlias) {
+      return;
+    }
+    onCreateCodexProviderFromAlias({
+      name: model.label?.trim() || model.id,
+      providerType: 'custom_gateway',
+      presetId: 'custom_gateway',
+      authMode: 'api_key',
+      requestMode: 'codex_sdk',
+      models: [
+        {
+          id: model.id,
+          label: model.label?.trim() || model.id,
+          description: model.description,
+          reasoningEffort: model.reasoningEffort,
+        },
+      ],
+    });
+    closeModelDialog();
+  }, [closeModelDialog, onCreateCodexProviderFromAlias]);
 
   return (
     <div className={styles.providerTabSection}>
@@ -145,38 +201,100 @@ const ProviderTabSection = ({
       </div>
 
       <div id="panel-codex-providers" role="tabpanel" style={activeTab === 'codex' ? BLOCK_STYLE : NONE_STYLE}>
-        <div
-          className={styles.pluginModelsRow}
-          onClick={() => openModelDialog('codex')}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('codex'); }}
-        >
-          <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
-          <span className={styles.pluginModelsLabel}>
-            {t('settings.pluginModels.title')}
-          </span>
-          {codexModels.models.length > 0 && (
-            <span className={styles.pluginModelsBadge}>{codexModels.models.length}</span>
-          )}
-          <span style={FLEX_1_STYLE} />
-          <button
-            className={styles.pluginModelsManageBtn}
-            onClick={(e) => { e.stopPropagation(); openModelDialog('codex'); }}
-          >
-            {t('settings.pluginModels.manage')}
-          </button>
+        <div className={styles.codexTabLayout}>
+          <div className={styles.entryCluster}>
+            <div
+              className={styles.primaryEntryRow}
+              onClick={onAddCodexProvider}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onAddCodexProvider(); }}
+            >
+              <div className={styles.entryInfo}>
+                <span className="codicon codicon-cloud-upload" style={ICON_14_STYLE} />
+                <div className={styles.entryTextGroup}>
+                  <span className={styles.pluginModelsLabel}>
+                    {t('settings.codexProvider.quickCreateTitle')}
+                  </span>
+                  <span className={styles.entryDescription}>
+                    {t('settings.codexProvider.quickCreateDescription')}
+                  </span>
+                </div>
+              </div>
+              <button
+                className={styles.pluginModelsManageBtn}
+                onClick={(e) => { e.stopPropagation(); onAddCodexProvider(); }}
+              >
+                {t('common.add')}
+              </button>
+            </div>
+            <div
+              className={styles.pluginModelsRow}
+              onClick={() => openModelDialog('codex')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('codex'); }}
+            >
+              <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
+              <div className={styles.entryTextGroup}>
+                <span className={styles.pluginModelsLabel}>
+                  {t('settings.codexProvider.aliasTitle')}
+                </span>
+                <span className={styles.entryDescription}>
+                  {t('settings.codexProvider.aliasDescription')}
+                </span>
+              </div>
+              {codexModels.models.length > 0 && (
+                <span className={styles.pluginModelsBadge}>{codexModels.models.length}</span>
+              )}
+              <span style={FLEX_1_STYLE} />
+              <button
+                className={styles.pluginModelsManageBtn}
+                onClick={(e) => { e.stopPropagation(); openModelDialog('codex'); }}
+              >
+                {t('settings.pluginModels.manage')}
+              </button>
+            </div>
+          </div>
+
+          <section className={styles.sectionBlock} aria-label={t('settings.provider.allProviders')}>
+            <div className={styles.sectionLead}>
+              <span className={styles.sectionEyebrow}>{t('settings.providerTab.codex')}</span>
+              <h4 className={styles.sectionLeadTitle}>{t('settings.provider.allProviders')}</h4>
+              <p className={styles.sectionLeadDescription}>{t('settings.codexProvider.description')}</p>
+            </div>
+            <CodexProviderSection
+              codexProviders={codexProviders}
+              codexLocalConfigAuthorized={cliLoginProvider?.isAuthorized === true}
+              codexLoading={codexLoading}
+              testingCodexProviderId={testingCodexProviderId}
+              onAddCodexProvider={onAddCodexProvider}
+              onEditCodexProvider={onEditCodexProvider}
+              onDeleteCodexProvider={onDeleteCodexProvider}
+              onTestCodexProvider={onTestCodexProvider}
+              onSwitchCodexProvider={onSwitchCodexProvider}
+              onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
+              onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+              showHeader={false}
+              showProviderListHeader={false}
+            />
+          </section>
+
+          <section className={styles.sectionBlock} aria-label={t('settings.codexProvider.modelsTitle')}>
+            <div className={styles.sectionLead}>
+              <span className={styles.sectionEyebrow}>{t('settings.providerTab.codex')}</span>
+              <h4 className={styles.sectionLeadTitle}>{t('settings.codexProvider.modelsTitle')}</h4>
+              <p className={styles.sectionLeadDescription}>{t('settings.codexProvider.modelsDescription')}</p>
+            </div>
+            <CodexModelVisibilitySection
+              catalog={codexModelCatalog}
+              loading={codexModelCatalogLoading}
+              onRefresh={onRefreshCodexModelCatalog}
+              onSaveVisibility={onSaveCodexModelVisibility}
+              showHeader={false}
+            />
+          </section>
         </div>
-        <CodexProviderSection
-          codexProviders={codexProviders}
-          codexLoading={codexLoading}
-          onAddCodexProvider={onAddCodexProvider}
-          onEditCodexProvider={onEditCodexProvider}
-          onDeleteCodexProvider={onDeleteCodexProvider}
-          onSwitchCodexProvider={onSwitchCodexProvider}
-          onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
-          showHeader={false}
-        />
       </div>
 
       {/* Shared model management dialog */}
@@ -186,6 +304,9 @@ const ProviderTabSection = ({
         onModelsChange={activeModels.updateModels}
         onClose={closeModelDialog}
         initialAddMode={modelDialogAddMode}
+        title={isCodexDialogTarget ? t('settings.codexProvider.aliasTitle') : undefined}
+        description={isCodexDialogTarget ? t('settings.codexProvider.aliasDescription') : undefined}
+        onCreateProviderFromModel={isCodexDialogTarget ? handleCreateCodexProviderFromAlias : undefined}
       />
     </div>
   );

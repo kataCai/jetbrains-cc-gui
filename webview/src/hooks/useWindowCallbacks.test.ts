@@ -59,6 +59,7 @@ describe('useWindowCallbacks integration', () => {
     setStreamingEnabledSetting: vi.fn(),
     setSendShortcut: vi.fn(),
     setAutoOpenFileEnabled: vi.fn(),
+    setPermissionDialogTimeoutSeconds: vi.fn(),
     setSdkStatus: vi.fn(),
     setSdkStatusLoaded: vi.fn(),
     setIsRewinding: vi.fn(),
@@ -97,11 +98,15 @@ describe('useWindowCallbacks integration', () => {
     openPermissionDialog: vi.fn(),
     openAskUserQuestionDialog: vi.fn(),
     openPlanApprovalDialog: vi.fn(),
+    openContextUsageDialog: vi.fn(),
+    updateContextUsageData: vi.fn(() => true),
+    closeContextUsageDialog: vi.fn(() => false),
 
     // B-011
     customSessionTitleRef: { current: null },
     currentSessionIdRef: { current: null },
     updateHistoryTitle: vi.fn(),
+    applyHistoryTitleLocal: vi.fn(),
 
     ...overrides,
   });

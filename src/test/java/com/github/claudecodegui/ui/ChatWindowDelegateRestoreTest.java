@@ -76,7 +76,6 @@ public class ChatWindowDelegateRestoreTest {
         private final Project project = createProject();
         private final ClaudeSession session = new ClaudeSession(project, null, null);
         private final RecordingSessionLifecycleManager lifecycleManager;
-        private final RecordingStreamMessageCoalescer streamMessageCoalescer;
         private final HandlerContext handlerContext;
         private final JPanel mainPanel = new JPanel();
         private final CodemossSettingsService settingsService = new CodemossSettingsService();
@@ -85,7 +84,6 @@ public class ChatWindowDelegateRestoreTest {
 
         private RecordingHost(RecordingSessionLifecycleManager lifecycleManager) {
             this.lifecycleManager = lifecycleManager;
-            this.streamMessageCoalescer = new RecordingStreamMessageCoalescer();
             this.handlerContext = new HandlerContext(project, null, null, settingsService, new HandlerContext.JsCallback() {
                 @Override
                 public void callJavaScript(String functionName, String... args) {
@@ -194,7 +192,9 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public StreamMessageCoalescer getStreamCoalescer() {
-            return streamMessageCoalescer;
+            // 该用例只验证 frontend ready 后的待恢复消费语义，
+            // 不需要真实 coalescer；返回 null 可避免测试环境触发 Alarm/CoroutineScope 依赖。
+            return null;
         }
 
         @Override
@@ -283,35 +283,6 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public void sendCurrentPermissionMode() {
-        }
-    }
-
-    private static final class RecordingStreamMessageCoalescer extends StreamMessageCoalescer {
-        private RecordingStreamMessageCoalescer() {
-            super(new JsCallbackTarget() {
-                @Override
-                public void callJavaScript(String functionName, String... args) {
-                }
-
-                @Override
-                public JBCefBrowser getBrowser() {
-                    return null;
-                }
-
-                @Override
-                public boolean isDisposed() {
-                    return false;
-                }
-
-                @Override
-                public HandlerContext getHandlerContext() {
-                    return null;
-                }
-            });
-        }
-
-        @Override
-        public void flush(java.util.function.LongConsumer afterFlushOnEdt) {
         }
     }
 }

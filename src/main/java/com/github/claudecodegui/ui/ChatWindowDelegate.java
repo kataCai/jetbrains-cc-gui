@@ -519,7 +519,10 @@ public class ChatWindowDelegate {
             });
         }
 
-        host.getStreamCoalescer().flush(null);
+        StreamMessageCoalescer streamCoalescer = host.getStreamCoalescer();
+        if (streamCoalescer != null) {
+            streamCoalescer.flush(null);
+        }
     }
 
     /**
@@ -571,7 +574,10 @@ public class ChatWindowDelegate {
             // isStreamingRef is reset to false, causing all onContentDelta callbacks to be
             // silently dropped.  Re-sending onStreamStart ensures the frontend accepts
             // subsequent streaming deltas and the stall watchdog is properly initialized.
-            boolean streamActive = host.getStreamCoalescer().isStreamActive();
+            // 测试桩或极早期恢复阶段可能尚未提供 coalescer；
+            // 这里按“当前没有活跃流”处理即可，不应阻塞会话恢复主链路。
+            StreamMessageCoalescer streamCoalescer = host.getStreamCoalescer();
+            boolean streamActive = streamCoalescer != null && streamCoalescer.isStreamActive();
             if (streamActive) {
                 LOG.debug("Replaying streaming state to frontend (session was actively streaming during reload)");
                 host.callJavaScript("onStreamStart");

@@ -101,9 +101,21 @@ public class OpenClassHandler {
             return false;
         }
 
-        return JAVA_FQCN_PATTERN.matcher(trimmed).matches()
-            && !trimmed.contains("#")
-            && !trimmed.contains("(");
+        if (!JAVA_FQCN_PATTERN.matcher(trimmed).matches()
+                || trimmed.contains("#")
+                || trimmed.contains("(")) {
+            return false;
+        }
+
+        String simpleName = trimmed.substring(trimmed.lastIndexOf('.') + 1);
+        if (simpleName.isEmpty()) {
+            return false;
+        }
+
+        // 当前阶段只接受“看起来像 Java 类名”的 FQCN。
+        // 这样既能拦住普通英文句子，也能避免把以小写开头的方法/变量样式误判成可导航类名。
+        char firstChar = simpleName.charAt(0);
+        return Character.isUpperCase(firstChar) || firstChar == '_' || firstChar == '$';
     }
 
     /**

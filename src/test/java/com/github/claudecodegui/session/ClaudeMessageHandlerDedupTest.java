@@ -106,7 +106,8 @@ public class ClaudeMessageHandlerDedupTest {
     }
 
     /**
-     * Test replay skipping across tool-separated text blocks.
+     * 验证 tool_use 之后的文本不会被 assistant snapshot 提前写入 accumulator，
+     * 但随后真实到达的 content delta 仍然会被正常转发，而不是被误判成 replay。
      */
     @Test
     public void handleContentDelta_skipsReplayAcrossToolSeparatedTextBlocks() {
@@ -125,9 +126,10 @@ public class ClaudeMessageHandlerDedupTest {
         handler.onMessage("content_delta", "Aft");
         handler.onMessage("content_delta", "er.");
 
-        assertTrue("Tool-separated replay should not be notified",
-                callbackHandler.contentDeltas.isEmpty());
+        assertEquals("Tool 后文本应由后续真实 delta 驱动补齐，而不是被 replay 去重吞掉",
+                List.of("Aft", "er."), callbackHandler.contentDeltas);
 
+        callbackHandler.clear();
         handler.onMessage("content_delta", " Done.");
         assertEquals("Novel text after tool-separated replay should still be notified",
                 List.of(" Done."), callbackHandler.contentDeltas);

@@ -249,8 +249,12 @@ public class ClaudeMessageHandler implements MessageCallback {
             JsonObject mergedRaw = messageMerger.mergeAssistantMessage(previousRaw, messageJson);
             boolean hasToolUse = containsToolUseBlock(mergedRaw);
             if (isStreaming && hasToolUse) {
+                // 流式 snapshot 一旦跨过 tool_use 边界，尾段 text 仍可能属于后续 delta phase。
+                // 这里先按边界裁剪 raw，再基于裁剪后的结构计算 snapshot/replay 基线，
+                // 避免把工具后的文本误记为“已回放”，从而把后续真实 delta 吞掉。
                 mergedRaw = trimTrailingPlainBlocksAfterLastToolBoundary(mergedRaw);
             }
+            String snapshotText = ReplayDeduplicator.extractTextContent(mergedRaw);
 
             if (currentAssistantMessage == null) {
                 currentAssistantMessage = new Message(Message.Type.ASSISTANT, "", mergedRaw);
@@ -263,7 +267,7 @@ public class ClaudeMessageHandler implements MessageCallback {
             //   (tool call messages typically don't contain text)
             // Non-streaming mode: rebuild content from the full message text
             String aggregatedText = messageParser.extractMessageContent(mergedRaw);
-            String streamingText = ReplayDeduplicator.extractTextContent(mergedRaw);
+            String streamingText = snapshotText;
             if (!isStreaming) {
                 assistantContent.setLength(0);
                 if (aggregatedText != null) {
@@ -271,14 +275,16 @@ public class ClaudeMessageHandler implements MessageCallback {
                 }
                 currentAssistantMessage.content = assistantContent.toString();
                 replayDedup.reset();
-            } else if (!hasToolUse && streamingText.length() > assistantContent.length()) {
+            } else if (streamingText.length() > previousAssistantContent.length()) {
                 // streaming 纯文本场景下，允许更长的完整快照回填 accumulator，
                 // 以吸收 delta 丢失或 corrective snapshot，并同步 ReplayDeduplicator 状态。
                 // 但若完整消息已经引入 tool_use，则其中尾段 text 可能属于后续 phase，
                 // 这里不能提前写入 assistantContent，否则工具后文本会在后续 delta 到达时重复。
-                assistantContent.setLength(0);
-                assistantContent.append(streamingText);
-                currentAssistantMessage.content = assistantContent.toString();
+                if (!hasToolUse) {
+                    assistantContent.setLength(0);
+                    assistantContent.append(streamingText);
+                    currentAssistantMessage.content = assistantContent.toString();
+                }
                 replayDedup.beginContentReplay(streamingText, ReplayDeduplicator.replayOffset(previousAssistantContent.length(), replayDedup.contentOffset()));
             }
             currentAssistantMessage.raw = mergedRaw;

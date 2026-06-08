@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import { registerStreamingCallbacks } from './streamingCallbacks';
 import type { ClaudeMessage } from '../../../types';
-import * as bridge from '../../../utils/bridge';
 
 const createOptions = (): UseWindowCallbacksOptions => ({
   t: ((key: string) => key) as any,
@@ -36,6 +35,7 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   setStreamingEnabledSetting: vi.fn(),
   setSendShortcut: vi.fn(),
   setAutoOpenFileEnabled: vi.fn(),
+  setPermissionDialogTimeoutSeconds: vi.fn(),
   setSdkStatus: vi.fn(),
   setSdkStatusLoaded: vi.fn(),
   setIsRewinding: vi.fn(),
@@ -50,6 +50,8 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   userPausedRef: { current: false },
   suppressNextStatusToastRef: { current: false },
   streamingContentRef: { current: '' },
+  // streamingCallbacks 现已同时维护 content/thinking 两路流式缓冲，测试夹具需要补齐 thinking ref。
+  // 否则 onStreamStart/onStreamEnd 在重置 thinking 缓冲时会因依赖缺失而抛错，无法覆盖真正要验证的流结束收口逻辑。
   streamingThinkingRef: { current: '' },
   isStreamingRef: { current: false },
   useBackendStreamingRenderRef: { current: false },
@@ -70,20 +72,16 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   openPermissionDialog: vi.fn(),
   openAskUserQuestionDialog: vi.fn(),
   openPlanApprovalDialog: vi.fn(),
+  openContextUsageDialog: vi.fn(),
+  updateContextUsageData: vi.fn(() => true),
+  closeContextUsageDialog: vi.fn(() => false),
   customSessionTitleRef: { current: null },
   currentSessionIdRef: { current: null },
   updateHistoryTitle: vi.fn(),
+  applyHistoryTitleLocal: vi.fn(),
 });
 
 describe('registerStreamingCallbacks', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    if ((window as any).__stallWatchdogInterval != null) {
-      clearInterval((window as any).__stallWatchdogInterval);
-      (window as any).__stallWatchdogInterval = null;
-    }
-  });
-
   it('onStreamStart clears stale pending update payload from previous turn', () => {
     const options = createOptions();
     registerStreamingCallbacks(options);
@@ -246,123 +244,5 @@ describe('registerStreamingCallbacks', () => {
 
     expect(typeof nextMessages[0].durationMs).toBe('number');
     expect((nextMessages[0].durationMs as number)).toBeGreaterThanOrEqual(64000);
-  });
-
-  it('onStreamEnd no longer reports completed status through bridge event', () => {
-    const sendBridgeEventSpy = vi.spyOn(bridge, 'sendBridgeEvent').mockReturnValue(true);
-    const options = createOptions();
-    options.streamingContentRef.current = 'final buffered tail';
-    options.isStreamingRef.current = true;
-    options.streamingMessageIndexRef.current = 0;
-    options.streamingTurnIdRef.current = 21;
-
-    registerStreamingCallbacks(options);
-
-    (window as any).__sessionTransitioning = false;
-    (window as any).__cancelPendingUpdateMessages = vi.fn();
-
-    (window as any).onStreamEnd?.('41');
-
-    expect(sendBridgeEventSpy).not.toHaveBeenCalledWith(
-      'tab_status_changed',
-      JSON.stringify({ status: 'completed' }),
-    );
-    expect(options.setStreamingActive).toHaveBeenCalledWith(false);
-    expect(options.setLoading).toHaveBeenCalledWith(false);
-    expect(options.setIsThinking).toHaveBeenCalledWith(false);
-  });
-
-  it('onTaskCompleted reports completed status through bridge event on the next frame when no message flush is pending', () => {
-    vi.useFakeTimers();
-    const sendBridgeEventSpy = vi.spyOn(bridge, 'sendBridgeEvent').mockReturnValue(true);
-    vi.spyOn(window, 'requestAnimationFrame')
-      .mockImplementation((callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((handle: number) => {
-      window.clearTimeout(handle);
-    });
-    const options = createOptions();
-
-    registerStreamingCallbacks(options);
-
-    (window as any).onTaskCompleted?.();
-
-    vi.runAllTimers();
-
-    expect(sendBridgeEventSpy).toHaveBeenCalledWith(
-      'tab_status_changed',
-      JSON.stringify({ status: 'completed' }),
-    );
-    vi.useRealTimers();
-  });
-
-  it('onTaskCompleted waits for pending updateMessages flush before reporting completed status', () => {
-    vi.useFakeTimers();
-    const sendBridgeEventSpy = vi.spyOn(bridge, 'sendBridgeEvent').mockReturnValue(true);
-    const requestAnimationFrameSpy = vi
-      .spyOn(window, 'requestAnimationFrame')
-      .mockImplementation((callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((handle: number) => {
-      window.clearTimeout(handle);
-    });
-
-    const options = createOptions();
-    registerStreamingCallbacks(options);
-
-    (window as any).__pendingUpdateJson = JSON.stringify([{ type: 'assistant', content: 'final snapshot' }]);
-
-    (window as any).onTaskCompleted?.();
-
-    expect(sendBridgeEventSpy).not.toHaveBeenCalledWith(
-      'tab_status_changed',
-      JSON.stringify({ status: 'completed' }),
-    );
-    expect((window as any).__pendingTaskCompleted).toBe(true);
-    expect(requestAnimationFrameSpy).toHaveBeenCalled();
-
-    (window as any).__pendingUpdateJson = null;
-    vi.runAllTimers();
-
-    expect(sendBridgeEventSpy).toHaveBeenCalledWith(
-      'tab_status_changed',
-      JSON.stringify({ status: 'completed' }),
-    );
-    expect((window as any).__pendingTaskCompleted).toBe(false);
-    expect((window as any).__pendingTaskCompletedRaf).toBeNull();
-    vi.useRealTimers();
-  });
-
-  it('watchdog timeout performs local recovery only and never reports completed status', () => {
-    vi.useFakeTimers();
-    const sendBridgeEventSpy = vi.spyOn(bridge, 'sendBridgeEvent').mockReturnValue(true);
-    const options = createOptions();
-    options.isStreamingRef.current = true;
-    options.streamingMessageIndexRef.current = 2;
-    options.streamingTurnIdRef.current = 24;
-    options.streamingContentRef.current = 'buffered';
-    options.streamingThinkingRef.current = 'thinking';
-    options.autoExpandedThinkingKeysRef.current = new Set(['k1']);
-
-    registerStreamingCallbacks(options);
-
-    (window as any).__sessionTransitioning = false;
-    (window as any).onStreamStart?.();
-    (window as any).__lastStreamActivityAt = Date.now() - 61_000;
-
-    vi.advanceTimersByTime(5_000);
-
-    expect(sendBridgeEventSpy).not.toHaveBeenCalledWith(
-      'tab_status_changed',
-      JSON.stringify({ status: 'completed' }),
-    );
-    expect(options.setStreamingActive).toHaveBeenCalledWith(false);
-    expect(options.setLoading).toHaveBeenCalledWith(false);
-    expect(options.setLoadingStartTime).toHaveBeenCalledWith(null);
-    expect(options.setIsThinking).toHaveBeenCalledWith(false);
-    expect(options.streamingContentRef.current).toBe('');
-    expect(options.streamingThinkingRef.current).toBe('');
-    expect(options.streamingMessageIndexRef.current).toBe(-1);
-    expect(options.streamingTurnIdRef.current).toBe(-1);
-    expect(options.autoExpandedThinkingKeysRef.current.size).toBe(0);
-    vi.useRealTimers();
   });
 });

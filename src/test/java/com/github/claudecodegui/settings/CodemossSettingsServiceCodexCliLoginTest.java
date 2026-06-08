@@ -1,6 +1,7 @@
 package com.github.claudecodegui.settings;
 
 import com.github.claudecodegui.util.PlatformUtils;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.google.gson.JsonObject;
 import org.junit.After;
 import org.junit.Test;
@@ -196,6 +197,26 @@ public class CodemossSettingsServiceCodexCliLoginTest {
     }
 
     @Test
+    public void shouldExposeLocalModelProviderMetadataInCodexCurrentModelState() throws Exception {
+        Path tempHome = Files.createTempDirectory("codex-current-model-provider-home");
+        useTemporaryHomeDirectory(tempHome);
+        Files.createDirectories(tempHome.resolve(".codex"));
+        Files.writeString(
+                tempHome.resolve(".codex").resolve("config.toml"),
+                "model_provider = \"LocalOpenAI\"\n"
+                        + "[model_providers.LocalOpenAI]\n"
+                        + "base_url = \"https://proxy.example.com/v1\"\n",
+                StandardCharsets.UTF_8
+        );
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        service.setCodexLocalConfigAuthorized(true);
+
+        JsonObject state = service.getCurrentCodexModelState();
+        assertEquals("LocalOpenAI", state.get("modelProvider").getAsString());
+    }
+
+    @Test
     public void shouldResolveCodexRuntimeAccessModeFromAuthorizationAndActiveProvider() throws Exception {
         Path tempHome = Files.createTempDirectory("codex-runtime-access-home");
         useTemporaryHomeDirectory(tempHome);
@@ -220,6 +241,39 @@ public class CodemossSettingsServiceCodexCliLoginTest {
         service.switchCodexProvider("managed-provider");
 
         assertEquals(CodemossSettingsService.CODEX_RUNTIME_ACCESS_MANAGED, service.getCodexRuntimeAccessMode());
+    }
+
+    /**
+     * 验证 Codex 会话绑定元数据能够正确保存、读取和删除。
+     * 该测试覆盖插件侧 ~/.codemoss/config.json 持久化链路，确保后续历史会话恢复时有稳定数据源。
+     */
+    @Test
+    public void shouldSaveReadAndDeleteCodexSessionBinding() throws Exception {
+        Path tempHome = Files.createTempDirectory("codex-session-binding-home");
+        useTemporaryHomeDirectory(tempHome);
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        CodexSessionBinding binding = new CodexSessionBinding(
+                "minimax-provider",
+                "MiniMax-M1",
+                "codex_sdk",
+                "provider",
+                "managed_provider"
+        );
+
+        service.saveCodexSessionBinding("session-001", binding);
+
+        CodexSessionBinding restored = service.getCodexSessionBinding("session-001");
+        assertNotNull(restored);
+        assertEquals("minimax-provider", restored.getProviderId());
+        assertEquals("MiniMax-M1", restored.getModel());
+        assertEquals("codex_sdk", restored.getRequestMode());
+        assertEquals("provider", restored.getBaseUrlSource());
+        assertEquals("managed_provider", restored.getEffectiveConfigSource());
+
+        service.deleteCodexSessionBinding("session-001");
+
+        assertNull(service.getCodexSessionBinding("session-001"));
     }
 
     private void useTemporaryHomeDirectory(Path tempHome) throws Exception {

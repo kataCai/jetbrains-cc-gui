@@ -4,9 +4,29 @@ import { useSettingsWindowCallbacks, type SettingsWindowCallbacksDeps } from './
 import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
 import type { PromptEnhancerConfig } from '../../../types/promptEnhancer';
 
+const translations: Record<string, string> = {
+  'settings.codexProvider.runtimeSourceLabel': 'Runtime Source: {{source}}',
+  'settings.codexProvider.runtimeSource.managedProvider': 'Managed Provider',
+  'settings.codexProvider.runtimeSource.codexLocalConfig': 'Codex Local Config',
+  'settings.codexProvider.runtimeSource.sdkDefault': 'SDK Default',
+  'settings.codexProvider.runtimeSource.proxyFallback': 'Proxy Fallback',
+};
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: Record<string, string | number>) => {
+      const template = translations[key];
+      if (!template) {
+        return key;
+      }
+      if (!options) {
+        return template;
+      }
+      return Object.entries(options).reduce(
+        (result, [token, value]) => result.replace(`{{${token}}}`, String(value)),
+        template
+      );
+    },
   }),
 }));
 
@@ -33,6 +53,8 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setLoading: vi.fn(),
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
+    setCodexModelCatalogLoading: vi.fn(),
+    setTestingCodexProviderId: vi.fn(),
     setCommitGenerationEnabled: vi.fn(),
     setAiTitleGenerationEnabled: vi.fn(),
     setStatusBarWidgetEnabled: vi.fn(),
@@ -45,6 +67,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     updateActiveProvider: vi.fn(),
     loadProviders: vi.fn(),
     loadCodexProviders: vi.fn(),
+    loadCodexModelCatalog: vi.fn(),
     loadAgents: vi.fn(),
     updateAgents: vi.fn(),
     handleAgentOperationResult: vi.fn(),
@@ -53,6 +76,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     updateCodexProviders: vi.fn(),
     updateActiveCodexProvider: vi.fn(),
     updateCurrentCodexConfig: vi.fn(),
+    updateCodexModelCatalog: vi.fn(),
     cleanupAgentsTimeout: vi.fn(),
     showAlert: vi.fn(),
     addToast: vi.fn(),
@@ -88,6 +112,20 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_commit_ai_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_prompt_enhancer_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_sound_notification_config:');
+  });
+
+  /**
+   * 验证 Codex provider 列表回调会主动刷新统一模型目录。
+   * 断言意图：provider 增删改、授权状态变化或排序后，Models 面板不需要用户手动二次刷新。
+   */
+  it('reloads Codex model catalog after provider list callback updates', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.updateCodexProviders?.(JSON.stringify([{ id: 'provider-a', name: 'Provider A' }]));
+
+    expect(deps.updateCodexProviders).toHaveBeenCalledWith([{ id: 'provider-a', name: 'Provider A' }]);
+    expect(deps.loadCodexModelCatalog).toHaveBeenCalled();
   });
 
   /**
@@ -292,5 +330,74 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
       fontBase64: 'AAECA',
       fontFormat: 'truetype',
     }));
+  });
+
+  /**
+   * 验证 provider 测试结果走独立回调，不再复用切换成功提示。
+   * 断言意图：测试成功与失败应分别映射到独立标题，避免与 switch toast 混淆。
+   */
+  it('shows dedicated alerts for structured codex provider test results', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showTestResult?.(JSON.stringify({
+      success: true,
+      providerId: 'minimax-cn',
+      requestMode: 'codex_sdk',
+      model: 'MiniMax-M2.5',
+      resolvedBaseUrl: 'https://api.minimaxi.com/v1',
+      credentialSource: 'apiKeyEnv:MINIMAX_API_KEY',
+      transport: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+      fallbackDetected: false,
+      endpointSource: 'provider',
+      authMode: 'api_key_env',
+      message: 'provider ok',
+    }));
+    window.showTestResult?.(JSON.stringify({
+      success: false,
+      providerId: 'minimax-cn',
+      requestMode: 'codex_sdk',
+      model: 'MiniMax-M2.5',
+      resolvedBaseUrl: 'https://local.example.com/v1',
+      credentialSource: 'apiKeyEnv:MINIMAX_API_KEY',
+      transport: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+      fallbackDetected: true,
+      endpointSource: 'codex_local_config',
+      authMode: 'api_key_env',
+      message: 'provider failed',
+    }));
+
+    expect(deps.showAlert).toHaveBeenNthCalledWith(
+      1,
+      'success',
+      'toast.testResultPassed',
+      expect.stringContaining('provider ok')
+    );
+    expect(deps.showAlert).toHaveBeenNthCalledWith(
+      2,
+      'error',
+      'toast.testResultFailed',
+      expect.stringContaining('provider failed')
+    );
+    expect((deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[0]?.[2]).toContain('Runtime Source: Managed Provider');
+    expect((deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[1]?.[2]).toContain('Runtime Source: Proxy Fallback');
+    expect(deps.setTestingCodexProviderId).toHaveBeenCalledWith('');
+  });
+
+  /**
+   * 验证设置页卸载时会清理 provider 测试结果回调。
+   * 断言意图：避免旧页面闭包残留到下次挂载。
+   */
+  it('cleans up showTestResult callback on unmount', () => {
+    const deps = createDeps();
+    const { unmount } = renderHook(() => useSettingsWindowCallbacks(deps));
+
+    expect(window.showTestResult).toBeTypeOf('function');
+
+    unmount();
+
+    expect(window.showTestResult).toBeUndefined();
   });
 });

@@ -205,6 +205,26 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
         public String model;
         public String permissionMode;
         public String reasoningEffort;
+        /**
+         * Codex 会话绑定的 provider id。
+         * 仅用于恢复同一条 Codex 会话时校验和回填，不参与 Claude provider 场景。
+         */
+        public String codexProviderId;
+        /**
+         * Codex 会话绑定的 requestMode。
+         * 当前主要用于诊断和恢复一致性校验，不承载真实传输实现切换。
+         */
+        public String codexRequestMode;
+        /**
+         * Codex 会话绑定的 endpoint 来源。
+         * 该字段用于恢复时诊断“该会话最初是否走 provider endpoint 或 SDK 默认值”。
+         */
+        public String codexBaseUrlSource;
+        /**
+         * Codex 会话绑定的配置来源。
+         * 该字段用于恢复时区分 managed provider 与 cli login 等来源。
+         */
+        public String codexEffectiveConfigSource;
         public String titleBindingMode;
 
         public TabSessionState copy() {
@@ -215,6 +235,10 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
             copy.model = this.model;
             copy.permissionMode = this.permissionMode;
             copy.reasoningEffort = this.reasoningEffort;
+            copy.codexProviderId = this.codexProviderId;
+            copy.codexRequestMode = this.codexRequestMode;
+            copy.codexBaseUrlSource = this.codexBaseUrlSource;
+            copy.codexEffectiveConfigSource = this.codexEffectiveConfigSource;
             copy.titleBindingMode = normalizeTitleBindingMode(this.titleBindingMode);
             return copy;
         }

@@ -3,8 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useModelProviderState } from './useModelProviderState';
 import { sendBridgeEvent } from '../utils/bridge';
 
+const runtimeProviderMock = vi.hoisted(() => {
+  const activeCodexProviderListeners = new Set<(json: string) => void>();
+  return {
+    subscribeActiveCodexProvider: (listener: (json: string) => void) => {
+      activeCodexProviderListeners.add(listener);
+      return () => {
+        activeCodexProviderListeners.delete(listener);
+      };
+    },
+    emitActiveCodexProvider: (provider: Record<string, unknown>) => {
+      const payload = JSON.stringify(provider);
+      activeCodexProviderListeners.forEach((listener) => listener(payload));
+    },
+  };
+});
+
 vi.mock('../utils/bridge', () => ({
   sendBridgeEvent: vi.fn(),
+}));
+
+vi.mock('../utils/runtimeProviderCapabilities', () => ({
+  subscribeActiveCodexProvider: runtimeProviderMock.subscribeActiveCodexProvider,
 }));
 
 describe('useModelProviderState', () => {
@@ -145,5 +165,151 @@ describe('useModelProviderState', () => {
 
     expect(result.current.selectedCodexModel).toBe('gpt-5.4');
     expect(result.current.defaultCodexModelFromConfig).toBeNull();
+  });
+
+  it('uses the provider id encoded in the composite catalog key for codex selection', () => {
+    /**
+     * 验证目标：
+     * 聊天区模型下拉切到统一 catalog 后，Codex 选项 value 应改为 `providerId::modelId`。
+     *
+     * 断言意图：
+     * 1. hook 需要从复合 key 中拆出 providerId 和 modelId；
+     * 2. 只发送新的 select_codex_model 事件；
+     * 3. 前端本地 selectedCodexModel 仍保持真实 modelId，避免影响现有显示链路。
+     */
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.handleModelSelect('managed-openai::gpt-5.5');
+    });
+
+    expect(result.current.selectedCodexModel).toBe('gpt-5.5');
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'select_codex_model',
+      JSON.stringify({
+        providerId: 'managed-openai',
+        modelId: 'gpt-5.5',
+      }),
+    );
+  });
+
+  /**
+   * 验证 active Codex provider 切换后，后续模型选择会绑定到新的 provider id。
+   * 这个场景直接覆盖“provider 切换后模型归属不能串味”的核心约束：
+   * 即使前一个 provider 已经选过模型，新的选择事件也必须落到当前激活 provider 上，
+   * 否则恢复 selected model 或后端摘要时就会把模型错归到旧 provider。
+   */
+  it('falls back to the latest active codex provider id for plain model ids', () => {
+    /**
+     * 验证目标：
+     * 统一 catalog 落地过程中，仍兼容极少数旧调用方继续传纯 modelId。
+     *
+     * 断言意图：
+     * 当 value 中没有 provider 维度时，hook 仍应回退到最新 active provider，
+     * 同时事件名也要统一升级为 select_codex_model。
+     */
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+      });
+    });
+    act(() => {
+      result.current.handleModelSelect('gpt-5.4');
+    });
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-b',
+        name: 'Provider B',
+      });
+    });
+    act(() => {
+      result.current.handleModelSelect('gpt-5.5');
+    });
+
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'select_codex_model',
+      JSON.stringify({
+        providerId: 'provider-a',
+        modelId: 'gpt-5.4',
+      }),
+    );
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'select_codex_model',
+      JSON.stringify({
+        providerId: 'provider-b',
+        modelId: 'gpt-5.5',
+      }),
+    );
+    expect(sendBridgeEvent).toHaveBeenCalledWith('set_model', 'gpt-5.5');
+  });
+
+  it('requests a new codex conversation when switching provider or model', () => {
+    const onCodexConversationConfigChanged = vi.fn();
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.handleModelSelect('gpt-5.4');
+    });
+
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('model');
+  });
+
+  it('requests a new codex conversation when active codex provider changes while staying on codex', () => {
+    const onCodexConversationConfigChanged = vi.fn();
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged,
+    }));
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+      });
+    });
+
+    expect(onCodexConversationConfigChanged).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      runtimeProviderMock.emitActiveCodexProvider({
+        id: 'provider-b',
+        name: 'Provider B',
+      });
+    });
+
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('activeProvider');
   });
 });

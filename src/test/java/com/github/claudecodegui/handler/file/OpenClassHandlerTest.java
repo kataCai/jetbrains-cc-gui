@@ -39,10 +39,10 @@ public class OpenClassHandlerTest {
 
     @Test
     public void acceptsKotlinAndDollarInnerClassExpressions() {
-        // Relaxed pattern: any dotted Java identifier with at least one '.',
-        // including '$' inner-class separators and lowercase last segments.
-        assertTrue(OpenClassHandler.isValidClassName("com.example.api"));
-        assertTrue(OpenClassHandler.isValidClassName("org.junit.jupiter.api"));
+        // 这里验证的是“合法类名表达式”仍然支持 Kotlin/Java 常见嵌套类写法，
+        // 而不是重新放宽到任意小写末段包名；末段仍需看起来像可导航的类名。
+        assertTrue(OpenClassHandler.isValidClassName("com.example.Api"));
+        assertTrue(OpenClassHandler.isValidClassName("org.junit.jupiter.api.Assertions"));
         assertTrue(OpenClassHandler.isValidClassName("com.github.foo.Outer$Inner"));
     }
 

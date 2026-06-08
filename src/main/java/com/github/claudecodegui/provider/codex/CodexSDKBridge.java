@@ -458,6 +458,14 @@ public class CodexSDKBridge extends BaseSDKBridge {
      * Note: Codex supports images via local_image type (requires file path, not base64)
      * Note: Codex does not support system prompts, so agentPrompt is appended to user message
      */
+    /**
+     * 旧的 9 参数发送入口。
+     * 当前仅为兼容仍未迁移到 request-scoped runtime profile 的调用方而保留；
+     * 新代码应统一使用带 `CodexRuntimeProfile` 的重载，避免复用 bridge 实例上的 baseUrl/apiKey。
+     *
+     * @deprecated 待所有调用点迁移完成后移除，建议后续 major 版本删除。
+     */
+    @Deprecated(forRemoval = true)
     public CompletableFuture<SDKResult> sendMessage(
             String channelId,
             String message,
@@ -468,6 +476,38 @@ public class CodexSDKBridge extends BaseSDKBridge {
             String model,
             String agentPrompt,  // Agent prompt (appended to message for Codex)
             String reasoningEffort,  // Codex reasoning effort (thinking depth)
+            MessageCallback callback
+    ) {
+        return sendMessage(
+                channelId,
+                message,
+                threadId,
+                cwd,
+                attachments,
+                permissionMode,
+                model,
+                agentPrompt,
+                reasoningEffort,
+                CodexRuntimeProfile.legacy(model, baseUrl, apiKey, reasoningEffort),
+                callback
+        );
+    }
+
+    /**
+     * Send message with request-scoped runtime profile.
+     * 该重载避免复用 bridge 实例中的 baseUrl/apiKey，防止连续切换 provider 时凭据串线。
+     */
+    public CompletableFuture<SDKResult> sendMessage(
+            String channelId,
+            String message,
+            String threadId,
+            String cwd,
+            List<ClaudeSession.Attachment> attachments,
+            String permissionMode,
+            String model,
+            String agentPrompt,
+            String reasoningEffort,
+            CodexRuntimeProfile runtimeProfile,
             MessageCallback callback
     ) {
         return CompletableFuture.supplyAsync(() -> {
@@ -521,27 +561,18 @@ public class CodexSDKBridge extends BaseSDKBridge {
                     LOG.info("[Agent] ✓ Appending agentPrompt to user message for Codex (length: " + agentPrompt.length() + " chars)");
                 }
 
-                // Build stdin input JSON
-                // Note: Codex uses 'threadId' (not 'sessionId')
-                JsonObject stdinInput = new JsonObject();
-                stdinInput.addProperty("message", finalMessage);
-                stdinInput.addProperty("threadId", threadId != null ? threadId : "");
-                stdinInput.addProperty("cwd", cwd != null ? cwd : "");
-                stdinInput.addProperty("permissionMode", permissionMode != null ? permissionMode : "");
-                stdinInput.addProperty("model", model != null ? model : "");
-                // Reasoning effort (thinking depth)
-                stdinInput.addProperty("reasoningEffort", reasoningEffort != null ? reasoningEffort : "medium");
-
-                // API configuration — skip for CLI Login mode (uses native OAuth from ~/.codex/auth.json)
-                boolean isCodexCliLogin = isCodexCliLoginActive();
-                if (!isCodexCliLogin) {
-                    stdinInput.addProperty("baseUrl", baseUrl != null ? baseUrl : "");
-                    stdinInput.addProperty("apiKey", apiKey != null ? apiKey : "");
-                } else {
-                    stdinInput.addProperty("baseUrl", "");
-                    stdinInput.addProperty("apiKey", "");
-                    LOG.info("[Codex] CLI Login mode: skipping apiKey/baseUrl, using native OAuth tokens");
-                }
+                CodexRuntimeProfile effectiveProfile = runtimeProfile != null
+                        ? runtimeProfile
+                        : CodexRuntimeProfile.legacy(model, baseUrl, apiKey, reasoningEffort);
+                JsonObject stdinInput = buildStdinInput(
+                        finalMessage,
+                        threadId,
+                        cwd,
+                        permissionMode,
+                        effectiveProfile,
+                        isCodexCliLoginActive()
+                );
+                LOG.info("[CODEX_RUNTIME] Bridge request runtime profile: " + effectiveProfile.toDiagnosticJson());
 
                 // 透传任务恢复策略配置，供 Node 侧统一决定“转成功/自动重试/最终失败”。
                 try {
@@ -1116,5 +1147,46 @@ public class CodexSDKBridge extends BaseSDKBridge {
             LOG.debug("[Codex] Failed to check CLI login status: " + e.getMessage());
             return false;
         }
+    }
+
+    JsonObject buildStdinInput(
+            String finalMessage,
+            String threadId,
+            String cwd,
+            String permissionMode,
+            CodexRuntimeProfile effectiveProfile,
+            boolean globalCliLoginActive
+    ) {
+        JsonObject stdinInput = new JsonObject();
+        stdinInput.addProperty("message", finalMessage != null ? finalMessage : "");
+        stdinInput.addProperty("threadId", threadId != null ? threadId : "");
+        stdinInput.addProperty("cwd", cwd != null ? cwd : "");
+        stdinInput.addProperty("permissionMode", permissionMode != null ? permissionMode : "");
+        stdinInput.addProperty("model", effectiveProfile.getModel());
+        stdinInput.addProperty("reasoningEffort", effectiveProfile.getReasoningEffort().isEmpty()
+                ? "medium"
+                : effectiveProfile.getReasoningEffort());
+        stdinInput.addProperty("providerId", effectiveProfile.getProviderId());
+        stdinInput.addProperty("authMode", effectiveProfile.getAuthMode());
+        stdinInput.addProperty("requestMode", effectiveProfile.getRequestMode());
+        stdinInput.addProperty("credentialSource", effectiveProfile.getCredentialSource());
+        stdinInput.addProperty("baseUrlSource", effectiveProfile.getBaseUrlSource());
+        stdinInput.addProperty("effectiveConfigSource", effectiveProfile.getEffectiveConfigSource());
+        stdinInput.addProperty("fallbackDetected", effectiveProfile.isFallbackDetected());
+        stdinInput.addProperty("forcedModelProvider", effectiveProfile.getForcedModelProvider());
+        stdinInput.addProperty("localCodexModelProvider", effectiveProfile.getLocalCodexModelProvider());
+        stdinInput.addProperty("localConfigConflictDetected", effectiveProfile.isLocalConfigConflictDetected());
+        stdinInput.addProperty("finalModelProvider", effectiveProfile.getFinalModelProvider());
+
+        // CLI Login 使用 SDK 原生 OAuth，必须清空请求级 endpoint 和 key，避免继承 managed provider 凭据。
+        boolean isCodexCliLogin = effectiveProfile.isCodexCliLogin() || globalCliLoginActive;
+        if (isCodexCliLogin) {
+            stdinInput.addProperty("baseUrl", "");
+            stdinInput.addProperty("apiKey", "");
+        } else {
+            stdinInput.addProperty("baseUrl", effectiveProfile.getBaseUrl());
+            stdinInput.addProperty("apiKey", effectiveProfile.getApiKey());
+        }
+        return stdinInput;
     }
 }

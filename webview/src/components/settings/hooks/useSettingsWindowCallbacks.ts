@@ -1,7 +1,13 @@
 // hooks/useSettingsWindowCallbacks.ts
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
+import {
+  getCodexRuntimeSourceTranslationKey,
+  resolveCodexRuntimeSource,
+  type ProviderConfig,
+  type CodexProviderConfig,
+  type CodexProviderTestResult,
+} from '../../../types/provider';
 import type { AgentConfig } from '../../../types/agent';
 import type { ImportPreviewResult } from '../../../types/import';
 import type { PromptConfig } from '../../../types/prompt';
@@ -23,6 +29,7 @@ import type { ToastMessage } from '../../Toast';
 import {
   subscribeActiveCodexProvider,
   subscribeActiveProvider,
+  subscribeCodexModelCatalog,
   subscribeCodexProviderList,
   subscribeProviderList,
 } from '../../../utils/runtimeProviderCapabilities';
@@ -42,10 +49,10 @@ export interface SettingsWindowCallbacksDeps {
   setSavingWorkingDirectory: (saving: boolean) => void;
   setCommitPrompt: (prompt: string) => void;
   setSavingCommitPrompt: (saving: boolean) => void;
+  setProjectCommitPrompt?: (prompt: string) => void;
+  setSavingProjectCommitPrompt?: (saving: boolean) => void;
   setCommitAiConfig: (config: CommitAiConfig) => void;
   setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
-  setProjectCommitPrompt: (prompt: string) => void;
-  setSavingProjectCommitPrompt: (saving: boolean) => void;
   setEditorFontConfig: (config: { fontFamily: string; fontSize: number; lineSpacing: number } | undefined) => void;
   setUiFontConfig: (config: UiFontConfig | undefined) => void;
   setIdeTheme: (theme: 'light' | 'dark' | null) => void;
@@ -55,6 +62,8 @@ export interface SettingsWindowCallbacksDeps {
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
+  setCodexModelCatalogLoading: (loading: boolean) => void;
+  setTestingCodexProviderId: (providerId: string) => void;
   setCommitGenerationEnabled?: (enabled: boolean) => void;
   setAiTitleGenerationEnabled?: (enabled: boolean) => void;
   setStatusBarWidgetEnabled?: (enabled: boolean) => void;
@@ -72,6 +81,7 @@ export interface SettingsWindowCallbacksDeps {
   updateActiveProvider: (provider: ProviderConfig) => void;
   loadProviders: () => void;
   loadCodexProviders: () => void;
+  loadCodexModelCatalog: () => void;
   loadAgents: () => void;
   updateAgents: (agents: AgentConfig[]) => void;
   handleAgentOperationResult: (result: { success: boolean; operation?: string; error?: string }) => void;
@@ -82,6 +92,7 @@ export interface SettingsWindowCallbacksDeps {
   updateCodexProviders: (providers: CodexProviderConfig[]) => void;
   updateActiveCodexProvider: (provider: CodexProviderConfig) => void;
   updateCurrentCodexConfig: (config: unknown) => void;
+  updateCodexModelCatalog: (catalog: import('../../../types/provider').CodexModelCatalogItem[]) => void;
   cleanupAgentsTimeout: () => void;
 
   loadPrompts?: () => void;
@@ -138,6 +149,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       try {
         const providersList: CodexProviderConfig[] = JSON.parse(jsonStr);
         d().updateCodexProviders(providersList);
+        d().loadCodexModelCatalog();
       } catch (error) {
         console.error('[SettingsView] Failed to parse Codex providers:', error);
         d().setCodexLoading(false);
@@ -155,17 +167,37 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     });
 
+    const unsubscribeCodexModelCatalog = subscribeCodexModelCatalog((jsonStr: string) => {
+      try {
+        const catalog = JSON.parse(jsonStr);
+        d().updateCodexModelCatalog(catalog);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex model catalog:', error);
+        d().setCodexModelCatalogLoading(false);
+      }
+    });
+
     window.showError = (message: string) => {
       d().showAlert('error', t('toast.operationFailed'), message);
       d().setLoading(false);
       d().setSavingNodePath(false);
       d().setSavingWorkingDirectory(false);
       d().setSavingCommitPrompt(false);
-      d().setSavingProjectCommitPrompt(false);
     };
 
     window.showSwitchSuccess = (message: string) => {
       d().showAlert('success', t('toast.switchSuccess'), message);
+    };
+
+    window.showTestResult = (payloadOrSuccess: string | boolean, legacyMessage?: string) => {
+      const payload = normalizeCodexProviderTestResultPayload(payloadOrSuccess, legacyMessage);
+      d().setTestingCodexProviderId('');
+      const runtimeSource = resolveCodexRuntimeSource(payload);
+      d().showAlert(
+        payload.success ? 'success' : 'error',
+        payload.success ? t('toast.testResultPassed') : t('toast.testResultFailed'),
+        formatCodexProviderTestResultMessage(payload, t, runtimeSource)
+      );
     };
 
     window.updateNodePath = (jsonStr: string) => {
@@ -275,10 +307,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       try {
         const data = JSON.parse(jsonStr);
         d().setCommitPrompt(data.commitPrompt || '');
-        d().setSavingCommitPrompt(false);
-        if (data.projectCommitPrompt !== undefined) {
-          d().setProjectCommitPrompt(data.projectCommitPrompt || '');
-        }
         if (data.saved) {
           d().addToast(t('toast.saveSuccess'), 'success');
         }
@@ -306,23 +334,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Project-level commit AI prompt callback
-    window.updateProjectCommitPrompt = (jsonStr: string) => {
-      try {
-        const data = JSON.parse(jsonStr);
-        d().setProjectCommitPrompt(data.projectCommitPrompt || '');
-        d().setSavingProjectCommitPrompt(false);
-        if (data.saved) {
-          d().addToast(t('toast.saveSuccess'), 'success');
-        }
-      } catch (error) {
-        console.error('[SettingsView] Failed to parse project commit prompt:', error);
-        d().setSavingProjectCommitPrompt(false);
-        d().addToast(t('toast.saveFailed'), 'error');
-      }
-    };
-
-    // AI commit generation config callback
     window.updateCommitGenerationEnabled = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -492,6 +503,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     d().loadProviders();
     d().loadCodexProviders();
+    d().loadCodexModelCatalog();
     d().loadAgents();
     d().loadPrompts?.();
     sendToJava('get_node_path:');
@@ -511,6 +523,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_status_bar_widget_enabled:');
     sendToJava('get_task_completion_notification_enabled:');
     sendToJava('get_permission_dialog_timeout:');
+    sendToJava('get_current_codex_config:');
 
     return () => {
       d().cleanupAgentsTimeout();
@@ -519,9 +532,11 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       unsubscribeActiveProvider();
       unsubscribeCodexProviders();
       unsubscribeActiveCodexProvider();
+      unsubscribeCodexModelCatalog();
 
       window.showError = undefined;
       window.showSwitchSuccess = undefined;
+      window.showTestResult = undefined;
       window.updateNodePath = undefined;
       window.updateWorkingDirectory = undefined;
       window.showSuccess = undefined;
@@ -540,7 +555,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateCommitAiConfig = undefined;
       window.updatePromptEnhancerConfig = undefined;
       window.updateTaskReminderConfig = undefined;
-      window.updateProjectCommitPrompt = undefined;
       window.updateSoundNotificationConfig = undefined;
       window.updateRemoteCollabConfig = undefined;
       window.updateRemoteCollabDebugSnapshot = undefined;
@@ -561,4 +575,130 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
+}
+
+/**
+ * 兼容旧版 `(success, message)` 与新版结构化 JSON payload 两种 showTestResult 回调格式。
+ * 这样可以在 Java 侧逐步升级的同时，保证旧版本返回值不会让设置页直接失效。
+ *
+ * @param payloadOrSuccess 结构化 JSON 字符串，或旧版 success 布尔值
+ * @param legacyMessage 旧版第二参数消息
+ * @returns 统一后的结构化测试结果
+ */
+function normalizeCodexProviderTestResultPayload(
+  payloadOrSuccess: string | boolean,
+  legacyMessage?: string,
+): CodexProviderTestResult {
+  if (typeof payloadOrSuccess === 'string') {
+    try {
+      return JSON.parse(payloadOrSuccess) as CodexProviderTestResult;
+    } catch {
+      return {
+        success: false,
+        providerId: '',
+        requestMode: 'codex_sdk',
+        model: '',
+        resolvedBaseUrl: '',
+        credentialSource: '',
+        transport: 'codex_sdk',
+        effectiveConfigSource: '',
+        fallbackDetected: false,
+        forcedModelProvider: '',
+        localCodexModelProvider: '',
+        localConfigConflictDetected: false,
+        finalModelProvider: '',
+        message: payloadOrSuccess,
+      };
+    }
+  }
+
+  return {
+    success: payloadOrSuccess,
+    providerId: '',
+    requestMode: 'codex_sdk',
+    model: '',
+    resolvedBaseUrl: '',
+    credentialSource: '',
+    transport: 'codex_sdk',
+    effectiveConfigSource: '',
+    fallbackDetected: false,
+    forcedModelProvider: '',
+    localCodexModelProvider: '',
+    localConfigConflictDetected: false,
+    finalModelProvider: '',
+    message: legacyMessage || '',
+  };
+}
+
+/**
+ * 将结构化 provider 测试结果格式化为设置页展示文案。
+ * 文案明确展示真实命中的 provider/model/baseUrl/requestMode，并在检测到 fallback 时追加警告提示。
+ *
+ * @param payload 结构化测试结果
+ * @returns 供 AlertDialog 直接展示的多行消息
+ */
+function formatCodexProviderTestResultMessage(
+  payload: CodexProviderTestResult,
+  t: (key: string, options?: Record<string, string | number>) => string,
+  runtimeSource = resolveCodexRuntimeSource(payload),
+): string {
+  const lines = [payload.message || ''];
+  const managedProviderConfirmed = payload.forcedModelProvider
+    && payload.finalModelProvider
+    && payload.forcedModelProvider === payload.finalModelProvider;
+  lines.push(t('settings.codexProvider.runtimeSourceLabel', {
+    source: t(`settings.codexProvider.runtimeSource.${getCodexRuntimeSourceTranslationKey(runtimeSource)}`),
+  }));
+  if (managedProviderConfirmed) {
+    lines.push(t('settings.codexProvider.testResult.guiProviderConfirmed', {
+      provider: payload.forcedModelProvider || 'unknown',
+      defaultValue: 'GUI managed provider is active for this request: {{provider}}',
+    }));
+  }
+  if (payload.providerId) {
+    lines.push(`providerId=${payload.providerId}`);
+  }
+  if (payload.model) {
+    lines.push(`model=${payload.model}`);
+  }
+  if (payload.requestMode) {
+    lines.push(`requestMode=${payload.requestMode}`);
+  }
+  if (payload.transport) {
+    lines.push(`transport=${payload.transport}`);
+  }
+  if (payload.resolvedBaseUrl) {
+    lines.push(`baseUrl=${payload.resolvedBaseUrl}`);
+  }
+  if (payload.authMode) {
+    lines.push(`authMode=${payload.authMode}`);
+  }
+  if (payload.credentialSource) {
+    lines.push(`credentialSource=${payload.credentialSource}`);
+  }
+  if (payload.endpointSource) {
+    lines.push(`endpointSource=${payload.endpointSource}`);
+  }
+  if (payload.effectiveConfigSource) {
+    lines.push(`effectiveConfigSource=${payload.effectiveConfigSource}`);
+  }
+  if (payload.forcedModelProvider) {
+    lines.push(`forcedModelProvider=${payload.forcedModelProvider}`);
+  }
+  if (payload.localCodexModelProvider) {
+    lines.push(`localCodexModelProvider=${payload.localCodexModelProvider}`);
+  }
+  if (payload.finalModelProvider) {
+    lines.push(`finalModelProvider=${payload.finalModelProvider}`);
+  }
+  if (payload.localConfigConflictDetected) {
+    lines.push(t('settings.codexProvider.testResult.localConfigConflict', {
+      provider: payload.localCodexModelProvider || 'unknown',
+      defaultValue: 'Local Codex CLI default provider may still conflict: {{provider}}',
+    }));
+  }
+  if (payload.fallbackDetected) {
+    lines.push('warning=fallback_detected');
+  }
+  return lines.filter((line) => line && line.trim().length > 0).join('\n');
 }

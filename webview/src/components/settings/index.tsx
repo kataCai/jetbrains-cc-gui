@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CodexProviderConfig } from '../../types/provider';
 import { ToastContainer } from '../Toast';
+import { useUIState } from '../../contexts/UIStateContext';
 
 // Import split-out components
 import SettingsHeader from './SettingsHeader';
@@ -71,6 +72,11 @@ const SettingsView = ({
   onPermissionDialogTimeoutChange: onPermissionDialogTimeoutChangeProp,
 }: SettingsViewProps) => {
   const { t } = useTranslation();
+  const {
+    codexProviderEntryIntent,
+    setCodexProviderEntryIntent,
+    setAddModelDialogOpen,
+  } = useUIState();
   const isCodexMode = currentProvider === 'codex';
   // Codex mode: align with Claude capabilities for settings tabs
   const disabledTabs = useMemo<SettingsTab[]>(
@@ -251,21 +257,32 @@ const SettingsView = ({
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
+    codexModelCatalog,
+    codexModelCatalogLoading,
     loadCodexProviders,
+    loadCodexModelCatalog,
     updateCodexProviders,
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
+    updateCodexModelCatalog,
     handleAddCodexProvider,
+    handleAddCodexProviderWithDraft,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleSwitchCodexProvider,
+    handleAuthorizeCodexLocalConfig,
+    handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
+    testingCodexProviderId,
     setCodexLoading,
     setCodexConfigLoading,
+    setTestingCodexProviderId,
+    saveCodexModelVisibility,
+    setCodexModelCatalogLoading,
   } = useCodexProviderManagement({
     onSuccess: (msg) => addToast(msg, 'success'),
   });
@@ -326,10 +343,13 @@ const SettingsView = ({
     setLoading,
     setCodexLoading,
     setCodexConfigLoading,
+    setCodexModelCatalogLoading,
+    setTestingCodexProviderId,
     updateProviders,
     updateActiveProvider,
     loadProviders,
     loadCodexProviders,
+    loadCodexModelCatalog,
     loadAgents,
     updateAgents,
     handleAgentOperationResult,
@@ -339,6 +359,7 @@ const SettingsView = ({
     updateCodexProviders,
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
+    updateCodexModelCatalog,
     cleanupAgentsTimeout,
     showAlert,
     addToast,
@@ -431,6 +452,50 @@ const SettingsView = ({
   const handleSaveCodexProviderFromDialog = (providerData: CodexProviderConfig) => {
     handleSaveCodexProvider(providerData);
   };
+
+  /**
+   * 承接聊天区跳转过来的 Codex 入口意图。
+   * 这里统一在设置页消费跳转状态，避免聊天区直接耦合具体弹窗实现。
+   */
+  useEffect(() => {
+    if (currentTab !== 'providers') {
+      return;
+    }
+    if (codexProviderEntryIntent === 'addProvider') {
+      handleAddCodexProvider();
+      setCodexProviderEntryIntent('idle');
+      return;
+    }
+    if (codexProviderEntryIntent === 'editActiveProvider') {
+      if (codexLoading) {
+        // Codex provider 列表仍在异步加载时先保留入口意图，避免误判为没有激活供应商。
+        return;
+      }
+      const activeProvider = codexProviders.find((provider) => provider.isActive);
+      if (activeProvider) {
+        handleEditCodexProvider(activeProvider);
+      } else {
+        addToast(t('settings.codexProvider.noActiveProviderForManage'), 'warning');
+      }
+      setCodexProviderEntryIntent('idle');
+      return;
+    }
+    if (codexProviderEntryIntent === 'addModelAlias') {
+      setAddModelDialogOpen(true);
+      setCodexProviderEntryIntent('idle');
+    }
+  }, [
+    addToast,
+    codexLoading,
+    codexProviderEntryIntent,
+    codexProviders,
+    currentTab,
+    handleAddCodexProvider,
+    handleEditCodexProvider,
+    setAddModelDialogOpen,
+    setCodexProviderEntryIntent,
+    t,
+  ]);
 
   // Save agent (wrapper function with validation logic)
   const handleSaveAgentFromDialog = (data: { name: string; prompt: string }) => {
@@ -535,13 +600,21 @@ const SettingsView = ({
               onSwitchProvider={handleSwitchProvider}
               codexProviders={codexProviders}
               codexLoading={codexLoading}
+              codexModelCatalog={codexModelCatalog}
+              codexModelCatalogLoading={codexModelCatalogLoading}
+              testingCodexProviderId={testingCodexProviderId}
               onAddCodexProvider={handleAddCodexProvider}
-                onEditCodexProvider={handleEditCodexProvider}
-                onDeleteCodexProvider={handleDeleteCodexProvider}
-                onSwitchCodexProvider={handleSwitchCodexProvider}
-                onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
-                addToast={addToast}
-              />
+              onCreateCodexProviderFromAlias={handleAddCodexProviderWithDraft}
+              onEditCodexProvider={handleEditCodexProvider}
+              onDeleteCodexProvider={handleDeleteCodexProvider}
+              onTestCodexProvider={handleTestCodexProvider}
+              onSwitchCodexProvider={handleSwitchCodexProvider}
+              onAuthorizeCodexLocalConfig={handleAuthorizeCodexLocalConfig}
+              onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
+              onRefreshCodexModelCatalog={loadCodexModelCatalog}
+              onSaveCodexModelVisibility={saveCodexModelVisibility}
+              addToast={addToast}
+            />
           </div>
 
           {/* SDK dependency management */}

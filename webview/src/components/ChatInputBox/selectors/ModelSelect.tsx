@@ -7,6 +7,7 @@ import {
   strip1MContextSuffix,
 } from '../types';
 import type { ModelInfo } from '../types';
+import { parseCodexModelCatalogKey } from '../../../types/provider';
 import { readClaudeModelMapping } from '../../../utils/claudeModelMapping';
 import { ProviderModelIcon } from '../../shared/ProviderModelIcon';
 import Switch from 'antd/es/switch';
@@ -23,13 +24,32 @@ const DROPDOWN_STYLE: React.CSSProperties = {
 const MODEL_OPTION_INFO_STYLE: React.CSSProperties = { display: 'flex', flexDirection: 'column', flex: 1 };
 const LONG_CONTEXT_OPTION_STYLE: React.CSSProperties = { justifyContent: 'space-between', cursor: 'default' };
 const LONG_CONTEXT_LABEL_STYLE: React.CSSProperties = { fontSize: '12px' };
+const PROVIDER_TAG_STYLE: React.CSSProperties = {
+  marginLeft: '6px',
+  opacity: 0.72,
+  fontSize: '11px',
+};
+const EMPTY_MODEL_FALLBACK: ModelInfo = {
+  id: '__empty_model__',
+  label: 'No model configured',
+};
+
+interface SelectorModelInfo extends ModelInfo {
+  providerId?: string;
+  providerLabel?: string;
+  rawModelId?: string;
+  runnable?: boolean;
+}
 
 interface ModelSelectProps {
   value: string;
   onChange: (modelId: string) => void;
-  models?: ModelInfo[];
+  models?: SelectorModelInfo[];
   currentProvider?: string;
   onAddModel?: () => void;
+  onOpenCodexProviderSettings?: () => void;
+  onOpenCodexProviderModelManagement?: () => void;
+  onOpenCodexModelAliasSettings?: () => void;
   defaultCodexModelFromConfig?: string | null;
   codexBaseUrl?: string | null;
   codexUsesCustomBaseUrl?: boolean;
@@ -158,6 +178,9 @@ export const ModelSelect = ({
   models = AVAILABLE_MODELS,
   currentProvider = 'claude',
   onAddModel,
+  onOpenCodexProviderSettings,
+  onOpenCodexProviderModelManagement,
+  onOpenCodexModelAliasSettings,
   defaultCodexModelFromConfig = null,
   codexBaseUrl = null,
   codexUsesCustomBaseUrl = false,
@@ -166,12 +189,19 @@ export const ModelSelect = ({
 }: ModelSelectProps) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
+  const [showCodexManagementActions, setShowCodexManagementActions] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const strippedValue = strip1MContextSuffix(value);
+  const parsedCompositeValue = parseCodexModelCatalogKey(value);
+  const strippedValue = strip1MContextSuffix(parsedCompositeValue?.modelId ?? value);
   const normalizedValue = currentProvider === 'claude' ? normalizeClaudeModelId(strippedValue) : strippedValue;
-  const currentModel = models.find(m => m.id === normalizedValue) || models.find(m => m.id === strippedValue) || models[0];
+  const currentModel = models.find(m => m.id === value)
+    || models.find(m => m.rawModelId === normalizedValue)
+    || models.find(m => m.id === normalizedValue)
+    || models.find(m => m.id === strippedValue)
+    || models[0]
+    || EMPTY_MODEL_FALLBACK;
   const modelMapping = readClaudeModelMapping();
   const normalizedDefaultCodexModel = typeof defaultCodexModelFromConfig === 'string'
     ? defaultCodexModelFromConfig.trim()
@@ -186,9 +216,40 @@ export const ModelSelect = ({
 
   const isSelectedModel = (modelId: string): boolean => {
     if (currentProvider !== 'claude') {
-      return modelId === strippedValue;
+      const parsedOption = parseCodexModelCatalogKey(modelId);
+      const parsedCurrent = parseCodexModelCatalogKey(value);
+      if (parsedOption && parsedCurrent) {
+        return parsedOption.providerId === parsedCurrent.providerId
+          && parsedOption.modelId === parsedCurrent.modelId;
+      }
+      if (parsedOption) {
+        return parsedOption.modelId === strippedValue;
+      }
+      return modelId === value || modelId === strippedValue;
     }
     return normalizeClaudeModelId(modelId) === normalizedValue;
+  };
+
+  /**
+   * 解析模型项的原始 modelId。
+   * 对 Codex catalog 场景，按钮 value 使用复合 key，但图标和描述翻译仍然应基于真实 modelId。
+   *
+   * @param model 当前模型项
+   * @return 真实模型 ID
+   */
+  const getRawModelId = (model: SelectorModelInfo): string => {
+    return model.rawModelId || parseCodexModelCatalogKey(model.id)?.modelId || model.id;
+  };
+
+  /**
+   * 判断当前模型项是否允许用户直接选择。
+   * 用于兼容 CLI 未授权等“可见但不可运行”的 catalog 项。
+   *
+   * @param model 当前模型项
+   * @return true 表示可选；false 表示应禁用
+   */
+  const isRunnableModel = (model: SelectorModelInfo): boolean => {
+    return model.runnable !== false;
   };
 
   /**
@@ -198,28 +259,29 @@ export const ModelSelect = ({
    * @param show1MContext 是否追加 1M context 提示
    * @return 供 UI 展示的模型标签
    */
-  const getModelLabel = (model: ModelInfo, show1MContext = false): string => {
-    const mappingKey = MODEL_ID_TO_MAPPING_KEY[model.id];
+  const getModelLabel = (model: SelectorModelInfo, show1MContext = false): string => {
+    const rawModelId = getRawModelId(model);
+    const mappingKey = MODEL_ID_TO_MAPPING_KEY[rawModelId];
     if (mappingKey) {
       const mappedName = resolveMappedModelName(mappingKey, modelMapping);
       if (mappedName) {
-        return append1MContextSuffix(mappedName, model.id, show1MContext);
+        return append1MContextSuffix(mappedName, rawModelId, show1MContext);
       }
     }
 
-    const defaultModel = DEFAULT_MODEL_MAP[model.id];
-    const labelKey = MODEL_LABEL_KEYS[model.id];
+    const defaultModel = DEFAULT_MODEL_MAP[rawModelId];
+    const labelKey = MODEL_LABEL_KEYS[rawModelId];
     const hasCustomLabel = defaultModel && model.label && model.label !== defaultModel.label;
 
     if (hasCustomLabel) {
-      return append1MContextSuffix(model.label ?? '', model.id, show1MContext);
+      return append1MContextSuffix(model.label ?? '', rawModelId, show1MContext);
     }
 
     if (labelKey) {
-      return append1MContextSuffix(t(labelKey), model.id, show1MContext);
+      return append1MContextSuffix(t(labelKey), rawModelId, show1MContext);
     }
 
-    return append1MContextSuffix(model.label ?? '', model.id, show1MContext);
+    return append1MContextSuffix(model.label ?? '', rawModelId, show1MContext);
   };
 
   /**
@@ -244,19 +306,23 @@ export const ModelSelect = ({
    * @param model 模型定义
    * @return 描述文案；没有时返回 undefined
    */
-  const getModelDescription = (model: ModelInfo): string | undefined => {
-    const descriptionKey = MODEL_DESCRIPTION_KEYS[model.id];
+  const getModelDescription = (model: SelectorModelInfo): string | undefined => {
+    const descriptionKey = MODEL_DESCRIPTION_KEYS[getRawModelId(model)];
     return descriptionKey ? t(descriptionKey) : model.description;
   };
 
   const handleToggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(!isOpen);
+    if (isOpen) {
+      setShowCodexManagementActions(false);
+    }
   }, [isOpen]);
 
   const handleSelect = useCallback((modelId: string) => {
     onChange(modelId);
     setIsOpen(false);
+    setShowCodexManagementActions(false);
   }, [onChange]);
 
   useEffect(() => {
@@ -272,6 +338,7 @@ export const ModelSelect = ({
         !buttonRef.current.contains(e.target as Node)
       ) {
         setIsOpen(false);
+        setShowCodexManagementActions(false);
       }
     };
 
@@ -284,6 +351,25 @@ export const ModelSelect = ({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isOpen]);
+
+  /**
+   * Codex 的“添加模型”入口需要先显式区分动作语义。
+   * 这里不再直接触发旧的别名弹窗，而是先展示 provider 创建/管理/别名三个独立动作。
+   */
+  const handleOpenAddModelActions = useCallback(() => {
+    if (currentProvider === 'codex') {
+      setShowCodexManagementActions(true);
+      return;
+    }
+    onAddModel?.();
+    setIsOpen(false);
+  }, [currentProvider, onAddModel]);
+
+  const runCodexManagementAction = useCallback((action?: () => void) => {
+    action?.();
+    setShowCodexManagementActions(false);
+    setIsOpen(false);
+  }, []);
 
   return (
     <div style={RELATIVE_INLINE_BLOCK_STYLE}>
@@ -301,11 +387,16 @@ export const ModelSelect = ({
       >
         <ProviderModelIcon
           providerId={currentProvider}
-          modelId={resolveModelIdForIcon(currentModel.id, modelMapping, MODEL_ID_TO_MAPPING_KEY)}
+          modelId={resolveModelIdForIcon(getRawModelId(currentModel), modelMapping, MODEL_ID_TO_MAPPING_KEY)}
           size={12}
           colored
         />
         <span className="selector-button-text">{getModelLabel(currentModel, true)}</span>
+        {currentProvider === 'codex' && currentModel.providerLabel && (
+          <span className="selector-button-meta" style={PROVIDER_TAG_STYLE}>
+            {currentModel.providerLabel}
+          </span>
+        )}
         {shouldShowCodexDefaultHint && normalizedDefaultCodexModel !== currentModel.id && (
           <span
             className="selector-button-meta"
@@ -356,24 +447,41 @@ export const ModelSelect = ({
               </div>
             </div>
           )}
-          {models.map((model) => (
+          {!showCodexManagementActions && models.map((model) => (
             <div
               key={model.id}
               className={`selector-option ${isSelectedModel(model.id) ? 'selected' : ''}`}
-              onClick={() => handleSelect(model.id)}
+              onClick={() => {
+                if (!isRunnableModel(model)) {
+                  return;
+                }
+                handleSelect(model.id);
+              }}
+              aria-disabled={!isRunnableModel(model)}
+              style={!isRunnableModel(model) ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
             >
               <ProviderModelIcon
                 providerId={currentProvider}
-                modelId={resolveModelIdForIcon(model.id, modelMapping, MODEL_ID_TO_MAPPING_KEY)}
+                modelId={resolveModelIdForIcon(getRawModelId(model), modelMapping, MODEL_ID_TO_MAPPING_KEY)}
                 size={16}
                 colored
               />
               <div style={MODEL_OPTION_INFO_STYLE}>
-                <span>{getModelLabel(model, false)}</span>
+                <span>
+                  {getModelLabel(model, false)}
+                  {currentProvider === 'codex' && model.providerLabel && (
+                    <span style={PROVIDER_TAG_STYLE}>{model.providerLabel}</span>
+                  )}
+                </span>
                 {getModelDescription(model) && (
                   <span className="model-description">{getModelDescription(model)}</span>
                 )}
-                {shouldShowCodexDefaultHint && model.id === normalizedDefaultCodexModel && (
+                {currentProvider === 'codex' && !isRunnableModel(model) && (
+                  <span className="model-description">
+                    {t('chat.codexModelUnavailable', { defaultValue: 'Unavailable until provider authorization is complete.' })}
+                  </span>
+                )}
+                {shouldShowCodexDefaultHint && getRawModelId(model) === normalizedDefaultCodexModel && (
                   <span className="model-description">
                     {t('chat.codexCliDefaultModelOption', {
                       defaultValue: 'CLI default model',
@@ -386,6 +494,31 @@ export const ModelSelect = ({
               )}
             </div>
           ))}
+          {showCodexManagementActions && currentProvider === 'codex' && (
+            <>
+              <div
+                className="selector-option selector-option-add"
+                onClick={() => runCodexManagementAction(onOpenCodexProviderSettings)}
+              >
+                <span className="codicon codicon-cloud-upload selector-add-icon" />
+                <span>{t('chat.addCodexProviderAction')}</span>
+              </div>
+              <div
+                className="selector-option selector-option-add"
+                onClick={() => runCodexManagementAction(onOpenCodexProviderModelManagement)}
+              >
+                <span className="codicon codicon-settings-gear selector-add-icon" />
+                <span>{t('chat.manageCurrentCodexProviderModelsAction')}</span>
+              </div>
+              <div
+                className="selector-option selector-option-add"
+                onClick={() => runCodexManagementAction(onOpenCodexModelAliasSettings)}
+              >
+                <span className="codicon codicon-symbol-misc selector-add-icon" />
+                <span>{t('chat.addCodexModelAliasAction')}</span>
+              </div>
+            </>
+          )}
           {currentProvider === 'claude' && onLongContextChange && (
             <>
               <div className="selector-divider" />
@@ -409,10 +542,7 @@ export const ModelSelect = ({
               <div className="selector-divider" />
               <div
                 className="selector-option selector-option-add"
-                onClick={() => {
-                  onAddModel();
-                  setIsOpen(false);
-                }}
+                onClick={handleOpenAddModelActions}
               >
                 <span className="codicon codicon-add selector-add-icon" />
                 <span>{t('models.addModel')}</span>

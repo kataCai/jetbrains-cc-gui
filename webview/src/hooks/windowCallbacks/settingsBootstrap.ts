@@ -167,6 +167,12 @@ export const drainPendingSettings = (): void => {
     delete w.__pendingModeReceived;
     window.onModeReceived?.(pending);
   }
+
+  if (w.__pendingCodexModelState) {
+    const pending = w.__pendingCodexModelState as string;
+    delete w.__pendingCodexModelState;
+    window.updateCodexModelState?.(pending);
+  }
 };
 
 /**

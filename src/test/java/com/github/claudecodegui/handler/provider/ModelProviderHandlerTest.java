@@ -1,9 +1,14 @@
 package com.github.claudecodegui.handler.provider;
 
+import com.github.claudecodegui.handler.UsagePushService;
+import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /**
  * ModelProviderHandler 模型解析与上下文容量映射回归测试。
@@ -121,5 +126,69 @@ public class ModelProviderHandlerTest {
         assertEquals(500_000, ModelProviderHandler.getModelContextLimit("custom-model[500k]"));
         assertEquals(2_000_000, ModelProviderHandler.getModelContextLimit("custom-model[2m]"));
         assertEquals(100_000, ModelProviderHandler.getModelContextLimit("custom-model[100K]"));
+    }
+
+    /**
+     * 验证模型目录回调继续维持“数组载荷”协议，而不是把 visibility 包装对象直接透传到前端。
+     */
+    @Test
+    public void shouldReturnCatalogArrayForCodexModelCatalogCallback() throws Exception {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject catalogConfig = new JsonObject();
+        JsonArray catalog = new JsonArray();
+        JsonObject item = new JsonObject();
+        item.addProperty("key", "provider::model");
+        item.addProperty("providerId", "provider");
+        item.addProperty("modelId", "model");
+        item.addProperty("visible", true);
+        catalog.add(item);
+        catalogConfig.add("catalog", catalog);
+        catalogConfig.add("visibility", new JsonObject());
+
+        HandlerContext context = new HandlerContext(
+                null,
+                null,
+                null,
+                new CatalogOnlySettingsService(catalogConfig),
+                jsCallback
+        );
+        ModelProviderHandler handler = new ModelProviderHandler(
+                context,
+                new UsagePushService(context)
+        );
+
+        handler.handleGetCodexModelCatalog();
+
+        assertEquals("window.updateCodexModelCatalog", jsCallback.lastFunctionName);
+        assertTrue(jsCallback.lastArg.startsWith("["));
+    }
+
+    private static class CatalogOnlySettingsService extends CodemossSettingsService {
+        private final JsonObject catalogConfig;
+
+        CatalogOnlySettingsService(JsonObject catalogConfig) {
+            this.catalogConfig = catalogConfig;
+        }
+
+        @Override
+        public JsonObject getCodexModelDisplayConfig() {
+            return catalogConfig.deepCopy();
+        }
+    }
+
+    private static class RecordingJsCallback implements HandlerContext.JsCallback {
+        private String lastFunctionName = "";
+        private String lastArg = "";
+
+        @Override
+        public void callJavaScript(String functionName, String... args) {
+            this.lastFunctionName = functionName;
+            this.lastArg = args != null && args.length > 0 ? args[0] : "";
+        }
+
+        @Override
+        public String escapeJs(String str) {
+            return str;
+        }
     }
 }

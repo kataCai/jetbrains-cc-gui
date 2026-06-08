@@ -99,6 +99,9 @@ export interface ChatScreenProps {
   onStreamingEnabledChange: ProviderState['handleStreamingEnabledChange'];
   onAutoOpenFileEnabledChange: ProviderState['handleAutoOpenFileEnabledChange'];
   onLongContextChange: ProviderState['handleLongContextChange'];
+  onOpenCodexProviderSettings?: () => void;
+  onOpenCodexProviderModelManagement?: () => void;
+  onOpenCodexModelAliasSettings?: () => void;
 
   // Message queue
   messageQueue: MessageQueueValue;
@@ -132,6 +135,9 @@ export const ChatScreen = ({
   onModeSelect, onModelSelect, onAgentSelect, onReasoningChange, onToggleThinking,
   onStreamingEnabledChange,
   onAutoOpenFileEnabledChange, onLongContextChange,
+  onOpenCodexProviderSettings,
+  onOpenCodexProviderModelManagement,
+  onOpenCodexModelAliasSettings,
   messageQueue, onRemoveFromQueue,
 }: ChatScreenProps) => {
   const { t } = useTranslation();
@@ -141,10 +147,22 @@ export const ChatScreen = ({
     setSettingsInitialTab, setCurrentView,
     contextInfo, setContextInfo,
     setAddModelDialogOpen,
+    setCodexProviderEntryIntent,
     addToast,
     draftInput, setDraftInput,
     openChangelogDialog,
   } = useUIState();
+
+  /**
+   * 统一封装聊天区跳转到 Codex 设置页的入口。
+   * 通过显式 intent 区分“新增供应商”“管理当前供应商”“模型别名”，避免继续复用旧的单一别名弹窗入口。
+   */
+  const openCodexProviderSettings = (intent: 'addProvider' | 'editActiveProvider' | 'addModelAlias') => {
+    setAddModelDialogOpen(false);
+    setCodexProviderEntryIntent(intent);
+    setSettingsInitialTab('providers');
+    setCurrentView('settings');
+  };
 
   return (
     <>
@@ -263,8 +281,16 @@ export const ChatScreen = ({
             setCurrentView('settings');
           }}
           onOpenModelSettings={() => {
+            if (currentProvider === 'codex') {
+              openCodexProviderSettings('addProvider');
+              return;
+            }
+            setCodexProviderEntryIntent('idle');
             setAddModelDialogOpen(true);
           }}
+          onOpenCodexProviderSettings={onOpenCodexProviderSettings ?? (() => openCodexProviderSettings('addProvider'))}
+          onOpenCodexProviderModelManagement={onOpenCodexProviderModelManagement ?? (() => openCodexProviderSettings('editActiveProvider'))}
+          onOpenCodexModelAliasSettings={onOpenCodexModelAliasSettings ?? (() => openCodexProviderSettings('addModelAlias'))}
           hasMessages={messages.length > 0}
           onRewind={onRewind}
           statusPanelExpanded={statusPanelExpanded}

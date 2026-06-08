@@ -110,6 +110,11 @@ interface Window {
   addToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 
   /**
+   * Show Codex provider test result.
+   */
+  showTestResult?: (payloadOrSuccess: string | boolean, message?: string) => void;
+
+  /**
    * Toast deferred until a session transition finishes, because backend
    * clearMessages resets transient UI state during new-session creation.
    */
@@ -405,6 +410,11 @@ interface Window {
   __pendingUsageStatistics?: string;
 
   /**
+   * Pending Codex model state before callback registration
+   */
+  __pendingCodexModelState?: string;
+
+  /**
    * Update slash commands list (from SDK)
    */
   updateSlashCommands?: (json: string) => void;
@@ -607,6 +617,13 @@ interface Window {
    * 同步回聊天输入区，避免前端静态列表覆盖真实运行时状态。
    */
   updateCodexModelState?: (json: string) => void;
+
+  /**
+   * 更新 Codex 统一模型目录。
+   * 后端会把 provider 维度拍平后的 catalog 一次性回推给前端，
+   * 供聊天区和设置页共享同一份可见/可运行模型列表。
+   */
+  updateCodexModelCatalog?: (json: string) => void;
 
 // ============================================================================
   // Streaming Callbacks

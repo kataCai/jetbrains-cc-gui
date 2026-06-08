@@ -44,6 +44,79 @@
   flex-direction: column;
 }
 
+.providerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.providerMetaItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-tertiary, #3a3a3a) 82%, transparent);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.providerMetaLabel {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.providerMetaValue {
+  color: var(--text-primary);
+}
+
+.cliLoginCard {
+  align-items: flex-start;
+}
+
+.cliLoginDescription {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.cliLoginReadonlyHint {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #1d4ed8 8%, transparent);
+  border: 1px solid color-mix(in srgb, #1d4ed8 18%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cliLoginActions {
+  align-self: stretch;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cliLoginActiveButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, #0078d4 45%, transparent);
+  background: color-mix(in srgb, #0078d4 14%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: default;
+}
+
 .providerListHeader {
   display: flex;
   justify-content: space-between;

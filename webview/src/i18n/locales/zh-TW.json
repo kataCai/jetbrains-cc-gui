@@ -49,6 +49,9 @@
     "codexCustomBaseUrlWarning": "目前使用自訂 OpenAI base URL：{{baseUrl}}。上游服務可能不完全支援模型切換。",
     "codexCustomBaseUrlWarningTitle": "自訂 OpenAI base URL",
     "codexCustomBaseUrlWarningDescription": "{{baseUrl}} 可能不支援全部模型選擇。",
+    "addCodexProviderAction": "新增 Codex 供應商配置...",
+    "manageCurrentCodexProviderModelsAction": "管理目前供應商模型...",
+    "addCodexModelAliasAction": "新增模型別名（進階）...",
     "removeAttachment": "移除附件",
     "closePreview": "關閉預覽",
     "loadingDropdown": "載入中...",
@@ -110,16 +113,7 @@
       "completed": "已完成",
       "final_error": "需處理"
     },
-    "totalDuration": "本次耗時",
-    "compactSummary": {
-      "summarizedConversation": "已總結的對話",
-      "compactSummary": "對話摘要",
-      "messagesUpTo": "已總結此節點之前的 {{count}} 則訊息",
-      "messagesFrom": "已總結此節點之後的 {{count}} 則訊息",
-      "userContext": "補充說明：「{{context}}」",
-      "expand": "展開摘要",
-      "collapse": "摺疊摘要"
-    }
+    "totalDuration": "本次耗時"
   },
   "settings": {
     "title": "設定",
@@ -151,8 +145,7 @@
         "japanese": "日本語",
         "russian": "Русский",
         "korean": "한국어",
-        "portuguese": "Português (Brasil)",
-        "followIde": "跟隨 IDE"
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Node.js 路徑",
@@ -261,11 +254,6 @@
           "finalError": "最終失敗",
           "completed": "已完成"
         }
-      },
-      "permissionDialogTimeout": {
-        "label": "權限與提問對話框超時時間",
-        "unit": "秒",
-        "hint": "設定 Claude 提問對話框和權限請求對話框的超時時間（30~3600 秒）。超時後對話框將自動關閉，Claude 會繼續執行。"
       }
     },
     "providers": "供應商管理",
@@ -278,7 +266,8 @@
       "title": "自訂模型",
       "description": "在此新增的自訂模型將在所有供應商下可見，顯示在模型選擇清單的最前面",
       "dialogTitle": "管理自訂模型",
-      "manage": "管理模型"
+      "manage": "管理模型",
+      "createProviderFromModel": "建立供應商"
     },
     "dependencies": "SDK 依賴",
     "dependenciesDesc": "管理 AI SDK 依賴套件的安裝和更新",
@@ -340,11 +329,6 @@
         "label": "Code Review AI Additional Prompt",
         "placeholder": "This feature is under development, stay tuned...",
         "hint": "Code Review AI will help you automatically review code, identify potential issues, and provide improvement suggestions. You can configure review preferences and focus areas here."
-      },
-      "projectPrompt": {
-        "label": "專案級附加提示詞",
-        "placeholder": "在此新增當前專案的專屬要求，例如：scope 必須使用模組名、commit body 需包含影響範圍等...",
-        "hint": "此提示詞僅對當前專案生效，與全域附加提示詞同時拼接。當兩者內容矛盾時，以專案提示詞為準。不同專案可獨立配置。"
       }
     },
     "agents": "Agents",
@@ -594,35 +578,78 @@
     "agentsComingSoon": "Agents配置功能即將推出...",
     "skillsComingSoon": "Skills配置功能即將推出...",
     "codexProvider": {
-      "title": "Codex Provider Management",
-      "description": "Manage Codex provider configurations, settings will be written to ~/.codex/ directory",
-      "emptyProvider": "No Codex providers configured, click Add to create one",
-      "deleteConfirmTitle": "Confirm Delete",
-      "deleteConfirmMessage": "Are you sure you want to delete provider \"{{name}}\"? This action cannot be undone.",
+      "title": "Codex 供應商管理",
+      "description": "管理 CC-GUI 自有的 Codex 執行期配置，預設不會改寫 ~/.codex/ 即時配置",
+      "emptyProvider": "暫無 Codex 供應商配置，點選新增建立",
+      "quickCreateTitle": "新增供應商",
+      "quickCreateDescription": "為 Codex 配置可執行的供應商、Base URL、API Key 和模型列表",
+      "aliasTitle": "模型別名（進階）",
+      "aliasDescription": "只補充模型選擇列表展示項，不保存供應商、密鑰和請求地址",
+      "noActiveProviderForManage": "目前沒有可編輯的啟用 Codex 供應商，請先新增或啟用一個供應商。",
+      "providerTypeMeta": "模板：{{type}}",
+      "baseUrlMeta": "Base URL：{{baseUrl}}",
+      "modelCountMeta": "模型數：{{count}}",
+      "deleteConfirmTitle": "確認刪除",
+      "deleteConfirmMessage": "確定要刪除供應商 \"{{name}}\" 嗎？此操作無法復原。",
       "dialog": {
-        "addTitle": "Add Codex Provider",
-        "editTitle": "Edit Provider: {{name}}",
-        "addDescription": "Configure new Codex provider, will be written to ~/.codex/ directory",
-        "editDescription": "Changes will be applied immediately to ~/.codex/ directory",
-        "providerName": "Provider Name",
-        "providerNamePlaceholder": "e.g., Codex Official",
+        "addTitle": "新增 Codex 供應商",
+        "editTitle": "編輯供應商: {{name}}",
+        "addDescription": "配置新的 Codex 執行期供應商資訊，資料將保存到 CC-GUI 本地配置",
+        "editDescription": "更新後僅影響 CC-GUI 請求級執行期配置，不會直接覆蓋 ~/.codex/",
+        "providerPreset": "供應商模板",
+        "providerPresetPlaceholder": "選擇模板",
+        "providerName": "供應商名稱",
+        "providerNamePlaceholder": "例如：Codex 官方",
+        "websiteUrl": "官網連結",
+        "websiteUrlPlaceholder": "例如：https://platform.example.com",
+        "apiKeyApplyUrl": "取得 API Key",
+        "apiKeyApplyUrlPlaceholder": "例如：https://platform.example.com/token",
         "configJson": "Config",
         "authJsonLabel": "Config",
         "formatJson": "Format",
         "formatSuccess": "Format successful",
         "formatError": "Format failed, invalid JSON",
-        "nameRequired": "Please enter provider name",
+        "nameRequired": "請輸入供應商名稱",
+        "authMode": "鑑權模式",
+        "authModeHint": "區分 CC-GUI 請求級配置與 Codex CLI 本地登入狀態來源。",
+        "requestMode": "請求模式",
+        "requestModeHint": "定義目前 provider 的請求鏈路；非 codex_sdk 模式用於後續代理或適配器擴展。",
+        "baseUrl": "Base URL",
+        "baseUrlPlaceholder": "例如：https://api.openai.com/v1",
+        "baseUrlHint": "請求級 endpoint，僅在目前 provider 發送訊息時生效。",
+        "apiKey": "API Key",
+        "apiKeyPlaceholder": "請輸入本地保存的 API Key",
+        "apiKeyEnv": "API Key 環境變數",
+        "apiKeyEnvPlaceholder": "例如：OPENAI_API_KEY",
+        "apiKeyEnvHint": "執行時會優先讀取此環境變數；為空時可回退到本地保存的 API Key。",
+        "apiKeyMaskedHint": "目前保存值：{{masked}}",
+        "apiKeyOrEnvRequired": "請至少配置 API Key 或 API Key 環境變數",
+        "baseUrlRequired": "目前請求模式需要配置 Base URL",
         "configJsonError": "config.toml JSON format error",
         "authJsonError": "auth.json JSON format error",
         "configJsonHint": "JSON object containing model_provider, model, model_providers, etc.",
         "authJsonHint": "JSON object containing OPENAI_API_KEY and other auth info",
         "customModels": "Custom Models",
         "customModelsHint": "Add extra models supported by this provider. Custom models will appear at the top of the model selection list",
-        "noCustomModels": "No custom models",
-        "addModel": "Add Model",
-        "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
-        "modelLabelPlaceholder": "Display name (optional)",
-        "modelDescPlaceholder": "Model description (optional)",
+        "models": "模型列表",
+        "modelsHint": "使用 JSON 陣列編輯目前 provider 的模型列表，例如 [{\"id\":\"gpt-5.4\",\"label\":\"GPT-5.4\"}]。",
+        "modelList": "模型列表",
+        "modelAliasHelp": "模型列表決定該 provider 在聊天區可選的模型項。",
+        "modelsRequired": "請至少配置一個模型",
+        "noCustomModels": "暫無自訂模型",
+        "addModel": "新增模型",
+        "addModelRow": "新增模型",
+        "modelIdPlaceholder": "模型 ID（必填，如 gpt-5.4）",
+        "modelLabelPlaceholder": "顯示名稱（選填）",
+        "modelDescriptionPlaceholder": "模型描述（選填）",
+        "modelDescPlaceholder": "模型描述（選填）",
+        "reasoningEffortPlaceholder": "預設推理強度",
+        "advancedJsonToggle": "進階 JSON 編輯",
+        "advancedJsonHelp": "可批次貼上模型 JSON 陣列後同步到結構化清單。",
+        "modelsJsonLabel": "模型 JSON",
+        "applyModelsJson": "套用 JSON",
+        "modelsJsonInvalid": "模型 JSON 格式無效",
+        "saveAndActivate": "保存並啟用",
         "cliLoginProviderName": "Codex CLI 登入",
         "cliLoginProviderDescription": "使用 Codex CLI 的 ChatGPT 訂閱憑證登入",
         "cliLoginAuthorizeTitle": "啟用 Codex CLI 登入",
@@ -630,9 +657,22 @@
         "cliLoginAuthorizeDetail": "請確保您已透過終端執行 'codex login' 登入。當前的 config.toml 將被備份。",
         "cliLoginDisableTitle": "停用 Codex CLI 登入",
         "cliLoginDisableMessage": "將恢復先前的 config.toml 並切換 API Key 認證方式。",
-        "modelIdRequired": "Model ID is required",
-        "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
-        "modelIdDuplicate": "Model ID already exists",
+        "authModeOptions": {
+          "api_key": "本地 API Key",
+          "api_key_env": "環境變數 API Key",
+          "codex_cli_login": "Codex CLI Login",
+          "proxy": "代理鑑權",
+          "oauth": "OAuth"
+        },
+        "requestModeOptions": {
+          "codex_sdk": "Codex SDK",
+          "cc_switch_proxy": "CC Switch Proxy",
+          "custom_adapter": "Custom Adapter"
+        },
+        "testProvider": "測試連線",
+        "modelIdRequired": "請輸入模型 ID",
+        "modelIdInvalid": "模型 ID 格式無效（僅允許字母、數字、點、連字號、底線、斜線和冒號）",
+        "modelIdDuplicate": "模型 ID 已存在",
         "envVarsTitle": "Environment Variables",
         "messageEnvLabel": "Message Environment Variables",
         "messageEnvHint": "Custom environment variables injected into the Codex message subprocess",
@@ -645,7 +685,38 @@
         "envKeyProtected": "Cannot set built-in variable: {{key}}",
         "envKeyDuplicate": "Duplicate key: {{key}}",
         "envValueTooLong": "變數值過長（最大 {{max}} 字元）"
-      }
+      },
+      "cliLogin": {
+        "title": "Use local Codex CLI profile",
+        "description": "Read your existing Codex CLI login and default settings so you can use them in CC-GUI.",
+        "readonlyHint": "Read-only access. The plugin never overwrites ~/.codex/config.toml or auth.json.",
+        "authorizationStatus": "Authorization",
+        "currentUsageStatus": "Request Source",
+        "authorized": "Authorized",
+        "notAuthorized": "Not authorized",
+        "currentlyUsed": "Currently used",
+        "notInUse": "Not in use",
+        "authorizeOnly": "Authorize",
+        "useForRequests": "Use for requests",
+        "currentlyUsingAction": "Currently in use"
+      },
+      "modelsTitle": "Models",
+      "modelsDescription": "Control which Codex models appear in the chat model picker.",
+      "modelsSearchPlaceholder": "Search by model or provider",
+      "modelsEmpty": "No matching models",
+      "modelsViewAll": "View All Models",
+      "modelsCollapse": "Collapse",
+      "modelsVisibleSectionTitle": "Visible models",
+      "modelsAllSectionTitle": "All matching models",
+      "modelsUnavailable": "Available after authorization",
+      "modelsSource": {
+        "codex_cli_login": "CLI Login",
+        "managed_provider": "Managed Provider",
+        "plugin_custom": "Model Alias",
+        "local_config": "Local Config"
+      },
+      "requestModeUnavailableBadge": "Coming Soon",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled."
     },
     "agent": {
       "title": "智慧體",
@@ -782,8 +853,7 @@
       "WebSearch": "網頁搜尋",
       "WebFetch": "獲取網頁",
       "execute": "執行 {{toolName}}",
-      "readDirectory": "讀取目錄",
-      "timeoutWarning": "請儘快回答，對話框將在 {{seconds}} 秒後自動關閉"
+      "readDirectory": "讀取目錄"
     }
   },
   "askUserQuestion": {
@@ -1292,12 +1362,16 @@
     },
     "codex": {
       "gpt55": {
-        "label": "GPT-5.5",
-        "description": "最新前沿模型，能力進一步增強"
+        "label": "gpt-5.5",
+        "description": "適用於複雜編碼、研究與真實工作場景的前沿模型。"
       },
       "gpt53codex": {
         "label": "GPT-5.3-Codex",
         "description": "最新前沿智慧編程模型，能力全面增強"
+      },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "最新前沿模型，能力進一步增強"
       },
       "gpt54": {
         "label": "gpt-5.4",
@@ -1514,33 +1588,5 @@
     "retry": "重試",
     "close": "關閉",
     "later": "稍後處理"
-  },
-  "errorDiagnostic": {
-    "copyCommand": "複製",
-    "copied": "已複製",
-    "openDependencySettings": "開啟相依性管理",
-    "recommended": "推薦",
-    "codexThreadResume": {
-      "title": "工作階段執行緒已失效",
-      "intro": "新建工作階段即可解決此問題。目前工作階段的執行緒 ID 在 Codex 伺服器端已不存在。",
-      "reason": "Codex 服務端會在一段時間後清除舊執行緒，繼續上一次工作階段時可能觸發此錯誤。"
-    },
-    "sdkNativeBinaryMissing": {
-      "title": "SDK 安裝不完整 — 缺少 native 二進位檔",
-      "intro": "這是淘寶 npm 鏡像源的已知問題（非外掛 bug）。鏡像源未完整同步 platform 檔案。可手動按以下方案處理：",
-      "reason": "淘寶源同步完成後此問題會自動消失，無需擔心。",
-      "solutions": {
-        "switchRegistry": {
-          "title": "方案一：暫時切換官方源重新安裝",
-          "step0": "1. 在終端機執行（切換到 npm 官方源）：",
-          "step1": "2. 開啟外掛設定中的「相依性管理」，點選重新安裝：",
-          "step2": "3. 重新安裝完成後，切回淘寶源："
-        },
-        "downgrade": {
-          "title": "方案二：版本回退",
-          "step0": "在「相依性管理」中將 SDK 版本切換到 v0.2.112 或更早版本，切換後需要重新啟動 IDEA。"
-        }
-      }
-    }
   }
 }

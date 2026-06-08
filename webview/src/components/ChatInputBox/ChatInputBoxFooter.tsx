@@ -43,6 +43,9 @@ export function ChatInputBoxFooter({
   onAgentSelect,
   onOpenAgentSettings,
   onAddModel,
+  onOpenCodexProviderSettings,
+  onOpenCodexProviderModelManagement,
+  onOpenCodexModelAliasSettings,
   onClearAgent,
   longContextEnabled = true,
   onLongContextChange,
@@ -81,6 +84,9 @@ export function ChatInputBoxFooter({
   onAgentSelect?: (agent: SelectedAgent) => void;
   onOpenAgentSettings?: () => void;
   onAddModel?: () => void;
+  onOpenCodexProviderSettings?: () => void;
+  onOpenCodexProviderModelManagement?: () => void;
+  onOpenCodexModelAliasSettings?: () => void;
   onClearAgent: () => void;
   longContextEnabled?: boolean;
   onLongContextChange?: (enabled: boolean) => void;
@@ -131,6 +137,9 @@ export function ChatInputBoxFooter({
         onAgentSelect={(agent) => onAgentSelect?.(agent)}
         onOpenAgentSettings={onOpenAgentSettings}
         onAddModel={onAddModel}
+        onOpenCodexProviderSettings={onOpenCodexProviderSettings}
+        onOpenCodexProviderModelManagement={onOpenCodexProviderModelManagement}
+        onOpenCodexModelAliasSettings={onOpenCodexModelAliasSettings}
         onClearAgent={onClearAgent}
         longContextEnabled={longContextEnabled}
         onLongContextChange={onLongContextChange}

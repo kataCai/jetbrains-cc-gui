@@ -320,10 +320,13 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     window.__turnStartedAt = undefined;
     const endedStreamingTurnId = streamingTurnIdRef.current;
     const endedStreamingMessageIndex = streamingMessageIndexRef.current;
-    // FIX: Prioritize streaming content over backend snapshot to prevent digit loss
-    // Streaming content has all the latest deltas (including the final one just flushed).
-    // Backend snapshot might be from an earlier coalescer push and may be incomplete.
-    const endedStreamingContent = streamingContentRef.current || backendSnapshotContent || '';
+    // streaming delta 和后端快照都可能在收尾阶段略有滞后；
+    // 取更长的文本作为最终内容，既保留完整 delta，也避免丢掉刚落地的后端最终快照。
+    const streamingContent = streamingContentRef.current || '';
+    const snapshotContent = backendSnapshotContent || '';
+    const endedStreamingContent = snapshotContent.length > streamingContent.length
+      ? snapshotContent
+      : streamingContent;
     const endedBackendRaw = backendSnapshotRaw;
 
     type TextBlock = { type: 'text'; text: string };
