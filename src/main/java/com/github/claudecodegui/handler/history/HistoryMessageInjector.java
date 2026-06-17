@@ -29,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 public class HistoryMessageInjector {
 
     private static final Logger LOG = Logger.getInstance(HistoryMessageInjector.class);
+    private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
 
     private final HandlerContext context;
 
@@ -499,6 +500,8 @@ public class HistoryMessageInjector {
         try {
             CodexSessionBinding binding = context.getSettingsService().getCodexSessionBinding(threadIdToUse);
             if (binding == null || !binding.isMeaningful()) {
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.applyCodexSessionBinding skip threadId="
+                        + threadIdToUse + ", reason=missing_binding");
                 return;
             }
             context.getSession().setProvider("codex");
@@ -506,12 +509,33 @@ public class HistoryMessageInjector {
                 context.getSession().setModel(binding.getModel());
             }
             context.getSession().getState().setCodexSessionBinding(binding);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.applyCodexSessionBinding restored threadId="
+                    + threadIdToUse + ", binding=" + describeBinding(binding));
             LOG.info("[HistoryHandler] Restored Codex session binding for threadId=" + threadIdToUse
                     + ", providerId=" + binding.getProviderId()
                     + ", model=" + binding.getModel());
         } catch (Exception e) {
             LOG.warn("[HistoryHandler] Failed to restore Codex session binding: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 统一格式化历史恢复链路中的 Codex binding 诊断字段。
+     * 这里只输出非敏感元数据，便于和 SessionLifecycleManager/SessionSendService 的 trace 日志串联比对。
+     *
+     * @param binding 当前历史会话恢复出的 Codex binding
+     * @return 稳定的诊断文本；为空时返回 "(null)"
+     */
+    private String describeBinding(CodexSessionBinding binding) {
+        if (binding == null) {
+            return "(null)";
+        }
+        return "{providerId=" + binding.getProviderId()
+                + ", model=" + binding.getModel()
+                + ", requestMode=" + binding.getRequestMode()
+                + ", baseUrlSource=" + binding.getBaseUrlSource()
+                + ", effectiveConfigSource=" + binding.getEffectiveConfigSource()
+                + "}";
     }
 
     private void injectBatchToFrontend(List<JsonObject> frontendMessages) {

@@ -61,7 +61,6 @@ interface CodexProviderSectionProps {
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
-  onSwitchCodexProvider: (id: string) => void;
   onAuthorizeCodexLocalConfig?: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   showHeader?: boolean;
@@ -112,7 +111,6 @@ const CodexProviderSection = ({
   onEditCodexProvider,
   onDeleteCodexProvider,
   onTestCodexProvider,
-  onSwitchCodexProvider,
   onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
   showHeader = true,
@@ -286,24 +284,7 @@ const CodexProviderSection = ({
                 </div>
 
                 <div className={`${sharedStyles.cardActions} ${styles.cliLoginActions}`}>
-                  {isCliLoginActive ? (
-                    <>
-                      <button
-                        type="button"
-                        className={styles.cliLoginActiveButton}
-                        disabled={true}
-                      >
-                        {t('settings.codexProvider.cliLogin.currentlyUsingAction')}
-                      </button>
-                      <button
-                        className={sharedStyles.revokeButton}
-                        onClick={() => setShowCliLoginDisableConfirm(true)}
-                      >
-                        <span className="codicon codicon-circle-slash" />
-                        {t('settings.provider.revokeAuthorization')}
-                      </button>
-                    </>
-                  ) : !isCliLoginAuthorized ? (
+                  {!isCliLoginAuthorized ? (
                     <button
                       className={sharedStyles.useButton}
                       onClick={() => setShowCliLoginConfirm(true)}
@@ -312,22 +293,13 @@ const CodexProviderSection = ({
                       {t('settings.codexProvider.cliLogin.authorizeOnly')}
                     </button>
                   ) : (
-                    <>
-                      <button
-                        className={sharedStyles.useButton}
-                        onClick={() => onSwitchCodexProvider(SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN)}
-                      >
-                        <span className="codicon codicon-play" />
-                        {t('settings.codexProvider.cliLogin.useForRequests')}
-                      </button>
-                      <button
-                        className={sharedStyles.revokeButton}
-                        onClick={() => setShowCliLoginDisableConfirm(true)}
-                      >
-                        <span className="codicon codicon-circle-slash" />
-                        {t('settings.provider.revokeAuthorization')}
-                      </button>
-                    </>
+                    <button
+                      className={sharedStyles.revokeButton}
+                      onClick={() => setShowCliLoginDisableConfirm(true)}
+                    >
+                      <span className="codicon codicon-circle-slash" />
+                      {t('settings.provider.revokeAuthorization')}
+                    </button>
                   )}
                 </div>
               </div>
@@ -380,27 +352,6 @@ const CodexProviderSection = ({
                     </div>
 
                     <div className={sharedStyles.cardActions}>
-                      {provider.isActive ? (
-                        <div className={sharedStyles.activeBadge}>
-                          <span className="codicon codicon-check" />
-                          {t('settings.provider.inUse')}
-                        </div>
-                      ) : (
-                        <button
-                          className={sharedStyles.useButton}
-                          onClick={() => onSwitchCodexProvider(provider.id)}
-                          disabled={requestModeUnavailable}
-                          title={requestModeUnavailable
-                            ? t('settings.codexProvider.requestModeUnavailableTooltip')
-                            : undefined}
-                        >
-                          <span className="codicon codicon-play" />
-                          {t('settings.provider.enable')}
-                        </button>
-                      )}
-
-                      <div className={sharedStyles.divider} />
-
                       <div className={sharedStyles.actionButtons}>
                         <button
                           className={sharedStyles.iconBtn}

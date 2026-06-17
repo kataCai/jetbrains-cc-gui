@@ -45,6 +45,7 @@ import { useDialogs } from './contexts/DialogContext';
 import { getComposerUsageMode } from './components/ChatInputBox/modeViewModel';
 import type { ToolResultBlock } from './types';
 import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from './utils/permissionDialogTimeout';
+import { debugLog } from './utils/debug';
 
 /**
  * 仅允许弹出强提醒对话框的任务状态。
@@ -199,7 +200,11 @@ const App = () => {
    * @param reason 触发会话重建的配置变更来源，仅用于诊断日志
    */
   const handleCodexConversationConfigChanged = useCallback((reason: 'provider' | 'model' | 'activeProvider') => {
-    console.info('[CodexSessionIsolation] Reset conversation because runtime config changed:', reason);
+    debugLog('[CODEX_RUNTIME_TRACE][Webview] handleCodexConversationConfigChanged', {
+      reason,
+      currentSessionId: currentSessionIdRef.current,
+      customSessionTitle: customSessionTitleRef.current,
+    });
     forceCreateNewSessionRef.current?.();
   }, []);
 
@@ -276,10 +281,12 @@ const App = () => {
     usageUsedTokens,
     usageMaxTokens,
     setPermissionMode,
+    setCurrentProvider,
     setClaudePermissionMode,
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setActiveCodexProviderId,
     setDefaultCodexModelFromConfig,
     setCodexBaseUrl,
     setCodexUsesCustomBaseUrl,
@@ -422,11 +429,13 @@ const App = () => {
     setUsagePercentage,
     setUsageUsedTokens,
     setUsageMaxTokens,
+    setCurrentProvider,
     setPermissionMode,
     setClaudePermissionMode,
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setActiveCodexProviderId,
     setDefaultCodexModelFromConfig,
     setCodexBaseUrl,
     setCodexUsesCustomBaseUrl,

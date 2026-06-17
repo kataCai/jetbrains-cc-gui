@@ -2,8 +2,8 @@
  * Runtime provider capabilities subscriber registry.
  *
  * The Java bridge invokes a single set of `window.update*` callbacks to deliver
- * provider-list and active-provider updates. Multiple React components
- * (Settings hook, RuntimeProviderSelect, etc.) need to react to those events.
+ * provider-list and active-provider updates. Multiple React consumers
+ * (settings hooks, chat runtime selectors, etc.) need to react to those events.
  *
  * Registering a single dispatcher on `window` and routing events through a
  * subscriber Set keeps behavior deterministic regardless of mount order, and

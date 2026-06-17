@@ -17,10 +17,13 @@ import { sendBridgeEvent } from './utils/bridge';
 import { debugLog } from './utils/debug';
 import type { UiFontConfig } from './types/uiFontConfig';
 
+const enableVConsole =
+  import.meta.env.DEV || import.meta.env.VITE_ENABLE_VCONSOLE === 'true';
+
 // Silence noisy console output in production (including third-party libs).
 // console.error is preserved so ErrorBoundary and unhandled exceptions still
 // surface in the IDE's webview devtools — silencing it would hide regressions.
-if (!import.meta.env.DEV) {
+if (!import.meta.env.DEV && !enableVConsole) {
   const noop = () => {};
   console.log = noop;
   console.debug = noop;
@@ -29,8 +32,8 @@ if (!import.meta.env.DEV) {
 }
 
 // Install the runtime provider dispatcher exactly once so that every
-// consumer (Settings, RuntimeProviderSelect, …) receives provider events
-// through a deterministic subscriber registry instead of overriding
+// consumer (settings hooks, chat runtime selectors, etc.) receives provider
+// events through a deterministic subscriber registry instead of overriding
 // `window.update*Provider*` callbacks ad-hoc.
 installRuntimeProviderDispatchers();
 
@@ -91,9 +94,6 @@ function createBridgeHeartbeatStarter() {
 
 const startBridgeHeartbeat = createBridgeHeartbeatStarter();
 // vConsole debugging tool
-const enableVConsole =
-  import.meta.env.DEV || import.meta.env.VITE_ENABLE_VCONSOLE === 'true';
-
 if (enableVConsole) {
   void import('vconsole').then(({ default: VConsole }) => {
     new VConsole();
@@ -587,6 +587,14 @@ if (typeof window !== 'undefined' && !window.updateCodexModelState) {
   window.updateCodexModelState = (json: string) => {
     debugLog('[Main] Storing pending codex model state, length=' + (json ? json.length : 0));
     window.__pendingCodexModelState = json;
+  };
+}
+
+if (typeof window !== 'undefined' && !window.restoreTabRuntimeState) {
+  debugLog('[Main] Pre-registering restoreTabRuntimeState placeholder');
+  window.restoreTabRuntimeState = (json: string) => {
+    debugLog('[Main] Storing pending tab runtime state, length=' + (json ? json.length : 0));
+    window.__pendingTabRuntimeState = json;
   };
 }
 

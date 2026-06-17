@@ -36,6 +36,7 @@ public class SettingsHandler extends BaseMessageHandler {
         "set_model",
         "set_selected_codex_model",
         "select_codex_model",
+        "set_tab_codex_provider",
         "set_provider",
         "set_reasoning_effort",
         "get_codex_model_state",
@@ -163,6 +164,9 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "select_codex_model":
                 modelProviderHandler.handleSelectCodexModel(content);
+                return true;
+            case "set_tab_codex_provider":
+                modelProviderHandler.handleSetTabCodexProvider(content);
                 return true;
             case "set_provider":
                 modelProviderHandler.handleSetProvider(content);

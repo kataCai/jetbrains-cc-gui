@@ -270,7 +270,6 @@ const SettingsView = ({
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
-    handleSwitchCodexProvider,
     handleAuthorizeCodexLocalConfig,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
@@ -608,7 +607,6 @@ const SettingsView = ({
               onEditCodexProvider={handleEditCodexProvider}
               onDeleteCodexProvider={handleDeleteCodexProvider}
               onTestCodexProvider={handleTestCodexProvider}
-              onSwitchCodexProvider={handleSwitchCodexProvider}
               onAuthorizeCodexLocalConfig={handleAuthorizeCodexLocalConfig}
               onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
               onRefreshCodexModelCatalog={loadCodexModelCatalog}

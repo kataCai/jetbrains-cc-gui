@@ -8,7 +8,7 @@ vi.mock('react-i18next', () => ({
     t: (key: string) => {
       const translations: Record<string, string> = {
         'settings.providers': 'Providers',
-        'settings.providersDesc': 'Manage Claude and Codex providers',
+        'settings.providersDesc': 'Manage Claude and Codex provider configurations. Apply runtime provider or model changes from the chat model picker.',
         'settings.providerTab.claude': 'Claude Code',
         'settings.providerTab.codex': 'Codex',
         'settings.pluginModels.title': 'Custom Models',
@@ -17,7 +17,7 @@ vi.mock('react-i18next', () => ({
         'settings.codexProvider.quickCreateDescription': 'Create a runnable Codex provider with Base URL, API Key, and models',
         'settings.codexProvider.aliasTitle': 'Model Aliases (Advanced)',
         'settings.codexProvider.aliasDescription': 'Only affect model picker display entries',
-        'settings.codexProvider.description': 'Manage Codex providers',
+        'settings.codexProvider.description': 'Manage CC-GUI Codex runtime profiles here. Use the chat model picker to apply them per tab.',
         'settings.provider.allProviders': 'All Providers',
         'settings.codexProvider.modelsTitle': 'Models',
         'settings.codexProvider.modelsDescription': 'Control which Codex models appear in the chat model picker.',
@@ -104,7 +104,6 @@ describe('ProviderTabSection', () => {
   const onEditCodexProvider = vi.fn();
   const onDeleteCodexProvider = vi.fn();
   const onTestCodexProvider = vi.fn();
-  const onSwitchCodexProvider = vi.fn();
   const onAuthorizeCodexLocalConfig = vi.fn();
   const onRevokeCodexLocalConfigAuthorization = vi.fn();
   const onRefreshCodexModelCatalog = vi.fn();
@@ -114,6 +113,42 @@ describe('ProviderTabSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+  });
+
+  /**
+   * 验证设置页整体文案明确表达“这里只做配置管理”，而不是运行时切换入口。
+   * 断言意图：供应商和模型的即时应用应继续走聊天区模型选择器，避免设置页重新承担会话切换职责。
+   */
+  it('frames provider settings as configuration management rather than a runtime switch entry', () => {
+    render(
+      <ProviderTabSection
+        currentProvider="codex"
+        providers={[]}
+        loading={false}
+        onAddProvider={onAddProvider}
+        onEditProvider={onEditProvider}
+        onDeleteProvider={onDeleteProvider}
+        onSwitchProvider={onSwitchProvider}
+        codexProviders={[]}
+        codexLoading={false}
+        codexModelCatalog={emptyCatalog}
+        codexModelCatalogLoading={false}
+        onAddCodexProvider={onAddCodexProvider}
+        onCreateCodexProviderFromAlias={onCreateCodexProviderFromAlias}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onTestCodexProvider={onTestCodexProvider}
+        onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+        onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
+        onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        addToast={addToast}
+      />,
+    );
+
+    expect(screen.getByText('Manage Claude and Codex provider configurations. Apply runtime provider or model changes from the chat model picker.')).toBeTruthy();
+    expect(screen.getByText('Manage CC-GUI Codex runtime profiles here. Use the chat model picker to apply them per tab.')).toBeTruthy();
+    expect(screen.queryByText('Switch provider')).toBeNull();
   });
 
   /**
@@ -138,7 +173,6 @@ describe('ProviderTabSection', () => {
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
-        onSwitchCodexProvider={onSwitchCodexProvider}
         onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
@@ -177,7 +211,6 @@ describe('ProviderTabSection', () => {
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
-        onSwitchCodexProvider={onSwitchCodexProvider}
         onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
@@ -213,7 +246,6 @@ describe('ProviderTabSection', () => {
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
-        onSwitchCodexProvider={onSwitchCodexProvider}
         onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
@@ -224,7 +256,7 @@ describe('ProviderTabSection', () => {
 
     expect(screen.getAllByText('Codex')).toHaveLength(3);
     expect(screen.getByText('All Providers')).toBeTruthy();
-    expect(screen.getByText('Manage Codex providers')).toBeTruthy();
+    expect(screen.getByText('Manage CC-GUI Codex runtime profiles here. Use the chat model picker to apply them per tab.')).toBeTruthy();
     expect(screen.getByText('Models')).toBeTruthy();
     expect(screen.getByText('Control which Codex models appear in the chat model picker.')).toBeTruthy();
     expect(screen.getByText('Provider Header Hidden')).toBeTruthy();
@@ -253,7 +285,6 @@ describe('ProviderTabSection', () => {
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
         onTestCodexProvider={onTestCodexProvider}
-        onSwitchCodexProvider={onSwitchCodexProvider}
         onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}

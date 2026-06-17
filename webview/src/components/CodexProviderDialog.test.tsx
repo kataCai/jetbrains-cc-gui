@@ -67,7 +67,6 @@ vi.mock('react-i18next', () => ({
         'settings.provider.dialog.hideApiKey': '隐藏',
         'settings.provider.dialog.confirmAdd': '保存',
         'settings.provider.dialog.saveChanges': '保存修改',
-        'settings.codexProvider.dialog.saveAndActivate': '保存并激活',
         'common.cancel': '取消',
         'common.close': '关闭',
         'common.add': '添加',
@@ -182,11 +181,11 @@ describe('CodexProviderDialog', () => {
   });
 
   /**
-   * 验证“保存并激活”会把新增字段一并透传给 onSave。
+   * 验证保存会把新增字段一并透传给 onSave。
    * 断言 providerType/presetId/websiteUrl/apiKeyApplyUrl 以及结构化 models 都存在，
    * 避免前端表单虽然显示出来，但提交时仍被旧 payload 丢掉。
    */
-  it('应在保存并激活时提交 provider 元信息与结构化模型列表', () => {
+  it('应在保存时提交 provider 元信息与结构化模型列表', () => {
     render(
       <CodexProviderDialog
         isOpen
@@ -207,7 +206,7 @@ describe('CodexProviderDialog', () => {
     fireEvent.change(screen.getByPlaceholderText('模型 ID'), { target: { value: 'gateway-chat' } });
     fireEvent.change(screen.getByPlaceholderText('显示名称'), { target: { value: 'Gateway Chat' } });
     fireEvent.change(screen.getByPlaceholderText('模型描述'), { target: { value: 'Gateway model' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存并激活' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       name: 'My Gateway',
@@ -217,7 +216,6 @@ describe('CodexProviderDialog', () => {
       apiKeyApplyUrl: 'https://gateway.example.com/token',
       baseUrl: 'https://gateway.example.com/v1',
       apiKey: 'sk-test-12345678',
-      autoActivate: true,
       models: [
         expect.objectContaining({
           id: 'gateway-chat',
@@ -314,7 +312,6 @@ describe('CodexProviderDialog', () => {
 
     expect(screen.getAllByText('当前模式暂未落地，请先切换到 Codex SDK。').length).toBeGreaterThanOrEqual(1);
     expect((screen.getByRole('button', { name: '保存修改' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '保存并激活' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

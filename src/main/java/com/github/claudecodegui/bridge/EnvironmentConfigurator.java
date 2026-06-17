@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
 public class EnvironmentConfigurator {
 
     private static final Logger LOG = Logger.getInstance(EnvironmentConfigurator.class);
+    private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
     private static final String CLAUDE_PERMISSION_ENV = "CLAUDE_PERMISSION_DIR";
     private static final String CLAUDE_SESSION_ID_ENV = "CLAUDE_SESSION_ID";
     private static final String CLAUDE_PERMISSION_SAFETY_NET_ENV = "CLAUDE_PERMISSION_SAFETY_NET_MS";
@@ -377,14 +378,49 @@ public class EnvironmentConfigurator {
      * @param env ProcessBuilder environment map to update
      */
     public void configureCodexEnv(Map<String, String> env) {
+        configureCodexEnv(env, null);
+    }
+
+    /**
+     * Configure Codex-specific environment variables with request-scoped runtime context.
+     * 这里的关键约束是：只有 CLI Login 请求才允许复用本地 `~/.codex/config.toml`
+     * 中声明的 `env_key`。托管 provider 请求即使全局授权态仍是 `cli_login`，
+     * 也必须跳过该同步，避免把全局本地配置重新耦合回当前 tab 的 request-scoped provider。
+     *
+     * @param env ProcessBuilder environment map to update
+     * @param effectiveConfigSource 当前请求的运行时配置来源；为空时回退到旧的全局访问模式判断
+     */
+    public void configureCodexEnv(Map<String, String> env, String effectiveConfigSource) {
         if (env == null) {
             return;
         }
 
         try {
             String accessMode = getCodexRuntimeAccessMode();
+            boolean requestScopedCliLogin = CodemossSettingsService.CODEX_RUNTIME_ACCESS_CLI_LOGIN
+                    .equals(safe(effectiveConfigSource));
+            boolean requestScopedManagedProvider = "codemoss_managed_provider".equals(safe(effectiveConfigSource));
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " configureCodexEnv start effectiveConfigSource="
+                    + safe(effectiveConfigSource)
+                    + ", globalAccessMode=" + safe(accessMode)
+                    + ", requestScopedCliLogin=" + requestScopedCliLogin
+                    + ", requestScopedManagedProvider=" + requestScopedManagedProvider);
             if (CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE.equals(accessMode)) {
                 LOG.debug("[Codex] Skipping env_key sync from ~/.codex/config.toml: local access is not authorized");
+                return;
+            }
+            if (requestScopedManagedProvider) {
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX
+                        + " configureCodexEnv skip reason=request_scoped_managed_provider, effectiveConfigSource="
+                        + safe(effectiveConfigSource)
+                        + ", globalAccessMode=" + safe(accessMode));
+                return;
+            }
+            if (effectiveConfigSource != null && !effectiveConfigSource.trim().isEmpty() && !requestScopedCliLogin) {
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX
+                        + " configureCodexEnv skip reason=request_scoped_non_cli_login, effectiveConfigSource="
+                        + safe(effectiveConfigSource)
+                        + ", globalAccessMode=" + safe(accessMode));
                 return;
             }
             if (!CodemossSettingsService.CODEX_RUNTIME_ACCESS_CLI_LOGIN.equals(accessMode)) {
@@ -393,6 +429,10 @@ public class EnvironmentConfigurator {
                 return;
             }
             LOG.info("[Codex] Enabling env_key sync from ~/.codex/config.toml because runtime access mode is cli_login");
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX
+                    + " configureCodexEnv enable reason=cli_login_allowed, effectiveConfigSource="
+                    + safe(effectiveConfigSource)
+                    + ", globalAccessMode=" + safe(accessMode));
 
             // 1. Find all env_key names from ~/.codex/config.toml
             Set<String> envKeyNames = parseCodexConfigEnvKeys();
@@ -515,6 +555,16 @@ public class EnvironmentConfigurator {
         }
 
         return null;
+    }
+
+    /**
+     * 统一规整字符串，避免日志中出现 null 字样，便于链路比对。
+     *
+     * @param value 原始字符串
+     * @return 去空白后的字符串；为空时返回空串
+     */
+    private String safe(String value) {
+        return value == null ? "" : value.trim();
     }
 
     /**

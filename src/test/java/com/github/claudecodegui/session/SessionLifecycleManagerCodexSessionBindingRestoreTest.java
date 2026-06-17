@@ -12,6 +12,7 @@ import java.lang.reflect.Proxy;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 /**
  * SessionLifecycleManager 中 Codex 会话绑定恢复行为测试。
@@ -64,7 +65,64 @@ public class SessionLifecycleManagerCodexSessionBindingRestoreTest {
 
         assertEquals("claude", session.getProvider());
         assertEquals("claude-sonnet-4-6", session.getModel());
-        assertEquals(null, session.getState().getCodexSessionBinding());
+        assertNull(session.getState().getCodexSessionBinding());
+    }
+
+    /**
+     * 验证 Codex 运行时切换后如果前端立即触发新会话创建，新 session 仍会继承旧 session 的 tab 级 binding。
+     * 这条用例直接覆盖本次真实故障根因：旧 session 已绑定 MiniMax，但 createNewSession 只复制 provider/model，
+     * 没有复制 providerId 等 binding 元数据时，后续发送会错误回退到全局 active provider。
+     */
+    @Test
+    public void shouldCopyCodexSessionBindingWhenCreatingNewSession() {
+        Project project = createProject();
+        RecordingHost host = new RecordingHost(project);
+        TestableSessionLifecycleManager manager = new TestableSessionLifecycleManager(host, null);
+        ClaudeSession oldSession = new ClaudeSession(project, null, null);
+        oldSession.setProvider("codex");
+        oldSession.setModel("MiniMax-M3");
+        oldSession.getState().setCodexSessionBinding(new CodexSessionBinding(
+                "managed-minimax",
+                "MiniMax-M3",
+                "codex_sdk",
+                "provider",
+                "managed_provider"
+        ));
+
+        ClaudeSession newSession = new ClaudeSession(project, null, null);
+        newSession.setProvider("codex");
+        newSession.setModel("MiniMax-M3");
+
+        manager.copyCodexSessionBindingForTest(oldSession, newSession);
+
+        assertNotNull(newSession.getState().getCodexSessionBinding());
+        assertEquals("managed-minimax", newSession.getState().getCodexSessionBinding().getProviderId());
+        assertEquals("MiniMax-M3", newSession.getState().getCodexSessionBinding().getModel());
+        assertEquals("codex_sdk", newSession.getState().getCodexSessionBinding().getRequestMode());
+        assertEquals("provider", newSession.getState().getCodexSessionBinding().getBaseUrlSource());
+        assertEquals("managed_provider", newSession.getState().getCodexSessionBinding().getEffectiveConfigSource());
+    }
+
+    /**
+     * 验证旧 session 不存在 Codex binding 时，复制逻辑不会给新 session 凭空注入脏状态。
+     * 这用于约束后续实现保持“只复制有效 binding，不扩大作用范围”的边界。
+     */
+    @Test
+    public void shouldSkipCopyWhenOldSessionHasNoCodexBinding() {
+        Project project = createProject();
+        RecordingHost host = new RecordingHost(project);
+        TestableSessionLifecycleManager manager = new TestableSessionLifecycleManager(host, null);
+        ClaudeSession oldSession = new ClaudeSession(project, null, null);
+        oldSession.setProvider("claude");
+        oldSession.setModel("claude-sonnet-4-6");
+
+        ClaudeSession newSession = new ClaudeSession(project, null, null);
+        newSession.setProvider("claude");
+        newSession.setModel("claude-sonnet-4-6");
+
+        manager.copyCodexSessionBindingForTest(oldSession, newSession);
+
+        assertNull(newSession.getState().getCodexSessionBinding());
     }
 
     /**
@@ -86,6 +144,16 @@ public class SessionLifecycleManagerCodexSessionBindingRestoreTest {
                     return binding;
                 }
             };
+        }
+
+        /**
+         * 暴露给测试的受控入口，用于直接验证“旧 session -> 新 session”的 Codex binding 复制行为。
+         *
+         * @param oldSession 作为绑定来源的旧会话
+         * @param newSession 待写入绑定的新会话
+         */
+        private void copyCodexSessionBindingForTest(ClaudeSession oldSession, ClaudeSession newSession) {
+            copyCodexSessionBindingIfPresent(oldSession, newSession);
         }
     }
 

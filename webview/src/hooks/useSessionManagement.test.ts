@@ -1,6 +1,11 @@
 import { act, renderHook } from '@testing-library/react';
 import { useSessionManagement } from './useSessionManagement.js';
 import type { HistoryData } from '../types/index.js';
+import { debugLog } from '../utils/debug.js';
+
+vi.mock('../utils/debug.js', () => ({
+  debugLog: vi.fn(),
+}));
 
 describe('useSessionManagement', () => {
   const t = ((key: string) => key) as any;
@@ -339,6 +344,40 @@ describe('useSessionManagement', () => {
     expect(window.__sessionTransitioning).toBe(true);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+  });
+
+  it('writes trace logs when forcing a new session because codex runtime changed', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [{ type: 'assistant', content: 'old turn', timestamp: new Date().toISOString() }],
+        loading: true,
+        historyData: null,
+        currentSessionId: 'codex-session-1',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.forceCreateNewSession();
+    });
+
+    expect(debugLog).toHaveBeenCalledWith(
+      '[CODEX_RUNTIME_TRACE][Webview] forceCreateNewSession',
+      expect.objectContaining({
+        loading: true,
+        currentSessionId: 'codex-session-1',
+      }),
+    );
+    expect(debugLog).toHaveBeenCalledWith(
+      '[CODEX_RUNTIME_TRACE][Webview] beginSessionTransition',
+      expect.objectContaining({
+        previousSessionId: 'codex-session-1',
+        nextSessionId: null,
+      }),
+    );
   });
 
   it('shows confirm dialog when creating new session with existing messages', () => {

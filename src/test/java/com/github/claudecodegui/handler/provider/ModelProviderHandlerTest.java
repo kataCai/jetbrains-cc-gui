@@ -2,27 +2,33 @@ package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.UsagePushService;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.intellij.openapi.project.Project;
 import org.junit.Test;
 
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * ModelProviderHandler 模型解析与上下文容量映射回归测试。
- * 这组测试覆盖两类关键行为：
- * 1. Claude 模型在 provider/env 映射后的真实模型解析；
- * 2. Claude/Codex/GPT 以及自定义容量后缀模型的上下文限制计算。
- * 并轨时需要同时保留本地主线补充的 GPT/Codex 容量映射和 upstream 新增的容量解析断言，避免任一侧能力回退。
+ * ModelProviderHandler 模型解析与标签页级 Codex 运行态回归测试。
+ * 该测试集既覆盖 Claude/Codex 模型解析，也覆盖“聊天页选择只影响当前标签”的隔离约束。
  */
 public class ModelProviderHandlerTest {
 
-    /**
-     * 验证主模型覆盖项优先级最高。
-     * 当前置了 ANTHROPIC_MODEL 时，不应再回退到 Sonnet/Opus/Haiku 的家族映射。
-     */
     @Test
     public void shouldPreferMainModelOverrideForAllClaudeModelFamilies() {
         JsonObject env = new JsonObject();
@@ -34,10 +40,6 @@ public class ModelProviderHandlerTest {
         assertEquals("glm-4.7", resolved);
     }
 
-    /**
-     * 验证 Claude 家族模型会按家族粒度读取映射配置。
-     * 这里覆盖 Haiku 家族，确保不同默认模型键的回退逻辑不被并轨破坏。
-     */
     @Test
     public void shouldUseFamilySpecificMappingForSelectedClaudeModel() {
         JsonObject env = new JsonObject();
@@ -48,10 +50,6 @@ public class ModelProviderHandlerTest {
         assertEquals("haiku-proxy", resolved);
     }
 
-    /**
-     * 验证非 Claude 自定义模型 ID 不会误套用 Claude Sonnet 映射。
-     * 该场景覆盖接入第三方代理模型时的边界，避免把任意模型名都按 Claude 规则重写。
-     */
     @Test
     public void shouldIgnoreSmallFastModelForHaikuResolution() {
         JsonObject env = new JsonObject();
@@ -72,10 +70,6 @@ public class ModelProviderHandlerTest {
         assertEquals("deepseek-v3", resolved);
     }
 
-    /**
-     * 验证当映射后的真实模型自带容量后缀时，会优先按真实模型容量推导上下文限制。
-     * 这能保证 UI 上选择 Claude 模型、但 provider 实际落到代理模型时，容量条仍然准确。
-     */
     @Test
     public void shouldUseResolvedModelForContextLimitWhenCapacitySuffixExists() {
         JsonObject env = new JsonObject();
@@ -87,11 +81,6 @@ public class ModelProviderHandlerTest {
         assertEquals(1_000_000, ModelProviderHandler.getModelContextLimit(resolved));
     }
 
-    /**
-     * 验证当前 UI 可见的 Codex/GPT 模型上下文限制映射。
-     * 这里同时覆盖本地主线补充的 gpt-5.5/gpt-5.4-mini/gpt-5.2，
-     * 以及 upstream 引入的 gpt-5.3-codex/gpt-5.4/gpt-5.2-codex，避免并轨后能力表回退。
-     */
     @Test
     public void shouldKeepExpectedContextLimitsForVisibleCodexModels() {
         assertEquals(400_000, ModelProviderHandler.getModelContextLimit("gpt-5.5"));
@@ -102,10 +91,6 @@ public class ModelProviderHandlerTest {
         assertEquals(258_000, ModelProviderHandler.getModelContextLimit("gpt-5.2-codex"));
     }
 
-    /**
-     * 验证 Claude 模型的基础容量和 [1m] 后缀容量映射。
-     * 该测试保证并轨后不破坏 200k / 1M 的容量语义，也覆盖 Haiku 无 1M 档位的边界。
-     */
     @Test
     public void shouldReturnCorrectContextLimitsForClaudeModels() {
         assertEquals(200_000, ModelProviderHandler.getModelContextLimit("claude-sonnet-4-6"));
@@ -117,10 +102,6 @@ public class ModelProviderHandlerTest {
         assertEquals(200_000, ModelProviderHandler.getModelContextLimit("claude-haiku-4-5"));
     }
 
-    /**
-     * 验证自定义模型名中的容量后缀解析。
-     * 这里覆盖 k/m 和大小写混用场景，确保后续 provider 返回代理模型名时仍能正确推导上下文限制。
-     */
     @Test
     public void shouldParseCapacitySuffixForCustomContextLimits() {
         assertEquals(500_000, ModelProviderHandler.getModelContextLimit("custom-model[500k]"));
@@ -128,9 +109,6 @@ public class ModelProviderHandlerTest {
         assertEquals(100_000, ModelProviderHandler.getModelContextLimit("custom-model[100K]"));
     }
 
-    /**
-     * 验证模型目录回调继续维持“数组载荷”协议，而不是把 visibility 包装对象直接透传到前端。
-     */
     @Test
     public void shouldReturnCatalogArrayForCodexModelCatalogCallback() throws Exception {
         RecordingJsCallback jsCallback = new RecordingJsCallback();
@@ -163,6 +141,120 @@ public class ModelProviderHandlerTest {
         assertTrue(jsCallback.lastArg.startsWith("["));
     }
 
+    @Test
+    public void shouldKeepSelectCodexModelScopedToCurrentTab() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TabScopedSettingsService settingsService = new TabScopedSettingsService();
+        settingsService.addProvider("provider-a", "gpt-5.4");
+
+        Project project = createProject();
+        ClaudeSession session = new ClaudeSession(project, null, null);
+        HandlerContext context = new HandlerContext(project, null, null, settingsService, jsCallback);
+        context.setSession(session);
+        AtomicInteger persistCount = new AtomicInteger();
+        context.setTabSessionPersistenceCallback(persistCount::incrementAndGet);
+
+        ModelProviderHandler handler = new ModelProviderHandler(context, new UsagePushService(context));
+        handler.handleSelectCodexModel("{\"providerId\":\"provider-a\",\"modelId\":\"gpt-5.4\"}");
+
+        assertFalse(settingsService.selectCodexModelCalled);
+        assertEquals("provider-a", settingsService.lastSetSelectedProviderId);
+        assertEquals("gpt-5.4", settingsService.lastSetSelectedModelId);
+        assertEquals("codex", session.getProvider());
+        assertEquals("gpt-5.4", session.getModel());
+        CodexSessionBinding binding = session.getState().getCodexSessionBinding();
+        assertNotNull(binding);
+        assertEquals("provider-a", binding.getProviderId());
+        assertEquals("gpt-5.4", binding.getModel());
+        assertEquals(1, persistCount.get());
+        assertTrue(jsCallback.functionNames.contains("window.restoreTabRuntimeState"));
+
+        JsonObject runtimePayload = jsCallback.findFirstPayload("window.restoreTabRuntimeState");
+        assertEquals("codex", runtimePayload.get("provider").getAsString());
+        assertEquals("gpt-5.4", runtimePayload.get("model").getAsString());
+        assertEquals("provider-a", runtimePayload.get("codexProviderId").getAsString());
+    }
+
+    @Test
+    public void shouldSwitchTabCodexProviderWithoutMutatingGlobalCurrentProvider() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TabScopedSettingsService settingsService = new TabScopedSettingsService();
+        settingsService.addProvider("provider-a", "gpt-5.4");
+        settingsService.addProvider("provider-b", "gpt-5.5");
+        settingsService.setInitialSelectedModel("provider-b", "gpt-5.5");
+
+        Project project = createProject();
+        ClaudeSession session = new ClaudeSession(project, null, null);
+        session.setProvider("codex");
+        session.setModel("gpt-5.4");
+        session.getState().setCodexSessionBinding(new CodexSessionBinding(
+                "provider-a",
+                "gpt-5.4",
+                "codex_sdk",
+                "provider",
+                "codemoss_managed_provider"
+        ));
+
+        HandlerContext context = new HandlerContext(project, null, null, settingsService, jsCallback);
+        context.setSession(session);
+        AtomicInteger persistCount = new AtomicInteger();
+        context.setTabSessionPersistenceCallback(persistCount::incrementAndGet);
+
+        ModelProviderHandler handler = new ModelProviderHandler(context, new UsagePushService(context));
+        handler.handleSetTabCodexProvider("{\"providerId\":\"provider-b\"}");
+
+        assertFalse(settingsService.selectCodexModelCalled);
+        assertEquals("", settingsService.lastSetSelectedProviderId);
+        assertEquals("provider-b", session.getState().getCodexSessionBinding().getProviderId());
+        assertEquals("gpt-5.5", session.getModel());
+        assertEquals(1, persistCount.get());
+
+        JsonObject runtimePayload = jsCallback.findFirstPayload("window.restoreTabRuntimeState");
+        assertEquals("provider-b", runtimePayload.get("codexProviderId").getAsString());
+        assertEquals("gpt-5.5", runtimePayload.get("model").getAsString());
+    }
+
+    @Test
+    public void describeCodexBindingForTraceShouldExposeSessionScopedSelection() {
+        CodexSessionBinding binding = new CodexSessionBinding(
+                "provider-b",
+                "gpt-5.5",
+                "codex_sdk",
+                "provider",
+                "managed_provider"
+        );
+
+        String description = ModelProviderHandler.describeCodexBindingForTrace(binding);
+
+        assertTrue(description.contains("providerId=provider-b"));
+        assertTrue(description.contains("model=gpt-5.5"));
+        assertTrue(description.contains("requestMode=codex_sdk"));
+        assertTrue(description.contains("baseUrlSource=provider"));
+        assertTrue(description.contains("effectiveConfigSource=managed_provider"));
+    }
+
+    private static Project createProject() {
+        return (Project) Proxy.newProxyInstance(
+                Project.class.getClassLoader(),
+                new Class[]{Project.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "isDisposed" -> false;
+                    case "getName" -> "model-provider-handler-test";
+                    default -> method.getReturnType().isPrimitive() ? defaultPrimitiveValue(method.getReturnType()) : null;
+                }
+        );
+    }
+
+    private static Object defaultPrimitiveValue(Class<?> primitiveType) {
+        if (primitiveType == boolean.class) {
+            return false;
+        }
+        if (primitiveType == char.class) {
+            return '\0';
+        }
+        return 0;
+    }
+
     private static class CatalogOnlySettingsService extends CodemossSettingsService {
         private final JsonObject catalogConfig;
 
@@ -176,7 +268,60 @@ public class ModelProviderHandlerTest {
         }
     }
 
+    private static class TabScopedSettingsService extends CodemossSettingsService {
+        private final Map<String, JsonObject> providers = new HashMap<>();
+        private final JsonObject selectedModel = new JsonObject();
+        private boolean selectCodexModelCalled;
+        private String lastSetSelectedProviderId = "";
+        private String lastSetSelectedModelId = "";
+
+        void addProvider(String providerId, String... modelIds) {
+            JsonObject provider = new JsonObject();
+            provider.addProperty("id", providerId);
+            JsonArray models = new JsonArray();
+            for (String modelId : modelIds) {
+                JsonObject model = new JsonObject();
+                model.addProperty("id", modelId);
+                models.add(model);
+            }
+            provider.add("models", models);
+            providers.put(providerId, provider);
+        }
+
+        void setInitialSelectedModel(String providerId, String modelId) {
+            selectedModel.addProperty("providerId", providerId);
+            selectedModel.addProperty("modelId", modelId);
+        }
+
+        @Override
+        public void setSelectedCodexModel(String providerId, String modelId) {
+            lastSetSelectedProviderId = providerId;
+            lastSetSelectedModelId = modelId;
+            selectedModel.addProperty("providerId", providerId);
+            selectedModel.addProperty("modelId", modelId);
+        }
+
+        @Override
+        public void selectCodexModel(String providerId, String modelId) {
+            selectCodexModelCalled = true;
+        }
+
+        @Override
+        public JsonObject getSelectedCodexModel() {
+            return selectedModel.deepCopy();
+        }
+
+        @Override
+        public JsonObject getCodexProviderById(String providerId) {
+            JsonObject provider = providers.get(providerId);
+            return provider == null ? null : provider.deepCopy();
+        }
+    }
+
     private static class RecordingJsCallback implements HandlerContext.JsCallback {
+        private final Gson gson = new Gson();
+        private final List<String> functionNames = new ArrayList<>();
+        private final List<String> payloads = new ArrayList<>();
         private String lastFunctionName = "";
         private String lastArg = "";
 
@@ -184,6 +329,17 @@ public class ModelProviderHandlerTest {
         public void callJavaScript(String functionName, String... args) {
             this.lastFunctionName = functionName;
             this.lastArg = args != null && args.length > 0 ? args[0] : "";
+            this.functionNames.add(functionName);
+            this.payloads.add(this.lastArg);
+        }
+
+        JsonObject findFirstPayload(String functionName) {
+            for (int i = 0; i < functionNames.size(); i++) {
+                if (functionName.equals(functionNames.get(i))) {
+                    return gson.fromJson(payloads.get(i), JsonObject.class);
+                }
+            }
+            return new JsonObject();
         }
 
         @Override

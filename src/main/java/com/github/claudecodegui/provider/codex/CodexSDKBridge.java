@@ -53,6 +53,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
     private static final String ENV_CODEX_SANDBOX_NETWORK_DISABLED = "CODEX_SANDBOX_NETWORK_DISABLED";
     private static final long MCP_TOOLS_TIMEOUT_MS = 65_000;
     private static final int MAX_ENV_VAR_VALUE_LENGTH = 16 * 1024;
+    private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
     private final CodexHistoryReader historyReader;
     private final CodemossSettingsService settingsService = new CodemossSettingsService();
 
@@ -666,11 +667,17 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 envConfigurator.updateProcessEnvironment(pb, node);
 
                 // Configure Codex-specific env vars from ~/.codex/config.toml
-                envConfigurator.configureCodexEnv(env);
+                envConfigurator.configureCodexEnv(env, effectiveProfile.getEffectiveConfigSource());
 
                 // Inject custom "message" env vars from active provider
                 injectCustomEnvVars(env, "message");
 
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " CodexSDKBridge.prepareProcessEnvironment effectiveConfigSource="
+                        + safe(effectiveProfile.getEffectiveConfigSource())
+                        + ", authMode=" + safe(effectiveProfile.getAuthMode())
+                        + ", providerId=" + safe(effectiveProfile.getProviderId())
+                        + ", hasRuntimeApiKey=" + !safe(effectiveProfile.getApiKey()).isEmpty()
+                        + ", hasRuntimeBaseUrl=" + !safe(effectiveProfile.getBaseUrl()).isEmpty());
                 LOG.info("[Codex] Final Node permission env snapshot: CODEX_SANDBOX_MODE=" +
                         env.get(ENV_CODEX_SANDBOX_MODE) + ", CODEX_SANDBOX=" +
                         env.get(ENV_CODEX_SANDBOX) + ", CODEX_CI=" + env.get(ENV_CODEX_CI) +
@@ -1147,6 +1154,16 @@ public class CodexSDKBridge extends BaseSDKBridge {
             LOG.debug("[Codex] Failed to check CLI login status: " + e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * 统一规整 trace 字段，避免日志中出现 null，便于 debug 包手工排查时直接全文检索。
+     *
+     * @param value 原始字符串
+     * @return 去空白后的字符串；为空时返回空串
+     */
+    private String safe(String value) {
+        return value == null ? "" : value.trim();
     }
 
     JsonObject buildStdinInput(

@@ -591,7 +591,7 @@ export default function CodexProviderDialog({
    *
    * @param autoActivate 是否在保存后立即切换为当前 provider
    */
-  const handleSave = (autoActivate: boolean) => {
+  const handleSave = () => {
     if (requestModeUnavailable) {
       addToast(t('settings.codexProvider.dialog.requestModeUnavailableHint'), 'error');
       return;
@@ -676,7 +676,6 @@ export default function CodexProviderDialog({
         adapterHeaders: parsedAdapterHeaders || {},
         adapterExtras: parsedAdapterExtras || {},
       } : undefined,
-      autoActivate,
     };
 
     onSave(providerData);
@@ -1162,19 +1161,11 @@ export default function CodexProviderDialog({
             </button>
             <button
               className="btn btn-secondary"
-              onClick={() => handleSave(false)}
+              onClick={handleSave}
               disabled={!providerName.trim() || requestModeUnavailable}
             >
               <span className="codicon codicon-save" />
               {isAdding ? t('settings.provider.dialog.confirmAdd') : t('settings.provider.dialog.saveChanges')}
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => handleSave(true)}
-              disabled={!providerName.trim() || requestModeUnavailable}
-            >
-              <span className="codicon codicon-play" />
-              {t('settings.codexProvider.dialog.saveAndActivate')}
             </button>
           </div>
         </div>

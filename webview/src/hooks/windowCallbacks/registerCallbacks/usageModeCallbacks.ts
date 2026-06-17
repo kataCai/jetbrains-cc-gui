@@ -18,11 +18,13 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setUsagePercentage,
     setUsageUsedTokens,
     setUsageMaxTokens,
+    setCurrentProvider,
     setPermissionMode,
     setClaudePermissionMode,
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setActiveCodexProviderId,
     setDefaultCodexModelFromConfig,
     setCodexBaseUrl,
     setCodexUsesCustomBaseUrl,
@@ -113,6 +115,55 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setSelectedCodexModel(modelId);
     }
   };
+
+  window.restoreTabRuntimeState = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr) as {
+        provider?: string;
+        model?: string;
+        permissionMode?: PermissionMode;
+        reasoningEffort?: ReasoningEffort;
+        codexProviderId?: string;
+      };
+
+      const nextProvider = data.provider === 'codex' ? 'codex' : 'claude';
+      setCurrentProvider(nextProvider);
+      currentProviderRef.current = nextProvider;
+
+      if (nextProvider === 'claude' && typeof data.model === 'string' && data.model.trim().length > 0) {
+        setSelectedClaudeModel(normalizeClaudeModelId(data.model));
+      }
+
+      if (nextProvider === 'codex' && typeof data.model === 'string' && data.model.trim().length > 0) {
+        const normalizedModel = data.model.trim();
+        setSelectedCodexModel(normalizedModel);
+        shouldAdoptCodexDefaultModelRef.current = false;
+      }
+
+      if (typeof data.codexProviderId === 'string') {
+        setActiveCodexProviderId(data.codexProviderId.trim());
+      }
+
+      updateMode(data.permissionMode, nextProvider);
+
+      if (
+        data.reasoningEffort === 'low'
+        || data.reasoningEffort === 'medium'
+        || data.reasoningEffort === 'high'
+        || data.reasoningEffort === 'xhigh'
+      ) {
+        setReasoningEffort(data.reasoningEffort);
+      }
+    } catch (error) {
+      console.error('[Frontend] Failed to restore tab runtime state:', error);
+    }
+  };
+
+  if (window.__pendingTabRuntimeState) {
+    const pending = window.__pendingTabRuntimeState;
+    delete window.__pendingTabRuntimeState;
+    window.restoreTabRuntimeState(pending);
+  }
 
   window.updateCodexModelState = (jsonStr: string) => {
     try {

@@ -31,6 +31,7 @@ public class SessionLifecycleManager {
 
     private static final Logger LOG = Logger.getInstance(SessionLifecycleManager.class);
     private static final String PERMISSION_MODE_PROPERTY_KEY = "claude.code.permission.mode";
+    private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
 
     /**
      * Host interface providing access to window-level dependencies.
@@ -86,8 +87,14 @@ public class SessionLifecycleManager {
         String previousPermissionMode = (oldSession != null) ? oldSession.getPermissionMode() : defaultSession.getPermissionMode();
         String previousProvider = (oldSession != null) ? oldSession.getProvider() : defaultSession.getProvider();
         String previousModel = (oldSession != null) ? oldSession.getModel() : defaultSession.getModel();
+        CodexSessionBinding previousCodexBinding = oldSession != null
+                ? oldSession.getState().getCodexSessionBinding()
+                : null;
         LOG.info("Preserving session state: mode=" + previousPermissionMode
                          + ", provider=" + previousProvider + ", model=" + previousModel);
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createNewSession preserve oldSession provider="
+                + previousProvider + ", model=" + previousModel
+                + ", binding=" + describeBinding(previousCodexBinding));
 
         host.invalidateSessionCallbacks();
         host.getStreamCoalescer().resetStreamState();
@@ -113,8 +120,12 @@ public class SessionLifecycleManager {
             newSession.setPermissionMode(previousPermissionMode);
             newSession.setProvider(previousProvider);
             newSession.setModel(previousModel);
+            copyCodexSessionBindingIfPresent(oldSession, newSession);
             LOG.info("Restored session state to new session: mode=" + previousPermissionMode
                              + ", provider=" + previousProvider + ", model=" + previousModel);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createNewSession restored newSession provider="
+                    + newSession.getProvider() + ", model=" + newSession.getModel()
+                    + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding()));
 
             completeNewSessionBootstrap(newSession, determineWorkingDirectory(),
                     "New session created successfully, working directory: ");
@@ -136,6 +147,13 @@ public class SessionLifecycleManager {
         LOG.info("Creating new session from template: " + template.getName());
 
         ClaudeSession oldSession = host.getSession();
+        CodexSessionBinding previousCodexBinding = oldSession != null
+                ? oldSession.getState().getCodexSessionBinding()
+                : null;
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createNewSessionFromTemplate preserve oldSession provider="
+                + (oldSession != null ? oldSession.getProvider() : "(none)")
+                + ", model=" + (oldSession != null ? oldSession.getModel() : "(none)")
+                + ", binding=" + describeBinding(previousCodexBinding));
 
         host.invalidateSessionCallbacks();
         host.getStreamCoalescer().resetStreamState();
@@ -173,9 +191,13 @@ public class SessionLifecycleManager {
                 newSession.setReasoningEffort(template.getReasoningEffort());
             }
             newSession.getState().setPsiContextEnabled(template.isPsiContextEnabled());
+            copyCodexSessionBindingIfPresent(oldSession, newSession);
 
             LOG.info("Applied template settings to new session: provider=" + template.getProvider()
                     + ", model=" + template.getModel() + ", mode=" + template.getPermissionMode());
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createNewSessionFromTemplate restored newSession provider="
+                    + newSession.getProvider() + ", model=" + newSession.getModel()
+                    + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding()));
 
             String workingDirectory = template.getCwd() != null && !template.getCwd().trim().isEmpty()
                     ? template.getCwd() : determineWorkingDirectory();
@@ -347,12 +369,51 @@ public class SessionLifecycleManager {
                 session.setModel(binding.getModel());
             }
             session.getState().setCodexSessionBinding(binding);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " restoreCodexSessionBindingIfPresent sessionId="
+                    + sessionId + ", binding=" + describeBinding(binding));
             LOG.info("[CODEX_RUNTIME] Restored Codex session binding during history load. sessionId="
                     + sessionId + ", providerId=" + binding.getProviderId() + ", model=" + binding.getModel());
         } catch (Exception e) {
             LOG.warn("[CODEX_RUNTIME] Failed to restore Codex session binding during history load: "
                     + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 复制旧 session 上的 Codex tab 级 binding 到新 session。
+     * 仅在旧 session 已经存在有效 binding 时执行复制，避免普通 Claude 会话被误注入 Codex 运行态。
+     *
+     * @param oldSession 作为 binding 来源的旧会话
+     * @param newSession 待写入 binding 的新会话
+     */
+    protected void copyCodexSessionBindingIfPresent(ClaudeSession oldSession, ClaudeSession newSession) {
+        if (oldSession == null || newSession == null) {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " skip binding copy because oldSession or newSession is null");
+            return;
+        }
+
+        CodexSessionBinding previousBinding = oldSession.getState().getCodexSessionBinding();
+        if (previousBinding == null || !previousBinding.isMeaningful()) {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " skip binding copy because oldSession has no meaningful binding");
+            return;
+        }
+
+        CodexSessionBinding copiedBinding = new CodexSessionBinding(
+                previousBinding.getProviderId(),
+                previousBinding.getModel(),
+                previousBinding.getRequestMode(),
+                previousBinding.getBaseUrlSource(),
+                previousBinding.getEffectiveConfigSource()
+        );
+        newSession.getState().setCodexSessionBinding(copiedBinding);
+        if (!copiedBinding.getProviderId().isEmpty() || "codex".equalsIgnoreCase(oldSession.getProvider())) {
+            newSession.setProvider("codex");
+        }
+        if (!copiedBinding.getModel().isEmpty()) {
+            newSession.setModel(copiedBinding.getModel());
+        }
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " copied binding from oldSession to newSession. oldBinding="
+                + describeBinding(previousBinding) + ", newBinding=" + describeBinding(copiedBinding));
     }
 
     /**
@@ -542,6 +603,24 @@ public class SessionLifecycleManager {
 
     private ClaudeSession createDefaultSession() {
         return new ClaudeSession(host.getProject(), host.getClaudeSDKBridge(), host.getCodexSDKBridge());
+    }
+
+    /**
+     * 生成便于日志检索的 Codex binding 摘要。
+     *
+     * @param binding 待描述的 binding
+     * @return 面向日志的摘要字符串
+     */
+    private String describeBinding(CodexSessionBinding binding) {
+        if (binding == null) {
+            return "(null)";
+        }
+        return "{providerId=" + binding.getProviderId()
+                + ", model=" + binding.getModel()
+                + ", requestMode=" + binding.getRequestMode()
+                + ", baseUrlSource=" + binding.getBaseUrlSource()
+                + ", effectiveConfigSource=" + binding.getEffectiveConfigSource()
+                + "}";
     }
 
     private void completeNewSessionBootstrap(ClaudeSession newSession, String workingDirectory, String successLogPrefix) {
