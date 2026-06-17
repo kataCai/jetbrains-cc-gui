@@ -4,6 +4,7 @@ import com.github.claudecodegui.handler.CodexMessageConverter;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.github.claudecodegui.session.CodexSessionBinding;
 import com.github.claudecodegui.session.SessionState;
 import com.github.claudecodegui.util.JsUtils;
@@ -42,6 +43,9 @@ public class HistoryMessageInjector {
      */
     void handleLoadSession(String sessionId, String currentProvider, HistoryHandler.SessionLoadCallback sessionLoadCallback) {
         String provider = currentProvider;
+        String runtimeFamily = null;
+        String restoreSource = "history_switch";
+        String transitionToken = null;
         String resolvedSessionId = sessionId;
 
         try {
@@ -53,6 +57,15 @@ public class HistoryMessageInjector {
                 if (payload.has("provider") && !payload.get("provider").isJsonNull()) {
                     provider = payload.get("provider").getAsString();
                 }
+                if (payload.has("runtimeFamily") && !payload.get("runtimeFamily").isJsonNull()) {
+                    runtimeFamily = payload.get("runtimeFamily").getAsString();
+                }
+                if (payload.has("restoreSource") && !payload.get("restoreSource").isJsonNull()) {
+                    restoreSource = payload.get("restoreSource").getAsString();
+                }
+                if (payload.has("transitionToken") && !payload.get("transitionToken").isJsonNull()) {
+                    transitionToken = payload.get("transitionToken").getAsString();
+                }
             }
         } catch (Exception ignored) {
             // Backward compatible: legacy payload is the raw sessionId string.
@@ -63,16 +76,32 @@ public class HistoryMessageInjector {
             LOG.warn("[HistoryHandler] Project base path is null");
             return;
         }
+        String resolvedRuntimeFamily = SessionRuntimeFamily.resolve(
+                provider,
+                runtimeFamily,
+                context.getSession() != null ? context.getSession().getState().getCodexSessionBinding() : null
+        );
         LOG.info("[HistoryHandler] Loading history session: " + resolvedSessionId
-                + " from project: " + projectPath + ", provider: " + provider);
+                + " from project: " + projectPath + ", provider: " + provider
+                + ", runtimeFamily=" + resolvedRuntimeFamily
+                + ", restoreSource=" + restoreSource
+                + ", transitionToken=" + transitionToken
+                + ", currentProvider=" + currentProvider);
 
-        if ("codex".equals(currentProvider)) {
+        if (SessionRuntimeFamily.CODEX.equals(resolvedRuntimeFamily)) {
             // Codex session: read session info and restore session state
-            loadCodexSession(sessionId);
+            loadCodexSession(resolvedSessionId);
         } else {
             // Claude session: use existing callback mechanism
             if (sessionLoadCallback != null) {
-                sessionLoadCallback.onLoadSession(resolvedSessionId, projectPath, provider);
+                sessionLoadCallback.onLoadSession(
+                        resolvedSessionId,
+                        projectPath,
+                        provider,
+                        resolvedRuntimeFamily,
+                        restoreSource,
+                        transitionToken
+                );
             } else {
                 LOG.warn("[HistoryHandler] WARNING: No session load callback set");
             }

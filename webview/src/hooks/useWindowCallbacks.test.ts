@@ -144,6 +144,16 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__sessionTransitionToken).toBeNull();
   });
 
+  it('consumes pending historyLoadComplete signal registered before callbacks mount', () => {
+    window.__pendingHistoryLoadComplete = true;
+
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    expect(window.__pendingHistoryLoadComplete).toBe(false);
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+  });
+
   it('historyLoadComplete shows pending session transition toast', () => {
     const opts = createOptions();
     renderHook(() => useWindowCallbacks(opts));

@@ -251,9 +251,13 @@ export function useSessionManagement({
 
     const session = historyDataRef.current?.sessions?.find((item) => item.sessionId === sessionId);
     beginSessionTransition(sessionId, session?.title ?? null);
+    const transitionToken = window.__sessionTransitionToken ?? null;
     sendBridgeEvent('load_session', JSON.stringify({
       sessionId,
       provider: provider || session?.provider || 'claude',
+      runtimeFamily: session?.runtimeFamily,
+      restoreSource: 'history_switch',
+      transitionToken,
     }));
     setCurrentView('chat');
   }, [beginSessionTransition, loading, setCurrentView]);

@@ -3,6 +3,7 @@ package com.github.claudecodegui.session;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.handler.NodeJsServiceCaller;
 import com.github.claudecodegui.model.SessionTemplate;
+import com.github.claudecodegui.remote.debug.TabSessionRestoreDebugTrace;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.handler.SettingsHandler;
@@ -218,13 +219,37 @@ public class SessionLifecycleManager {
      * Load a history session by ID.
      */
     public void loadHistorySession(String sessionId, String projectPath) {
-        loadHistorySession(sessionId, projectPath, null);
+        loadHistorySession(sessionId, projectPath, null, null, null, null);
     }
 
     /**
      * Load a history session by ID and provider.
      */
     public void loadHistorySession(String sessionId, String projectPath, String provider) {
+        loadHistorySession(sessionId, projectPath, provider, null, null, null);
+    }
+
+    /**
+     * 按指定展示 provider 与运行时家族加载历史会话。
+     * 该入口用于统一承接启动恢复、历史切换与手动刷新后的补恢复请求，避免不同入口分别推断恢复链路。
+     *
+     * @param sessionId 目标会话 ID
+     * @param projectPath 会话对应工作目录
+     * @param provider 展示 provider，可为空
+     * @param runtimeFamily 显式运行时家族，可为空；为空时按兼容规则推断
+     */
+    public void loadHistorySession(String sessionId, String projectPath, String provider, String runtimeFamily) {
+        loadHistorySession(sessionId, projectPath, provider, runtimeFamily, "history_switch", null);
+    }
+
+    public void loadHistorySession(
+            String sessionId,
+            String projectPath,
+            String provider,
+            String runtimeFamily,
+            String restoreSource,
+            String transitionToken
+    ) {
         LOG.info("Loading history session: " + sessionId + " from project: " + projectPath);
 
         ClaudeSession oldSession = host.getSession();
@@ -268,10 +293,31 @@ public class SessionLifecycleManager {
             ClaudeSession newSession = new ClaudeSession(
                     host.getProject(), host.getClaudeSDKBridge(), host.getCodexSDKBridge());
             newSession.setPermissionMode(previousPermissionMode);
-            newSession.setProvider(provider != null && !provider.trim().isEmpty() ? provider : previousProvider);
+            String resolvedProvider = provider != null && !provider.trim().isEmpty() ? provider : previousProvider;
+            String resolvedRuntimeFamily = SessionRuntimeFamily.resolve(
+                    resolvedProvider,
+                    runtimeFamily,
+                    oldSession != null ? oldSession.getState().getCodexSessionBinding() : null
+            );
+            if (SessionRuntimeFamily.CODEX.equals(resolvedRuntimeFamily)) {
+                newSession.setProvider(SessionRuntimeFamily.CODEX);
+            } else {
+                newSession.setProvider(resolvedProvider);
+            }
             newSession.setModel(previousModel);
             LOG.info("Restored session state to loaded session: mode=" + previousPermissionMode
-                             + ", provider=" + newSession.getProvider() + ", model=" + previousModel);
+                             + ", provider=" + newSession.getProvider() + ", model=" + previousModel
+                             + ", runtimeFamily=" + resolvedRuntimeFamily);
+            LOG.info(TabSessionRestoreDebugTrace.buildMessage(
+                    "history_restore_session_initialized",
+                    -1,
+                    sessionId,
+                    resolvedProvider,
+                    resolvedRuntimeFamily,
+                    restoreSource,
+                    false,
+                    transitionToken
+            ));
 
             host.setSession(newSession);
             host.getHandlerContext().setSession(newSession);
@@ -287,9 +333,29 @@ public class SessionLifecycleManager {
 
             newSession.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
                 replayRestoredSessionTitle(sessionId);
+                LOG.info(TabSessionRestoreDebugTrace.buildMessage(
+                        "history_restore_session_completed",
+                        -1,
+                        sessionId,
+                        resolvedProvider,
+                        resolvedRuntimeFamily,
+                        restoreSource,
+                        false,
+                        transitionToken
+                ));
                 host.callJavaScript("historyLoadComplete");
             })).exceptionally(ex -> {
                 ApplicationManager.getApplication().invokeLater(() -> {
+                    LOG.warn(TabSessionRestoreDebugTrace.buildMessage(
+                            "history_restore_session_failed",
+                            -1,
+                            sessionId,
+                            resolvedProvider,
+                            resolvedRuntimeFamily,
+                            restoreSource,
+                            false,
+                            transitionToken
+                    ) + ", error=" + ex.getMessage());
                     // Release transition guard so the frontend is not permanently stuck
                     host.callJavaScript("historyLoadComplete");
                     host.callJavaScript("addErrorMessage",
@@ -300,6 +366,16 @@ public class SessionLifecycleManager {
         }).exceptionally(ex -> {
             LOG.error("Failed to load history session: " + ex.getMessage(), ex);
             ApplicationManager.getApplication().invokeLater(() -> {
+                LOG.warn(TabSessionRestoreDebugTrace.buildMessage(
+                        "history_restore_bootstrap_failed",
+                        -1,
+                        sessionId,
+                        provider,
+                        runtimeFamily,
+                        restoreSource,
+                        false,
+                        transitionToken
+                ) + ", error=" + ex.getMessage());
                 host.callJavaScript("historyLoadComplete");
                 host.callJavaScript("addErrorMessage",
                         JsUtils.escapeJs("Failed to load session: " + ex.getMessage()));

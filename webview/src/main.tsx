@@ -598,6 +598,14 @@ if (typeof window !== 'undefined' && !window.restoreTabRuntimeState) {
   };
 }
 
+if (typeof window !== 'undefined' && !window.historyLoadComplete) {
+  debugLog('[Main] Pre-registering historyLoadComplete placeholder');
+  window.historyLoadComplete = () => {
+    debugLog('[Main] Storing pending historyLoadComplete signal');
+    window.__pendingHistoryLoadComplete = true;
+  };
+}
+
 if (typeof window !== 'undefined' && !window.showPermissionDialog) {
   debugLog('[Main] Pre-registering showPermissionDialog placeholder');
   window.showPermissionDialog = (json: string) => {

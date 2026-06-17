@@ -104,7 +104,15 @@ describe('useSessionManagement', () => {
     expect(window.sendToJava).toHaveBeenNthCalledWith(1, 'interrupt_session:');
     expect(window.sendToJava).toHaveBeenNthCalledWith(
       2,
-      'load_session:{"sessionId":"history-1","provider":"claude"}'
+      expect.stringContaining('"sessionId":"history-1"')
+    );
+    expect(window.sendToJava).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('"provider":"claude"')
+    );
+    expect(window.sendToJava).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('"restoreSource":"history_switch"')
     );
     expect(window.__sessionTransitioning).toBe(true);
     expect(window.__sessionTransitionToken).toBeTruthy();
@@ -507,7 +515,11 @@ describe('useSessionManagement', () => {
     // Should NOT send interrupt when not loading
     const calls = (window.sendToJava as any).mock.calls.map((c: any) => c[0]);
     expect(calls).not.toContain('interrupt_session:');
-    expect(calls).toContain('load_session:{"sessionId":"hist-2","provider":"claude"}');
+    expect(calls.some((call: string) =>
+      call.includes('"sessionId":"hist-2"')
+      && call.includes('"provider":"claude"')
+      && call.includes('"restoreSource":"history_switch"')
+    )).toBe(true);
 
     // But should still set transition guard
     expect(window.__sessionTransitioning).toBe(true);
@@ -552,7 +564,58 @@ describe('useSessionManagement', () => {
     });
 
     expect(window.sendToJava).toHaveBeenCalledWith(
-      'load_session:{"sessionId":"hist-codex","provider":"codex"}'
+      expect.stringContaining('"sessionId":"hist-codex"')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"provider":"codex"')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"restoreSource":"history_switch"')
+    );
+  });
+
+  it('loadHistorySession forwards runtimeFamily for minimax history items', () => {
+    const historyData = {
+      success: true,
+      sessions: [
+        {
+          sessionId: 'hist-minimax',
+          title: 'MiniMax Session',
+          provider: 'minimax',
+          runtimeFamily: 'codex',
+          model: 'MiniMax-M2.5',
+          messageCount: 2,
+          lastTimestamp: Date.now(),
+        },
+      ],
+      total: 2,
+    } as unknown as HistoryData;
+
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [],
+        loading: false,
+        historyData,
+        currentSessionId: null,
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.loadHistorySession('hist-minimax');
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"provider":"minimax"')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"runtimeFamily":"codex"')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"restoreSource":"history_switch"')
     );
   });
 

@@ -37,7 +37,7 @@ public class ChatWindowDelegateRestoreTest {
         RecordingHost host = new RecordingHost(lifecycleManager);
         ChatWindowDelegate delegate = new ChatWindowDelegate(host);
 
-        host.restoreState.schedulePersistedRestore("session-ready-1", "/workspace/demo");
+        host.restoreState.schedulePersistedRestore("session-ready-1", "/workspace/demo", "claude", "claude");
 
         delegate.handleFrontendReady();
         delegate.handleFrontendReady();
@@ -45,6 +45,7 @@ public class ChatWindowDelegateRestoreTest {
         assertEquals(1, lifecycleManager.loadHistoryCallCount);
         assertEquals("session-ready-1", lifecycleManager.lastSessionId);
         assertEquals("/workspace/demo", lifecycleManager.lastProjectPath);
+        assertEquals("claude", lifecycleManager.lastRuntimeFamily);
         assertTrue(host.frontendReady);
         assertFalse(host.hasPendingRestoreRequest());
     }
@@ -71,6 +72,7 @@ public class ChatWindowDelegateRestoreTest {
 
         JsonObject payload = host.findFirstPayload("window.restoreTabRuntimeState");
         assertEquals("codex", payload.get("provider").getAsString());
+        assertEquals("codex", payload.get("runtimeFamily").getAsString());
         assertEquals("gpt-5.4", payload.get("model").getAsString());
         assertEquals("default", payload.get("permissionMode").getAsString());
         assertEquals("high", payload.get("reasoningEffort").getAsString());
@@ -304,6 +306,9 @@ public class ChatWindowDelegateRestoreTest {
         private int loadHistoryCallCount;
         private String lastSessionId;
         private String lastProjectPath;
+        private String lastRuntimeFamily;
+        private String lastRestoreSource;
+        private String lastTransitionToken;
 
         private RecordingSessionLifecycleManager() {
             super(new SessionLifecycleManager.SessionHost() {
@@ -331,6 +336,25 @@ public class ChatWindowDelegateRestoreTest {
             loadHistoryCallCount++;
             lastSessionId = sessionId;
             lastProjectPath = projectPath;
+            lastRuntimeFamily = "claude";
+            lastRestoreSource = "history_switch";
+        }
+
+        @Override
+        public void loadHistorySession(
+                String sessionId,
+                String projectPath,
+                String provider,
+                String runtimeFamily,
+                String restoreSource,
+                String transitionToken
+        ) {
+            loadHistoryCallCount++;
+            lastSessionId = sessionId;
+            lastProjectPath = projectPath;
+            lastRuntimeFamily = runtimeFamily;
+            lastRestoreSource = restoreSource;
+            lastTransitionToken = transitionToken;
         }
 
         @Override

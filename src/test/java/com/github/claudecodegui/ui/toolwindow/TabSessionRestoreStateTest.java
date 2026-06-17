@@ -44,6 +44,8 @@ public class TabSessionRestoreStateTest {
         assertNotNull(firstRequest);
         assertEquals("session-1", firstRequest.getSessionId());
         assertEquals("/workspace/demo", firstRequest.getProjectPath());
+        assertEquals(TabSessionRestoreState.RESTORE_SOURCE_STARTUP, firstRequest.getRestoreSource());
+        assertEquals(TabSessionRestoreState.RestoreLifecycleStatus.PENDING, state.getRestoreLifecycleStatus());
         assertFalse(firstRequest.isManualRefreshTriggered());
         assertNull(secondRequest);
     }
@@ -75,6 +77,33 @@ public class TabSessionRestoreStateTest {
         assertNotNull(request);
         assertEquals("session-3", request.getSessionId());
         assertEquals("/workspace/demo", request.getProjectPath());
+        assertEquals(TabSessionRestoreState.RESTORE_SOURCE_MANUAL_REFRESH, request.getRestoreSource());
+        assertEquals(TabSessionRestoreState.RestoreLifecycleStatus.PENDING, state.getRestoreLifecycleStatus());
         assertTrue(request.isManualRefreshTriggered());
+    }
+
+    /**
+     * 验证恢复启动、完成与失败的显式状态机会被正确更新。
+     * 该测试用于覆盖本轮新增的恢复生命周期语义，确保后端日志与前端 ready 收口可以读取稳定状态，
+     * 不会长期停留在 restoring 或丢失失败态。
+     */
+    @Test
+    public void shouldTrackRestoreLifecycleStatusTransitions() {
+        TabSessionRestoreState state = new TabSessionRestoreState();
+
+        state.schedulePersistedRestore("session-4", "/workspace/demo", "codex", "codex");
+        assertEquals(TabSessionRestoreState.RestoreLifecycleStatus.PENDING, state.getRestoreLifecycleStatus());
+        assertEquals("codex", state.getLastRestoreRuntimeFamily());
+        assertEquals("startup", state.getLastRestoreSource());
+
+        state.markRestoreStarted();
+        assertEquals(TabSessionRestoreState.RestoreLifecycleStatus.RESTORING, state.getRestoreLifecycleStatus());
+
+        state.markRestoreFinished("session-4");
+        assertEquals(TabSessionRestoreState.RestoreLifecycleStatus.RESTORED, state.getRestoreLifecycleStatus());
+        assertEquals("session-4", state.getLastRestoreSessionId());
+
+        state.markRestoreFailed();
+        assertEquals(TabSessionRestoreState.RestoreLifecycleStatus.FAILED, state.getRestoreLifecycleStatus());
     }
 }

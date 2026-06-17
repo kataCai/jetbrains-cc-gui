@@ -87,6 +87,7 @@ interface Window {
    * Triggers Markdown re-rendering to fix incorrect rendering on first history load.
    */
   historyLoadComplete?: () => void;
+  __pendingHistoryLoadComplete?: boolean;
 
   /**
    * Subagent sidechain history callback.

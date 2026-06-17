@@ -6,6 +6,7 @@ import com.github.claudecodegui.notifications.SystemReminderNotifier;
 import com.github.claudecodegui.notifications.TaskReminderPayloadFactory;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.CodexSessionBinding;
+import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.settings.TabStateService;
 import com.github.claudecodegui.handler.AgentHandler;
@@ -342,8 +343,15 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(permissionHandler);
 
         HistoryHandler historyHandler = new HistoryHandler(handlerContext);
-        historyHandler.setSessionLoadCallback((sessionId, projectPath, provider) ->
-            host.getSessionLifecycleManager().loadHistorySession(sessionId, projectPath, provider));
+        historyHandler.setSessionLoadCallback((sessionId, projectPath, provider, runtimeFamily, restoreSource, transitionToken) ->
+            host.getSessionLifecycleManager().loadHistorySession(
+                sessionId,
+                projectPath,
+                provider,
+                runtimeFamily,
+                restoreSource,
+                transitionToken
+            ));
         host.setHistoryHandler(historyHandler);
         messageDispatcher.registerHandler(historyHandler);
 
@@ -540,9 +548,20 @@ public class ChatWindowDelegate {
         LOG.info("[TabRestore] Triggering pending restore after frontend ready, sessionId="
                 + request.getSessionId()
                 + ", projectPath=" + request.getProjectPath()
+                + ", displayProvider=" + request.getDisplayProvider()
+                + ", runtimeFamily=" + request.getRuntimeFamily()
+                + ", restoreSource=" + request.getRestoreSource()
+                + ", transitionToken=" + request.getTransitionToken()
                 + ", manualRefresh=" + request.isManualRefreshTriggered());
         host.markPendingRestoreStarted();
-        host.getSessionLifecycleManager().loadHistorySession(request.getSessionId(), request.getProjectPath());
+        host.getSessionLifecycleManager().loadHistorySession(
+                request.getSessionId(),
+                request.getProjectPath(),
+                request.getDisplayProvider(),
+                request.getRuntimeFamily(),
+                request.getRestoreSource(),
+                request.getTransitionToken()
+        );
     }
 
     private void replayCurrentSessionStateToFrontend() {
@@ -559,6 +578,11 @@ public class ChatWindowDelegate {
 
             JsonObject runtimePayload = new JsonObject();
             runtimePayload.addProperty("provider", hasText(session.getProvider()) ? session.getProvider() : "");
+            runtimePayload.addProperty("runtimeFamily", SessionRuntimeFamily.resolve(
+                    session.getProvider(),
+                    null,
+                    session.getState().getCodexSessionBinding()
+            ));
             runtimePayload.addProperty("model", hasText(session.getModel()) ? session.getModel() : "");
             runtimePayload.addProperty("permissionMode", hasText(session.getPermissionMode()) ? session.getPermissionMode() : "");
             runtimePayload.addProperty("reasoningEffort", hasText(session.getReasoningEffort()) ? session.getReasoningEffort() : "");

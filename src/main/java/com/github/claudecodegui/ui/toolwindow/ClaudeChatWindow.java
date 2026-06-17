@@ -10,8 +10,10 @@ import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.common.DaemonBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
+import com.github.claudecodegui.remote.debug.TabSessionRestoreDebugTrace;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.CodexSessionBinding;
+import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.github.claudecodegui.session.SessionCallbackAdapter;
 import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.SessionLoadService;
@@ -410,12 +412,29 @@ public class ClaudeChatWindow {
         String restoredSessionId = isNonEmpty(savedState.sessionId) ? savedState.sessionId : null;
         String restoredCwd = isNonEmpty(savedState.cwd) ? savedState.cwd : session.getCwd();
         session.setSessionInfo(restoredSessionId, restoredCwd);
-        tabSessionRestoreState.schedulePersistedRestore(restoredSessionId, restoredCwd);
+        tabSessionRestoreState.schedulePersistedRestore(
+                restoredSessionId,
+                restoredCwd,
+                savedState.provider,
+                savedState.getEffectiveRuntimeFamily()
+        );
         persistTabSessionState();
+        TabSessionRestoreDebugTrace.info(
+                LOG,
+                "persisted_restore_scheduled",
+                getTabIndex(),
+                restoredSessionId,
+                savedState.provider,
+                savedState.getEffectiveRuntimeFamily(),
+                TabSessionRestoreState.RESTORE_SOURCE_STARTUP,
+                false,
+                tabSessionRestoreState.getLastTransitionToken()
+        );
 
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " ClaudeChatWindow.restorePersistedTabSessionState sessionId="
                 + restoredSessionId
                 + ", provider=" + normalizeValue(savedState.provider)
+                + ", runtimeFamily=" + savedState.getEffectiveRuntimeFamily()
                 + ", model=" + normalizeValue(savedState.model)
                 + ", binding=" + describeCodexBinding(restoredBinding));
 
@@ -450,12 +469,14 @@ public class ClaudeChatWindow {
 
         session.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
             if (!disposed) {
+                tabSessionRestoreState.markRestoreFinished(session.getSessionId());
                 callJavaScript("historyLoadComplete");
             }
         })).exceptionally(ex -> {
             LOG.warn("[TabRestore] Failed to load persisted tab history: " + ex.getMessage(), ex);
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (!disposed) {
+                    tabSessionRestoreState.markRestoreFailed();
                     callJavaScript("historyLoadComplete");
                     callJavaScript("addErrorMessage",
                             JsUtils.escapeJs("Failed to restore session history: " + ex.getMessage()));
@@ -495,10 +516,32 @@ public class ClaudeChatWindow {
         String currentSessionId = session.getSessionId();
         String currentProjectPath = session.getCwd();
         boolean hasMessages = !session.getMessages().isEmpty();
-        tabSessionRestoreState.scheduleManualRestoreIfNeeded(currentSessionId, currentProjectPath, hasMessages);
+        String runtimeFamily = SessionRuntimeFamily.resolve(
+                session.getProvider(),
+                null,
+                session.getState().getCodexSessionBinding()
+        );
+        tabSessionRestoreState.scheduleManualRestoreIfNeeded(
+                currentSessionId,
+                currentProjectPath,
+                session.getProvider(),
+                runtimeFamily,
+                hasMessages
+        );
 
         LOG.info("[TabRefresh] Triggering manual force refresh, sessionId=" + currentSessionId
                 + ", hasMessages=" + hasMessages + ", cwd=" + currentProjectPath);
+        TabSessionRestoreDebugTrace.info(
+                LOG,
+                "manual_force_refresh_requested",
+                getTabIndex(),
+                currentSessionId,
+                session.getProvider(),
+                runtimeFamily,
+                TabSessionRestoreState.RESTORE_SOURCE_MANUAL_REFRESH,
+                true,
+                tabSessionRestoreState.getLastTransitionToken()
+        );
         webviewInitializer.recreateWebview("manual_force_refresh");
     }
 
@@ -747,6 +790,11 @@ public class ClaudeChatWindow {
 
         TabStateService.TabSessionState snapshot = new TabStateService.TabSessionState();
         snapshot.provider = session.getProvider();
+        snapshot.runtimeFamily = SessionRuntimeFamily.resolve(
+                session.getProvider(),
+                null,
+                session.getState().getCodexSessionBinding()
+        );
         snapshot.sessionId = session.getSessionId();
         snapshot.cwd = session.getCwd();
         snapshot.model = session.getModel();
@@ -775,6 +823,17 @@ public class ClaudeChatWindow {
         }
 
         tabStateService.saveTabSessionState(tabIndex, snapshot);
+        TabSessionRestoreDebugTrace.info(
+                LOG,
+                "tab_session_snapshot_persisted",
+                tabIndex,
+                snapshot.sessionId,
+                snapshot.provider,
+                snapshot.runtimeFamily,
+                "snapshot_persist",
+                false,
+                tabSessionRestoreState.getLastTransitionToken()
+        );
         if (shouldFlushProjectStateAfterSnapshotSave(persistedState, snapshot)) {
             flushProjectStateToDisk("session_snapshot_updated", tabIndex, snapshot.sessionId);
         }

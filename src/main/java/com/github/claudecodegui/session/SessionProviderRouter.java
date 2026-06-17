@@ -20,14 +20,14 @@ public class SessionProviderRouter {
     }
 
     public JsonObject launchChannel(String provider, String channelId, String sessionId, String cwd) {
-        if ("codex".equals(provider)) {
+        if (SessionRuntimeFamily.isCodexProvider(provider)) {
             return codexSDKBridge.launchChannel(channelId, sessionId, cwd);
         }
         return claudeSDKBridge.launchChannel(channelId, sessionId, cwd);
     }
 
     public void interruptChannel(String provider, String channelId) {
-        if ("codex".equals(provider)) {
+        if (SessionRuntimeFamily.isCodexProvider(provider)) {
             codexSDKBridge.interruptChannel(channelId);
             return;
         }
@@ -35,7 +35,7 @@ public class SessionProviderRouter {
     }
 
     public List<JsonObject> getSessionMessages(String provider, String sessionId, String cwd) {
-        if ("codex".equals(provider)) {
+        if (SessionRuntimeFamily.isCodexProvider(provider)) {
             return codexSDKBridge.getSessionMessages(sessionId, cwd);
         }
         return claudeSDKBridge.getSessionMessages(sessionId, cwd);

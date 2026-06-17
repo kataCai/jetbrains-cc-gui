@@ -559,6 +559,7 @@ export function registerMessageCallbacks(
 
   window.historyLoadComplete = () => {
     releaseSessionTransition();
+    window.__pendingHistoryLoadComplete = false;
     const pendingToast = window.__pendingSessionTransitionToast;
     if (pendingToast) {
       window.__pendingSessionTransitionToast = undefined;
@@ -571,6 +572,10 @@ export function registerMessageCallbacks(
       return prev.map((m) => ({ ...m }));
     });
   };
+
+  if (window.__pendingHistoryLoadComplete) {
+    window.historyLoadComplete();
+  }
 
   window.addUserMessage = (content: string) => {
     if (window.__sessionTransitioning) return;

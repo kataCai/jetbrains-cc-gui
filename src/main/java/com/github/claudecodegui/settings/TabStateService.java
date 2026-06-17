@@ -1,5 +1,7 @@
 package com.github.claudecodegui.settings;
 
+import com.github.claudecodegui.session.CodexSessionBinding;
+import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.intellij.openapi.components.*;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
@@ -82,6 +84,7 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
         myState.tabSessions.put(tabIndex, sessionState.copy());
         LOG.info("[TabStateService] Saved tab session state: index=" + tabIndex
                 + ", provider=" + sessionState.provider
+                + ", runtimeFamily=" + sessionState.getEffectiveRuntimeFamily()
                 + ", sessionId=" + sessionState.sessionId
                 + ", cwd=" + sessionState.cwd + ")");
     }
@@ -200,6 +203,11 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
      */
     public static class TabSessionState {
         public String provider;
+        /**
+         * 会话恢复时真正采用的底层运行时家族。
+         * 该字段用于把展示 provider 与恢复主干解耦，兼容旧数据缺失该字段时的推断恢复。
+         */
+        public String runtimeFamily;
         public String sessionId;
         public String cwd;
         public String model;
@@ -230,6 +238,7 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
         public TabSessionState copy() {
             TabSessionState copy = new TabSessionState();
             copy.provider = this.provider;
+            copy.runtimeFamily = getEffectiveRuntimeFamily();
             copy.sessionId = this.sessionId;
             copy.cwd = this.cwd;
             copy.model = this.model;
@@ -251,6 +260,35 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
          */
         public String getEffectiveTitleBindingMode() {
             return normalizeTitleBindingMode(titleBindingMode);
+        }
+
+        /**
+         * 获取当前快照生效中的运行时家族。
+         * 当旧版本持久化数据尚未落 `runtimeFamily` 时，这里会优先根据 Codex binding 和 provider 自动推断，
+         * 保证历史恢复与 Force Refresh 不因为旧数据缺字段而退化。
+         *
+         * @return 生效中的运行时家族，当前仅返回 `claude` 或 `codex`
+         */
+        public String getEffectiveRuntimeFamily() {
+            return SessionRuntimeFamily.resolve(provider, runtimeFamily, buildCodexBindingSnapshot());
+        }
+
+        /**
+         * 基于当前持久化字段构造只读 Codex binding 快照。
+         * 该快照仅用于运行时家族推断，不承担额外持久化职责。
+         *
+         * @return 可用于推断的 Codex binding；若字段不足则返回 null
+         */
+        @Nullable
+        public CodexSessionBinding buildCodexBindingSnapshot() {
+            CodexSessionBinding binding = new CodexSessionBinding(
+                    codexProviderId,
+                    model,
+                    codexRequestMode,
+                    codexBaseUrlSource,
+                    codexEffectiveConfigSource
+            );
+            return binding.isMeaningful() ? binding : null;
         }
     }
 
