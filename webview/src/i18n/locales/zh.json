@@ -318,7 +318,7 @@
       }
     },
     "providers": "供应商管理",
-    "providersDesc": "管理 Claude 和 Codex API 供应商配置，切换不同的 API 服务提供商",
+    "providersDesc": "管理 Claude 和 Codex API 供应商配置。运行时的 provider 和模型切换请在聊天模型选择器中完成。",
     "promptEnhancer": {
       "title": "增强提示词",
       "description": "配置增强提示词功能使用的 provider 与模型，在消息发送前对输入内容进行重写增强。"
@@ -684,7 +684,7 @@
     "skillsComingSoon": "Skills配置功能即将推出...",
     "codexProvider": {
       "title": "Codex 供应商管理",
-      "description": "管理 CC-GUI 自有的 Codex 运行时配置，默认不会改写 ~/.codex/ 实时配置",
+      "description": "在这里管理 CC-GUI 自有的 Codex 运行时配置，按标签页应用时请使用聊天模型选择器。",
       "emptyProvider": "暂无 Codex 供应商配置，点击添加按钮创建",
       "quickCreateTitle": "新增供应商",
       "quickCreateDescription": "为 Codex 配置可运行的供应商、Base URL、API Key 和模型列表",
@@ -805,9 +805,7 @@
         "notAuthorized": "未授权",
         "currentlyUsed": "当前用于请求",
         "notInUse": "当前未使用",
-        "authorizeOnly": "授权",
-        "useForRequests": "用于请求",
-        "currentlyUsingAction": "当前使用中"
+        "authorizeOnly": "授权"
       },
       "modelsTitle": "Models",
       "modelsDescription": "控制聊天区模型下拉中显示哪些 Codex 模型。",
@@ -1193,7 +1191,7 @@
     "switch": "切换",
     "switchProvider": "切换供应商",
     "runtimeProvider": {
-      "title": "切换当前供应商",
+      "title": "切换会话供应商",
       "loading": "正在加载供应商...",
       "empty": "暂无可用供应商",
       "switched": "已切换到 {{provider}}"

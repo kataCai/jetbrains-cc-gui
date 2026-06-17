@@ -2,29 +2,14 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useModelProviderState } from './useModelProviderState';
 import { sendBridgeEvent } from '../utils/bridge';
-
-const runtimeProviderMock = vi.hoisted(() => {
-  const activeCodexProviderListeners = new Set<(json: string) => void>();
-  return {
-    subscribeActiveCodexProvider: (listener: (json: string) => void) => {
-      activeCodexProviderListeners.add(listener);
-      return () => {
-        activeCodexProviderListeners.delete(listener);
-      };
-    },
-    emitActiveCodexProvider: (provider: Record<string, unknown>) => {
-      const payload = JSON.stringify(provider);
-      activeCodexProviderListeners.forEach((listener) => listener(payload));
-    },
-  };
-});
+import { debugLog } from '../utils/debug';
 
 vi.mock('../utils/bridge', () => ({
   sendBridgeEvent: vi.fn(),
 }));
 
-vi.mock('../utils/runtimeProviderCapabilities', () => ({
-  subscribeActiveCodexProvider: runtimeProviderMock.subscribeActiveCodexProvider,
+vi.mock('../utils/debug', () => ({
+  debugLog: vi.fn(),
 }));
 
 describe('useModelProviderState', () => {
@@ -39,8 +24,7 @@ describe('useModelProviderState', () => {
     vi.useRealTimers();
   });
 
-  it('downgrades persisted codex plan mode to default on restore', () => {
-    // 从本地存储恢复状态时，也必须执行 Codex plan -> default 的兼容降级。
+  it('ignores shared codex runtime state persisted in local storage', () => {
     localStorage.setItem('model-selection-state', JSON.stringify({
       provider: 'codex',
       codexModel: 'gpt-5-codex',
@@ -58,14 +42,13 @@ describe('useModelProviderState', () => {
       vi.runOnlyPendingTimers();
     });
 
-    expect(result.current.currentProvider).toBe('codex');
+    expect(result.current.currentProvider).toBe('claude');
     expect(result.current.codexPermissionMode).toBe('default');
-    expect(result.current.permissionMode).toBe('default');
-    expect(sendBridgeEvent).toHaveBeenCalledWith('set_mode', 'default');
+    expect(result.current.permissionMode).toBe('bypassPermissions');
+    expect(sendBridgeEvent).not.toHaveBeenCalledWith('set_mode', 'default');
   });
 
   it('downgrades codex plan selection to default before syncing backend', () => {
-    // 用户在 Codex 下选 plan 时，前端本地状态和后端同步都应该看到 default。
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
@@ -85,7 +68,6 @@ describe('useModelProviderState', () => {
   });
 
   it('keeps plan mode when selecting plan under claude provider', () => {
-    // Claude provider 仍支持 plan，因此不应做降级。
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
@@ -126,27 +108,34 @@ describe('useModelProviderState', () => {
     );
   });
 
-  it('restores unknown persisted codex model ids from local storage', () => {
-    localStorage.setItem('model-selection-state', JSON.stringify({
-      provider: 'codex',
-      codexModel: 'gpt-5.5',
-      claudeModel: 'claude-sonnet-4-6',
-      codexPermissionMode: 'default',
-      claudePermissionMode: 'bypassPermissions',
-    }));
-
+  it('keeps unknown codex model ids when the current tab selects them explicitly', () => {
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
     }));
 
     act(() => {
-      vi.runOnlyPendingTimers();
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.setActiveCodexProviderId('provider-a');
+    });
+
+    act(() => {
+      result.current.handleModelSelect('gpt-5.5');
     });
 
     expect(result.current.currentProvider).toBe('codex');
     expect(result.current.selectedCodexModel).toBe('gpt-5.5');
     expect(sendBridgeEvent).toHaveBeenCalledWith('set_model', 'gpt-5.5');
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'select_codex_model',
+      JSON.stringify({
+        providerId: 'provider-a',
+        modelId: 'gpt-5.5',
+      }),
+    );
   });
 
   it('keeps user-selected codex session model while storing cli default metadata separately', () => {
@@ -168,15 +157,6 @@ describe('useModelProviderState', () => {
   });
 
   it('uses the provider id encoded in the composite catalog key for codex selection', () => {
-    /**
-     * 验证目标：
-     * 聊天区模型下拉切到统一 catalog 后，Codex 选项 value 应改为 `providerId::modelId`。
-     *
-     * 断言意图：
-     * 1. hook 需要从复合 key 中拆出 providerId 和 modelId；
-     * 2. 只发送新的 select_codex_model 事件；
-     * 3. 前端本地 selectedCodexModel 仍保持真实 modelId，避免影响现有显示链路。
-     */
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
@@ -200,21 +180,7 @@ describe('useModelProviderState', () => {
     );
   });
 
-  /**
-   * 验证 active Codex provider 切换后，后续模型选择会绑定到新的 provider id。
-   * 这个场景直接覆盖“provider 切换后模型归属不能串味”的核心约束：
-   * 即使前一个 provider 已经选过模型，新的选择事件也必须落到当前激活 provider 上，
-   * 否则恢复 selected model 或后端摘要时就会把模型错归到旧 provider。
-   */
-  it('falls back to the latest active codex provider id for plain model ids', () => {
-    /**
-     * 验证目标：
-     * 统一 catalog 落地过程中，仍兼容极少数旧调用方继续传纯 modelId。
-     *
-     * 断言意图：
-     * 当 value 中没有 provider 维度时，hook 仍应回退到最新 active provider，
-     * 同时事件名也要统一升级为 select_codex_model。
-     */
+  it('falls back to the current tab codex provider id for plain model ids', () => {
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
       t: ((key: string) => key) as any,
@@ -225,21 +191,17 @@ describe('useModelProviderState', () => {
     });
 
     act(() => {
-      runtimeProviderMock.emitActiveCodexProvider({
-        id: 'provider-a',
-        name: 'Provider A',
-      });
+      result.current.setActiveCodexProviderId('provider-a');
     });
+
     act(() => {
       result.current.handleModelSelect('gpt-5.4');
     });
 
     act(() => {
-      runtimeProviderMock.emitActiveCodexProvider({
-        id: 'provider-b',
-        name: 'Provider B',
-      });
+      result.current.setActiveCodexProviderId('provider-b');
     });
+
     act(() => {
       result.current.handleModelSelect('gpt-5.5');
     });
@@ -281,7 +243,77 @@ describe('useModelProviderState', () => {
     expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('model');
   });
 
-  it('requests a new codex conversation when active codex provider changes while staying on codex', () => {
+  it('does not reset the current codex tab when global active provider changes elsewhere', () => {
+    const onCodexConversationConfigChanged = vi.fn();
+    renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged,
+    }));
+
+    expect(onCodexConversationConfigChanged).not.toHaveBeenCalledWith('activeProvider');
+  });
+
+  it('uses tab-local provider/model events for codex runtime changes and never falls back to switch_codex_provider', () => {
+    const tabAConversationChanged = vi.fn();
+    const tabBConversationChanged = vi.fn();
+    const tabA = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged: tabAConversationChanged,
+    }));
+    const tabB = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+      onCodexConversationConfigChanged: tabBConversationChanged,
+    }));
+
+    act(() => {
+      tabA.result.current.handleProviderSelect('codex');
+    });
+    act(() => {
+      tabA.result.current.setActiveCodexProviderId('managed-openai');
+    });
+    act(() => {
+      tabA.result.current.handleModelSelect('gpt-5.4');
+    });
+
+    act(() => {
+      tabB.result.current.handleProviderSelect('codex');
+    });
+    act(() => {
+      tabB.result.current.setActiveCodexProviderId('managed-minimax');
+    });
+    act(() => {
+      tabB.result.current.handleModelSelect('MiniMax-M3');
+    });
+
+    expect(tabA.result.current.currentProvider).toBe('codex');
+    expect(tabAConversationChanged).toHaveBeenCalledWith('provider');
+    expect(tabAConversationChanged).toHaveBeenCalledWith('model');
+
+    expect(tabB.result.current.currentProvider).toBe('codex');
+    expect(tabBConversationChanged).toHaveBeenCalledWith('provider');
+    expect(tabBConversationChanged).toHaveBeenCalledWith('model');
+
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'select_codex_model',
+      JSON.stringify({
+        providerId: 'managed-openai',
+        modelId: 'gpt-5.4',
+      }),
+    );
+    expect(sendBridgeEvent).toHaveBeenCalledWith(
+      'select_codex_model',
+      JSON.stringify({
+        providerId: 'managed-minimax',
+        modelId: 'MiniMax-M3',
+      }),
+    );
+    expect(sendBridgeEvent).not.toHaveBeenCalledWith('switch_codex_provider', expect.anything());
+  });
+
+  it('writes codex runtime trace logs when switching provider and model inside the current tab', () => {
     const onCodexConversationConfigChanged = vi.fn();
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
@@ -290,26 +322,32 @@ describe('useModelProviderState', () => {
     }));
 
     act(() => {
-      runtimeProviderMock.emitActiveCodexProvider({
-        id: 'provider-a',
-        name: 'Provider A',
-      });
-    });
-
-    expect(onCodexConversationConfigChanged).not.toHaveBeenCalled();
-
-    act(() => {
       result.current.handleProviderSelect('codex');
     });
 
     act(() => {
-      runtimeProviderMock.emitActiveCodexProvider({
-        id: 'provider-b',
-        name: 'Provider B',
-      });
+      result.current.setActiveCodexProviderId('managed-minimax');
     });
 
+    act(() => {
+      result.current.handleModelSelect('MiniMax-M3');
+    });
+
+    expect(debugLog).toHaveBeenCalledWith(
+      '[CODEX_RUNTIME_TRACE][Webview] providerSelect',
+      expect.objectContaining({
+        previousProvider: 'claude',
+        nextProvider: 'codex',
+      }),
+    );
+    expect(debugLog).toHaveBeenCalledWith(
+      '[CODEX_RUNTIME_TRACE][Webview] codexModelSelect',
+      expect.objectContaining({
+        targetProviderId: 'managed-minimax',
+        targetModelId: 'MiniMax-M3',
+      }),
+    );
     expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
-    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('activeProvider');
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('model');
   });
 });

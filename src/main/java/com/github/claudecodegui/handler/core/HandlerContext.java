@@ -31,6 +31,7 @@ public class HandlerContext {
     private volatile String currentModel = DEFAULT_MODEL;
     private volatile String currentProvider = DEFAULT_PROVIDER;
     private volatile Consumer<String> sessionRetryingCallback;
+    private volatile Runnable tabSessionPersistenceCallback;
     private volatile boolean disposed = false;
 
     /**
@@ -128,6 +129,17 @@ public class HandlerContext {
         this.sessionRetryingCallback = sessionRetryingCallback;
     }
 
+    /**
+     * 注册“持久化当前标签运行态快照”的回调。
+     * 仅由拥有具体窗口上下文的上层（如 ChatWindowDelegate）注入，
+     * handler 侧只负责在 provider/model 等运行态变更后发起请求。
+     *
+     * @param tabSessionPersistenceCallback 当前标签快照持久化回调
+     */
+    public void setTabSessionPersistenceCallback(Runnable tabSessionPersistenceCallback) {
+        this.tabSessionPersistenceCallback = tabSessionPersistenceCallback;
+    }
+
     public void setDisposed(boolean disposed) {
         this.disposed = disposed;
     }
@@ -151,6 +163,17 @@ public class HandlerContext {
                     browser.getCefBrowser().executeJavaScript(jsCode, browser.getCefBrowser().getURL(), 0);
                 }
             });
+        }
+    }
+
+    /**
+     * 请求当前标签立即持久化运行态快照。
+     * 若当前上下文未注入窗口级持久化能力，则静默跳过。
+     */
+    public void requestTabSessionPersistence() {
+        Runnable callback = tabSessionPersistenceCallback;
+        if (callback != null) {
+            callback.run();
         }
     }
 }

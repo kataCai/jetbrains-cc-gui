@@ -4,19 +4,22 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.ui.toolwindow.TabSessionRestoreState;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.jcef.JBCefBrowser;
-
 import org.junit.Test;
 
-import java.lang.reflect.Proxy;
-
 import javax.swing.JPanel;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -24,14 +27,10 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * ChatWindowDelegate 恢复链路测试。
- * 验证前端 ready 后会消费待恢复请求并只触发一次历史加载，
- * 避免启动恢复和手动强制刷新在多次 ready 场景下重复执行。
+ * 验证 frontend ready 后既会消费待恢复请求，也会把当前标签的运行态快照优先回推给前端。
  */
 public class ChatWindowDelegateRestoreTest {
 
-    /**
-     * 验证前端 ready 后会触发一次待恢复会话加载，并在二次 ready 时不重复恢复。
-     */
     @Test
     public void shouldTriggerPendingRestoreOnlyOnceWhenFrontendBecomesReady() {
         RecordingSessionLifecycleManager lifecycleManager = new RecordingSessionLifecycleManager();
@@ -48,6 +47,34 @@ public class ChatWindowDelegateRestoreTest {
         assertEquals("/workspace/demo", lifecycleManager.lastProjectPath);
         assertTrue(host.frontendReady);
         assertFalse(host.hasPendingRestoreRequest());
+    }
+
+    @Test
+    public void shouldReplayTabRuntimeStateToFrontendWhenFrontendBecomesReady() {
+        RecordingSessionLifecycleManager lifecycleManager = new RecordingSessionLifecycleManager();
+        RecordingHost host = new RecordingHost(lifecycleManager);
+        host.session.setProvider("codex");
+        host.session.setModel("gpt-5.4");
+        host.session.setPermissionMode("default");
+        host.session.setReasoningEffort("high");
+        host.session.setSessionInfo("session-codex-1", "/workspace/demo");
+        host.session.getState().setCodexSessionBinding(new CodexSessionBinding(
+                "provider-b",
+                "gpt-5.4",
+                "codex_sdk",
+                "provider",
+                "codemoss_managed_provider"
+        ));
+
+        ChatWindowDelegate delegate = new ChatWindowDelegate(host);
+        delegate.handleFrontendReady();
+
+        JsonObject payload = host.findFirstPayload("window.restoreTabRuntimeState");
+        assertEquals("codex", payload.get("provider").getAsString());
+        assertEquals("gpt-5.4", payload.get("model").getAsString());
+        assertEquals("default", payload.get("permissionMode").getAsString());
+        assertEquals("high", payload.get("reasoningEffort").getAsString());
+        assertEquals("provider-b", payload.get("codexProviderId").getAsString());
     }
 
     private static Project createProject() {
@@ -73,6 +100,7 @@ public class ChatWindowDelegateRestoreTest {
     }
 
     private static final class RecordingHost implements ChatWindowDelegate.DelegateHost {
+        private final Gson gson = new Gson();
         private final Project project = createProject();
         private final ClaudeSession session = new ClaudeSession(project, null, null);
         private final RecordingSessionLifecycleManager lifecycleManager;
@@ -80,6 +108,8 @@ public class ChatWindowDelegateRestoreTest {
         private final JPanel mainPanel = new JPanel();
         private final CodemossSettingsService settingsService = new CodemossSettingsService();
         private final TabSessionRestoreState restoreState = new TabSessionRestoreState();
+        private final List<String> jsFunctionNames = new ArrayList<>();
+        private final List<String> jsPayloads = new ArrayList<>();
         private boolean frontendReady;
 
         private RecordingHost(RecordingSessionLifecycleManager lifecycleManager) {
@@ -87,6 +117,7 @@ public class ChatWindowDelegateRestoreTest {
             this.handlerContext = new HandlerContext(project, null, null, settingsService, new HandlerContext.JsCallback() {
                 @Override
                 public void callJavaScript(String functionName, String... args) {
+                    RecordingHost.this.callJavaScript(functionName, args);
                 }
 
                 @Override
@@ -99,6 +130,27 @@ public class ChatWindowDelegateRestoreTest {
 
         private boolean hasPendingRestoreRequest() {
             return restoreState.hasPendingRestoreRequest();
+        }
+
+        private JsonObject findFirstPayload(String functionName) {
+            for (int i = 0; i < jsFunctionNames.size(); i++) {
+                if (functionName.equals(jsFunctionNames.get(i))) {
+                    return gson.fromJson(unescapeJsString(jsPayloads.get(i)), JsonObject.class);
+                }
+            }
+            return new JsonObject();
+        }
+
+        private String unescapeJsString(String value) {
+            if (value == null) {
+                return "";
+            }
+            return value
+                    .replace("\\\\", "\\")
+                    .replace("\\\"", "\"")
+                    .replace("\\'", "'")
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r");
         }
 
         @Override
@@ -143,6 +195,8 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public void callJavaScript(String fn, String... args) {
+            jsFunctionNames.add(fn);
+            jsPayloads.add(args != null && args.length > 0 ? args[0] : "");
         }
 
         @Override
@@ -192,8 +246,6 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public StreamMessageCoalescer getStreamCoalescer() {
-            // 该用例只验证 frontend ready 后的待恢复消费语义，
-            // 不需要真实 coalescer；返回 null 可避免测试环境触发 Alarm/CoroutineScope 依赖。
             return null;
         }
 
@@ -246,7 +298,6 @@ public class ChatWindowDelegateRestoreTest {
         @Override
         public void updateSessionTitle(String title) {
         }
-
     }
 
     private static final class RecordingSessionLifecycleManager extends SessionLifecycleManager {
@@ -274,6 +325,7 @@ public class ChatWindowDelegateRestoreTest {
                 @Override public void setFetchedSlashCommandsCount(int count) { }
             });
         }
+
         @Override
         public void loadHistorySession(String sessionId, String projectPath) {
             loadHistoryCallCount++;

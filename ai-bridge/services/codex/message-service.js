@@ -534,6 +534,13 @@ export function buildCodexSdkOptions(runtimeProfile = {}, baseEnv = process.env)
   const { cliEnv, removedKeys } = buildCodexCliEnvironment(baseEnv, runtimeProfile);
   codexOptions.env = cliEnv;
   const configOverrides = buildRequestScopedConfigOverrides(runtimeProfile);
+  const requestScopedEnv = buildRequestScopedProviderEnv(runtimeProfile);
+  if (requestScopedEnv) {
+    codexOptions.env = {
+      ...codexOptions.env,
+      ...requestScopedEnv,
+    };
+  }
   if (configOverrides) {
     codexOptions.config = configOverrides;
   }
@@ -541,6 +548,7 @@ export function buildCodexSdkOptions(runtimeProfile = {}, baseEnv = process.env)
     removedKeys,
     forcedModelProvider: configOverrides?.model_provider || '',
     injectedConfigOverrides: configOverrides || null,
+    requestScopedEnv,
   };
   return codexOptions;
 }
@@ -574,6 +582,32 @@ export function buildRequestScopedConfigOverrides(runtimeProfile = {}) {
 }
 
 /**
+ * 为托管 provider 生成仅作用于本次请求的鉴权环境变量。
+ * 这里明确区分两层语义：
+ * 1. `buildCodexCliEnvironment(...)` 负责清理从父进程继承来的污染变量。
+ * 2. 本方法负责把当前请求自己的 provider 凭据重新注入到本次 SDK options。
+ * 这样既能避免复用旧的本地 `CODEX_API_KEY`，又能满足 request-scoped
+ * `model_provider.env_key` 对环境变量存在性的契约要求。
+ *
+ * @param {object} runtimeProfile 当前请求的运行时 profile
+ * @returns {object|null} 仅属于当前请求的环境变量映射；不需要注入时返回 null
+ */
+export function buildRequestScopedProviderEnv(runtimeProfile = {}) {
+  const effectiveConfigSource = runtimeProfile.effectiveConfigSource || '';
+  const isManagedProvider = effectiveConfigSource === 'codemoss_managed_provider';
+  if (!isManagedProvider) {
+    return null;
+  }
+  if (!runtimeProfile.apiKey) {
+    return null;
+  }
+
+  return {
+    CODEX_API_KEY: runtimeProfile.apiKey,
+  };
+}
+
+/**
  * 构造统一的运行时诊断信息。
  * 这里的输出用于 Java/Node 链路排障，因此只保留来源字段、布尔状态和脱敏后的 endpoint 信息，
  * 明确禁止回传原始 apiKey。
@@ -585,9 +619,11 @@ export function buildRequestScopedConfigOverrides(runtimeProfile = {}) {
  */
 export function buildCodexRuntimeDiagnostics(runtimeProfile = {}, effectiveEnv = {}, removedKeys = []) {
   const injectedConfigOverrides = buildRequestScopedConfigOverrides(runtimeProfile);
+  const requestScopedEnv = buildRequestScopedProviderEnv(runtimeProfile);
   const localCodexModelProvider = runtimeProfile.localCodexModelProvider || '';
   const forcedModelProvider = injectedConfigOverrides?.model_provider || '';
   const finalModelProvider = forcedModelProvider || localCodexModelProvider || '';
+  const requestScopedEnvKey = injectedConfigOverrides?.model_providers?.[forcedModelProvider]?.env_key || '';
   return {
     transport: runtimeProfile.requestMode || 'codex_sdk',
     providerId: runtimeProfile.providerId || '',
@@ -605,6 +641,9 @@ export function buildCodexRuntimeDiagnostics(runtimeProfile = {}, effectiveEnv =
     finalModelProvider,
     localConfigConflictDetected: !!forcedModelProvider && !!localCodexModelProvider && forcedModelProvider !== localCodexModelProvider,
     injectedConfigOverrides,
+    requestScopedEnvInjected: !!requestScopedEnvKey && !!effectiveEnv?.[requestScopedEnvKey],
+    requestScopedEnvKey,
+    hasDirectApiKeyOption: !!runtimeProfile.apiKey,
     removedEnvKeys: Array.isArray(removedKeys) ? removedKeys : [],
     hasOpenaiBaseUrlEnv: !!effectiveEnv?.OPENAI_BASE_URL,
     hasCodexApiKeyEnv: !!effectiveEnv?.CODEX_API_KEY,

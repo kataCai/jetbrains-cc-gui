@@ -14,14 +14,14 @@ import { useCodexProvider } from './providers/useCodexProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
 import { useProviderSettings } from './providers/useProviderSettings';
 import { useModelStatePersistence } from './providers/useModelStatePersistence';
-import { subscribeActiveCodexProvider } from '../utils/runtimeProviderCapabilities';
+import { debugLog } from '../utils/debug';
 
 export type ViewMode = 'chat' | 'history' | 'settings';
 
 /**
  * 读取本地缓存的自定义模型列表。
- * 该方法只用于恢复阶段的兜底校验，读取失败时统一回退为空数组，
- * 避免因为 localStorage 内容损坏导致整个模型状态初始化失败。
+ * 这里只用于前端恢复阶段的兜底校验，读取失败时统一返回空数组，
+ * 避免 localStorage 中的脏数据导致整个模型状态初始化失败。
  *
  * @param key localStorage 键名
  * @return 自定义模型数组；异常时返回空数组
@@ -37,13 +37,13 @@ const getCustomModels = (key: string): { id: string }[] => {
 
 /**
  * 判断给定模型是否存在于内置或自定义列表中。
- * Codex 当前模型可能来自本地 CLI 配置，不一定已经写入前端静态列表，
- * 因此前端恢复状态时需要允许保留未知但非空的模型 ID。
+ * Codex 当前模型可能来自本地 CLI 配置，不一定已经进入前端静态列表，
+ * 因此前端恢复时需要允许保留未知但非空的模型 ID。
  *
  * @param modelId 待校验模型 ID
  * @param builtInModels 内置模型列表
- * @param customModels 本地自定义模型列表
- * @return 是否可直接视为已注册模型
+ * @param customModels 自定义模型列表
+ * @return 是否可视为已知模型
  */
 function isKnownModel(
   modelId: string | null | undefined,
@@ -54,19 +54,19 @@ function isKnownModel(
   if (!normalizedModelId) {
     return false;
   }
-  return builtInModels.some(model => model.id === normalizedModelId)
-    || customModels.some(model => model.id === normalizedModelId);
+  return builtInModels.some((model) => model.id === normalizedModelId)
+    || customModels.some((model) => model.id === normalizedModelId);
 }
 
 /**
- * 解析可用于前端状态恢复的模型 ID。
- * 若模型出现在已知列表中则原样返回；否则只要是非空字符串也允许保留，
- * 用于兼容后端同步过来的新模型或用户 CLI 本地配置中的未知模型。
+ * 解析可用于前端恢复的模型 ID。
+ * 若模型已经存在于已知列表则原样返回；否则只要非空也尝试保留，
+ * 以兼容后端同步过来的新模型或用户本地 CLI 配置。
  *
  * @param modelId 原始模型 ID
  * @param builtInModels 内置模型列表
  * @param customModels 自定义模型列表
- * @return 可恢复模型 ID；无效时返回 null
+ * @return 可恢复的模型 ID；无效时返回 null
  */
 function resolveRestorableModelId(
   modelId: string | null | undefined,
@@ -90,23 +90,22 @@ export interface UseModelProviderStateOptions {
 }
 
 /**
- * 编排聊天页中与 provider / model / mode 相关的跨模块状态。
- * 该 hook 以 upstream 拆分出的 provider 子 hook 为骨架，同时保留当前主线
- * 对 Codex CLI 默认模型、custom base URL、未知模型恢复和窗口回调 ref 的扩展语义。
+ * 管理聊天页中与 provider / model / mode 相关的运行态。
+ * 这里刻意把“当前标签运行态”和“设置页全局默认态”分离，
+ * 避免多个标签页共用一份 Codex provider/model 选择而互相污染。
  *
- * 这里的返回值故意维持扁平结构，因为 App、ChatScreen、window callbacks
- * 和消息发送链路都已经直接解构这些字段；如果在并轨阶段擅自改成嵌套结构，
- * 会把大量既有调用点一并打断。
- *
- * @param addToast 页面 toast 回调，用于 provider 切换或 thinking 状态提示
+ * @param addToast 页面 toast 回调
  * @param t i18n 翻译函数
- * @return 扁平的状态、ref 与处理函数集合
+ * @return 聊天页所需的扁平状态、ref 与处理函数集合
  */
 export function useModelProviderState({
   addToast,
   t,
   onCodexConversationConfigChanged,
 }: UseModelProviderStateOptions) {
+  const traceCodexRuntime = useCallback((event: string, payload: Record<string, unknown>) => {
+    debugLog(`[CODEX_RUNTIME_TRACE][Webview] ${event}`, payload);
+  }, []);
   const [currentProvider, setCurrentProvider] = useState('claude');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('bypassPermissions');
   const [defaultCodexModelFromConfig, setDefaultCodexModelFromConfig] = useState<string | null>(null);
@@ -117,7 +116,10 @@ export function useModelProviderState({
   const currentProviderRef = useRef(currentProvider);
   currentProviderRef.current = currentProvider;
 
-  // 当本地已恢复过 Codex 模型时，后续 CLI 默认模型回推只用于展示，不再覆盖用户手选值。
+  /**
+   * 当标签页已经从持久化状态或后端恢复过 Codex 模型后，
+   * 后续 CLI 默认模型回推只用于展示，不再覆盖当前标签显式选择。
+   */
   const shouldAdoptCodexDefaultModelRef = useRef(true);
 
   const claude = useClaudeProvider();
@@ -180,36 +182,6 @@ export function useModelProviderState({
     activeProviderConfigRef.current = activeProviderConfig;
   }, [activeProviderConfig]);
 
-  useEffect(() => {
-    /**
-     * 跟踪当前激活的 Codex provider id。
-     * 持久化 selectedCodexModel 时需要把模型绑定到具体 provider，避免切换 provider 后恢复串味。
-     */
-    let previousProviderId = '';
-    const unsubscribe = subscribeActiveCodexProvider((jsonStr: string) => {
-      try {
-        const provider = JSON.parse(jsonStr) as { id?: string | null };
-        const nextProviderId = typeof provider?.id === 'string' ? provider.id.trim() : '';
-        if (
-          previousProviderId
-          && nextProviderId
-          && previousProviderId !== nextProviderId
-          && currentProviderRef.current === 'codex'
-        ) {
-          // 当聊天区当前已处于 Codex provider 时，如果设置页把 active provider 切到了另一家，
-          // 下一条消息必须放弃旧 threadId，否则会继续挂到旧 provider 的历史线程上。
-          onCodexConversationConfigChanged?.('activeProvider');
-        }
-        previousProviderId = nextProviderId;
-        setActiveCodexProviderId(nextProviderId);
-      } catch {
-        previousProviderId = '';
-        setActiveCodexProviderId('');
-      }
-    });
-    return unsubscribe;
-  }, [onCodexConversationConfigChanged]);
-
   const notifyCodexPlanDowngrade = useCallback(() => {
     addToast(
       t('chat.planDowngradedForCodex', {
@@ -241,9 +213,8 @@ export function useModelProviderState({
   });
 
   /**
-   * 主动请求一次 Codex 当前运行态配置。
-   * 本地持久化状态只能恢复最近一次前端选择，无法包含 CLI 动态解析出来的 default model、
-   * reasoning effort 与 custom base_url，因此这里仍需额外向后端拉取一份运行态快照。
+   * 主动向后端拉取一次 Codex 当前运行态配置。
+   * localStorage 只保留 Claude 侧显示偏好，Codex 真实运行态由后端/标签页快照驱动。
    */
   useEffect(() => {
     let retryCount = 0;
@@ -276,9 +247,8 @@ export function useModelProviderState({
   );
 
   /**
-   * 处理模式切换。
-   * Codex 当前不支持 plan，因此进入 Codex 时必须把 plan 降级为 default，
-   * 同时保证前端显示状态和后端会话状态一致。
+   * 处理权限模式切换。
+   * Codex 不支持 plan，因此进入 Codex 时需要自动降级为 default。
    *
    * @param mode 目标权限模式
    */
@@ -298,8 +268,8 @@ export function useModelProviderState({
 
   /**
    * 处理模型切换。
-   * Claude 需要先去掉 `[1m]` 后缀并按 long-context 开关重新拼装后发给后端；
-   * Codex 则保留完整模型 ID，同时关闭“采用 CLI 默认模型”的一次性兜底逻辑。
+   * Claude 需要根据 long-context 开关拼装最终模型 ID；
+   * Codex 则把选择绑定到当前标签的 provider + model 组合。
    *
    * @param modelId 用户选择的模型 ID
    */
@@ -322,6 +292,14 @@ export function useModelProviderState({
         [{ id: selectedCodexModel }, { id: defaultCodexModelFromConfig ?? '' }],
         savedCodexCustomModels,
       ) ?? targetModelId;
+
+      traceCodexRuntime('codexModelSelect', {
+        currentProvider,
+        currentTabProviderId: activeCodexProviderId,
+        targetProviderId,
+        targetModelId,
+        resolvedCodexModelId,
+      });
       shouldAdoptCodexDefaultModelRef.current = false;
       setSelectedCodexModel(resolvedCodexModelId);
       sendBridgeEvent('set_model', resolvedCodexModelId);
@@ -329,7 +307,7 @@ export function useModelProviderState({
         providerId: targetProviderId,
         modelId: resolvedCodexModelId,
       }));
-      // Codex 模型一旦切换，必须同步放弃旧 threadId，避免后续消息仍沿用旧模型会话。
+      // Codex 运行时模型改变后必须丢弃当前 threadId，避免继续复用旧会话。
       onCodexConversationConfigChanged?.('model');
     }
   }, [
@@ -341,17 +319,26 @@ export function useModelProviderState({
     selectedCodexModel,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    traceCodexRuntime,
   ]);
 
   /**
-   * 处理 provider 切换。
-   * 切换时必须一起同步 provider、mode 和 model，避免前端已经切到新 provider，
-   * 但后端仍沿用旧 provider 的 mode/model 组合。
+   * 处理聊天页 provider 切换。
+   * 这里是“当前标签”的 provider，不等同于设置页里的全局默认 provider。
    *
-   * @param providerId 目标 provider 标识
+   * @param providerId 目标 provider
    */
   const handleProviderSelect = useCallback((providerId: string) => {
-    const shouldNotifyCodexPlanDowngrade = providerId === 'codex' && permissionMode === 'plan';
+    const shouldNotifyPlanDowngrade = providerId === 'codex' && permissionMode === 'plan';
+    traceCodexRuntime('providerSelect', {
+      previousProvider: currentProvider,
+      nextProvider: providerId,
+      permissionMode,
+      claudePermissionMode,
+      codexPermissionMode,
+      selectedClaudeModel,
+      selectedCodexModel,
+    });
 
     setCurrentProvider(providerId);
     sendBridgeEvent('set_provider', providerId);
@@ -366,13 +353,12 @@ export function useModelProviderState({
       ? selectedCodexModel
       : apply1MContextSuffix(selectedClaudeModel, longContextEnabled);
     sendBridgeEvent('set_model', newModel);
+
     if (providerId === 'codex' || currentProvider === 'codex') {
-      // 只要本次 provider 切换涉及 Codex，就需要强制新会话；
-      // 否则 UI 虽然切到了新 provider，但底层仍可能沿用旧 Codex thread。
       onCodexConversationConfigChanged?.('provider');
     }
 
-    if (shouldNotifyCodexPlanDowngrade) {
+    if (shouldNotifyPlanDowngrade) {
       notifyCodexPlanDowngrade();
     }
   }, [
@@ -385,11 +371,12 @@ export function useModelProviderState({
     permissionMode,
     selectedClaudeModel,
     selectedCodexModel,
+    traceCodexRuntime,
   ]);
 
   /**
-   * 切换 Claude long context 开关。
-   * 这里只更新 Claude 侧的拼装模型 ID，不影响 Codex 状态。
+   * 切换 Claude long context。
+   * 这里只影响 Claude 侧模型，不改 Codex 标签运行态。
    *
    * @param enabled 是否启用 1M context
    */
@@ -401,9 +388,8 @@ export function useModelProviderState({
   }, [currentProvider, selectedClaudeModel, setLongContextEnabled]);
 
   /**
-   * 切换 Claude thinking 开关。
-   * 特殊 provider 仍走本地状态 + 简化 bridge 事件；普通 provider 则回写 provider 配置，
-   * 以便设置页、聊天页和后端会话状态统一。
+   * 切换 Claude thinking。
+   * 特殊 provider 仍走本地状态 + 简化 bridge 事件；普通 provider 回写 provider 配置。
    *
    * @param enabled 是否启用 thinking
    */
@@ -414,7 +400,7 @@ export function useModelProviderState({
     setClaudeSettingsAlwaysThinkingEnabled(enabled);
 
     if (!config || isSpecialProvider) {
-      setActiveProviderConfig(prev => prev ? {
+      setActiveProviderConfig((prev) => prev ? {
         ...prev,
         settingsConfig: {
           ...prev.settingsConfig,
@@ -426,7 +412,7 @@ export function useModelProviderState({
       return;
     }
 
-    setActiveProviderConfig(prev => prev ? {
+    setActiveProviderConfig((prev) => prev ? {
       ...prev,
       settingsConfig: {
         ...prev.settingsConfig,
@@ -497,6 +483,8 @@ export function useModelProviderState({
     selectedModel,
     currentSdkInstalled,
     currentProviderRef,
+    activeCodexProviderId,
+    setActiveCodexProviderId,
     activeProviderConfigRef,
     shouldAdoptCodexDefaultModelRef,
     syncActiveProviderModelMapping,

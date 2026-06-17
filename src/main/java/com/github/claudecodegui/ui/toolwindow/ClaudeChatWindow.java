@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ClaudeChatWindow {
 
     private static final Logger LOG = Logger.getInstance(ClaudeChatWindow.class);
+    private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
 
     private final JPanel mainPanel;
     private final ClaudeSDKBridge claudeSDKBridge;
@@ -403,13 +404,20 @@ public class ClaudeChatWindow {
         if (savedState.reasoningEffort != null && !savedState.reasoningEffort.trim().isEmpty()) {
             session.setReasoningEffort(savedState.reasoningEffort);
         }
-        session.getState().setCodexSessionBinding(buildCodexSessionBinding(savedState));
+        CodexSessionBinding restoredBinding = buildCodexSessionBinding(savedState);
+        session.getState().setCodexSessionBinding(restoredBinding);
 
         String restoredSessionId = isNonEmpty(savedState.sessionId) ? savedState.sessionId : null;
         String restoredCwd = isNonEmpty(savedState.cwd) ? savedState.cwd : session.getCwd();
         session.setSessionInfo(restoredSessionId, restoredCwd);
         tabSessionRestoreState.schedulePersistedRestore(restoredSessionId, restoredCwd);
         persistTabSessionState();
+
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " ClaudeChatWindow.restorePersistedTabSessionState sessionId="
+                + restoredSessionId
+                + ", provider=" + normalizeValue(savedState.provider)
+                + ", model=" + normalizeValue(savedState.model)
+                + ", binding=" + describeCodexBinding(restoredBinding));
 
         LOG.info("[TabRestore] Restored tab session state: provider=" + savedState.provider
                 + ", sessionId=" + savedState.sessionId + ", cwd=" + savedState.cwd + ")");
@@ -810,6 +818,25 @@ public class ClaudeChatWindow {
                 savedState.codexEffectiveConfigSource
         );
         return binding.isMeaningful() ? binding : null;
+    }
+
+    /**
+     * 统一格式化标签恢复链路中的 Codex binding 诊断信息。
+     * 只输出 provider/model/requestMode/baseUrlSource/effectiveConfigSource，避免把敏感凭据写入日志。
+     *
+     * @param binding 当前 tab 快照恢复出的 Codex binding
+     * @return 稳定的诊断文本；为空时返回 "(null)"
+     */
+    private String describeCodexBinding(CodexSessionBinding binding) {
+        if (binding == null) {
+            return "(null)";
+        }
+        return "{providerId=" + binding.getProviderId()
+                + ", model=" + binding.getModel()
+                + ", requestMode=" + binding.getRequestMode()
+                + ", baseUrlSource=" + binding.getBaseUrlSource()
+                + ", effectiveConfigSource=" + binding.getEffectiveConfigSource()
+                + "}";
     }
 
     /**

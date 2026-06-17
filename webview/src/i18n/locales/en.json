@@ -318,7 +318,7 @@
       }
     },
     "providers": "Provider Management",
-    "providersDesc": "Manage Claude and Codex API provider configurations and switch between different API service providers",
+    "providersDesc": "Manage Claude and Codex API provider configurations. Apply runtime provider or model changes from the chat model picker.",
     "promptEnhancer": {
       "title": "Prompt Enhancer",
       "description": "Choose which provider and model should be used when enhancing prompts before sending them."
@@ -679,7 +679,7 @@
     "skillsComingSoon": "Skills configuration coming soon...",
     "codexProvider": {
       "title": "Codex Provider Management",
-      "description": "Manage CC-GUI owned Codex runtime profiles without rewriting ~/.codex/ live config by default",
+      "description": "Manage CC-GUI owned Codex runtime profiles here. Use the chat model picker to apply them per tab.",
       "emptyProvider": "No Codex providers configured, click Add to create one",
       "quickCreateTitle": "Add Provider",
       "quickCreateDescription": "Configure a runnable Codex provider with Base URL, API Key, and model list",
@@ -800,9 +800,7 @@
         "notAuthorized": "Not authorized",
         "currentlyUsed": "Currently used",
         "notInUse": "Not in use",
-        "authorizeOnly": "Authorize",
-        "useForRequests": "Use for requests",
-        "currentlyUsingAction": "Currently in use"
+        "authorizeOnly": "Authorize"
       },
       "modelsTitle": "Models",
       "modelsDescription": "Control which Codex models appear in the chat model picker.",
@@ -1188,7 +1186,7 @@
     "switch": "Switch",
     "switchProvider": "Switch provider",
     "runtimeProvider": {
-      "title": "Switch Current Provider",
+      "title": "Switch Session Provider",
       "loading": "Loading providers...",
       "empty": "No providers available",
       "switched": "Switched to {{provider}}"

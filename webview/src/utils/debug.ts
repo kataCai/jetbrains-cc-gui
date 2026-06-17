@@ -5,7 +5,8 @@ import { PERF_TIMING } from '../constants/performance.js';
 // Vite exposes `import.meta.env.DEV` (boolean). In tests it may be undefined.
 const DEBUG: boolean = (() => {
   try {
-    return Boolean((import.meta as any)?.env?.DEV);
+    const env = (import.meta as any)?.env;
+    return Boolean(env?.DEV || env?.VITE_ENABLE_VCONSOLE === 'true');
   } catch {
     return false;
   }
@@ -75,4 +76,3 @@ export function perfTimer(name: string) {
     },
   };
 }
-

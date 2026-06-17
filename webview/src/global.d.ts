@@ -415,6 +415,17 @@ interface Window {
   __pendingCodexModelState?: string;
 
   /**
+   * 标签页级运行态恢复回调。
+   * 后端会把当前标签保存的 provider / model / permission / codexProviderId 一次性回推给前端。
+   */
+  restoreTabRuntimeState?: (json: string) => void;
+
+  /**
+   * 在 React 回调注册之前暂存的标签页运行态快照。
+   */
+  __pendingTabRuntimeState?: string;
+
+  /**
    * Update slash commands list (from SDK)
    */
   updateSlashCommands?: (json: string) => void;

@@ -1,7 +1,6 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigSelect } from './ConfigSelect';
-import { SPECIAL_PROVIDER_IDS } from '../../../types/provider';
 
 vi.mock('antd', () => ({
   Switch: ({ checked, onClick }: { checked?: boolean; onClick?: (checked: boolean, e: { stopPropagation: () => void }) => void }) => (
@@ -17,106 +16,58 @@ vi.mock('../providers/agentProvider', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: string | Record<string, string>) => ({
+    t: (key: string) => ({
       'settings.configure': 'Configure',
       'settings.agent.title': 'Agent',
       'settings.basic.streaming.label': 'Streaming',
       'common.thinking': 'Thinking',
-      'config.runtimeProvider.title': 'Switch provider',
-      'config.runtimeProvider.empty': 'No providers',
-      'config.runtimeProvider.loading': 'Loading providers',
-      'config.runtimeProvider.switched': 'Provider switched to Proxy A',
-      'settings.provider.localProviderName': 'Use local settings.json',
-      'settings.provider.cliLoginProviderName': 'Use CLI login',
-      'settings.codexProvider.dialog.cliLoginProviderName': 'Use local Codex config',
-    } as Record<string, string>)[key] ?? (typeof options === 'string' ? options : key),
+    } as Record<string, string>)[key] ?? key,
   }),
 }));
 
-describe('ConfigSelect runtime provider submenu', () => {
+describe('ConfigSelect runtime provider cleanup', () => {
   beforeEach(() => {
-    window.sendToJava = vi.fn();
-    window.updateProviders = undefined;
-    window.updateCodexProviders = undefined;
-    window.updateActiveProvider = undefined;
-    window.updateActiveCodexProvider = undefined;
+    (globalThis as typeof globalThis & { window: Window }).window.sendToJava = vi.fn();
   });
 
-  it('switches Claude runtime providers from the configure menu', async () => {
-    render(<ConfigSelect currentProvider="claude" />);
+  /**
+   * 验证聊天区配置菜单已经移除“切换当前供应商”平行入口。
+   * 这个断言直接覆盖本次入口收敛目标，确保用户只能在底部模型应用选择中切换模型或供应商。
+   */
+  it('does not render the runtime provider submenu entry anymore', () => {
+    render(<ConfigSelect />);
 
     fireEvent.click(screen.getByRole('button', { name: /Configure/i }));
-    const providerMenuItem = screen.getByText('Switch provider').closest('.selector-option')!;
-    expect(providerMenuItem.previousElementSibling?.className).toContain('selector-divider');
-    expect(providerMenuItem.nextElementSibling?.className).toContain('selector-divider');
-    fireEvent.mouseEnter(providerMenuItem);
 
-    expect(window.sendToJava).toHaveBeenCalledWith('get_providers:');
-
-    act(() => {
-      window.updateProviders?.(JSON.stringify([
-        { id: SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS, name: 'hidden local', isActive: true },
-        { id: SPECIAL_PROVIDER_IDS.CLI_LOGIN, name: 'hidden cli', isActive: false },
-        { id: 'proxy-a', name: 'Proxy A', remark: 'fast route', isActive: false },
-      ]));
-    });
-
-    const submenu = await screen.findByRole('listbox');
-    expect(within(submenu).getByText('Use local settings.json')).toBeTruthy();
-    expect(within(submenu).getByText('Use CLI login')).toBeTruthy();
-    expect(within(submenu).getByText('Proxy A')).toBeTruthy();
-
-    fireEvent.click(within(submenu).getByText('Proxy A'));
-
-    expect(window.sendToJava).toHaveBeenCalledWith('switch_provider:{"id":"proxy-a"}');
-    expect(await screen.findByText('Provider switched to Proxy A')).toBeTruthy();
+    expect(screen.queryByText('Switch provider')).toBeNull();
+    expect(screen.getByText('Agent')).toBeTruthy();
+    expect(screen.getByText('Streaming')).toBeTruthy();
+    expect(screen.getByText('Thinking')).toBeTruthy();
   });
 
-  it('switches Codex runtime providers from the configure menu', async () => {
-    render(<ConfigSelect currentProvider="codex" />);
+  /**
+   * 验证移除平行入口后，原有的流式传输和思考开关仍然正常工作。
+   * 这里保留最直接的交互回归，防止菜单裁剪时误伤其它配置项的点击行为。
+   */
+  it('keeps streaming and thinking toggles functional after removing the provider entry', () => {
+    const onStreamingEnabledChange = vi.fn();
+    const onToggleThinking = vi.fn();
+
+    render(
+      <ConfigSelect
+        streamingEnabled={true}
+        onStreamingEnabledChange={onStreamingEnabledChange}
+        alwaysThinkingEnabled={false}
+        onToggleThinking={onToggleThinking}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /Configure/i }));
-    fireEvent.mouseEnter(screen.getByText('Switch provider').closest('.selector-option')!);
+    const toggleButtons = screen.getAllByRole('switch');
+    fireEvent.click(toggleButtons[0]);
+    fireEvent.click(toggleButtons[1]);
 
-    expect(window.sendToJava).toHaveBeenCalledWith('get_codex_providers:');
-
-    act(() => {
-      window.updateCodexProviders?.(JSON.stringify([
-        { id: SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN, name: 'hidden codex local', isActive: true },
-        { id: 'codex-proxy', name: 'Codex Proxy', remark: 'workspace config', isActive: false },
-      ]));
-    });
-
-    const submenu = await screen.findByRole('listbox');
-    expect(within(submenu).getByText('Use local Codex config')).toBeTruthy();
-    expect(within(submenu).getByText('Codex Proxy')).toBeTruthy();
-
-    fireEvent.click(within(submenu).getByText('Codex Proxy'));
-
-    expect(window.sendToJava).toHaveBeenCalledWith('switch_codex_provider:{"id":"codex-proxy"}');
-  });
-
-  it('refreshes selected provider when backend confirms active provider change', async () => {
-    render(<ConfigSelect currentProvider="claude" />);
-
-    fireEvent.click(screen.getByRole('button', { name: /Configure/i }));
-    fireEvent.mouseEnter(screen.getByText('Switch provider').closest('.selector-option')!);
-
-    act(() => {
-      window.updateProviders?.(JSON.stringify([
-        { id: 'a', name: 'Provider A', isActive: true },
-        { id: 'b', name: 'Provider B', isActive: false },
-      ]));
-    });
-
-    const submenu = await screen.findByRole('listbox');
-
-    act(() => {
-      window.updateActiveProvider?.(JSON.stringify({ id: 'b', name: 'Provider B', isActive: true }));
-    });
-
-    await waitFor(() => {
-      expect(within(submenu).getByText('Provider B').closest('.selector-option')?.className).toContain('selected');
-    });
+    expect(onStreamingEnabledChange).toHaveBeenCalledWith(false);
+    expect(onToggleThinking).toHaveBeenCalledWith(true);
   });
 });

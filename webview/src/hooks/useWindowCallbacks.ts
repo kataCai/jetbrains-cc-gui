@@ -39,11 +39,13 @@ export interface UseWindowCallbacksOptions {
   setUsagePercentage: React.Dispatch<React.SetStateAction<number>>;
   setUsageUsedTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
   setUsageMaxTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
+  setCurrentProvider: React.Dispatch<React.SetStateAction<string>>;
   setPermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
   setClaudePermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
   setCodexPermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
   setSelectedClaudeModel: React.Dispatch<React.SetStateAction<string>>;
   setSelectedCodexModel: React.Dispatch<React.SetStateAction<string>>;
+  setActiveCodexProviderId: React.Dispatch<React.SetStateAction<string>>;
   setDefaultCodexModelFromConfig: React.Dispatch<React.SetStateAction<string | null>>;
   setCodexBaseUrl: React.Dispatch<React.SetStateAction<string | null>>;
   setCodexUsesCustomBaseUrl: React.Dispatch<React.SetStateAction<boolean>>;

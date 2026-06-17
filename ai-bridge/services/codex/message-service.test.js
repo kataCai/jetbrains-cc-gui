@@ -76,7 +76,7 @@ test('应在托管 provider 下剔除本地 OpenAI 与 Codex 污染变量', () =
   assert.equal(sdkOptions.env.PATH, 'C:/Windows/System32');
   assert.equal('OPENAI_BASE_URL' in sdkOptions.env, false);
   assert.equal('OPENAI_API_KEY' in sdkOptions.env, false);
-  assert.equal('CODEX_API_KEY' in sdkOptions.env, false);
+  assert.equal(sdkOptions.env.CODEX_API_KEY, 'secret-key');
   assert.equal('CODEX_SANDBOX_MODE' in sdkOptions.env, false);
   assert.equal('CODEX_APPROVAL_POLICY' in sdkOptions.env, false);
 });
@@ -119,6 +119,50 @@ test('应在托管 provider 模式下注入 request-scoped model_provider 覆盖
   assert.equal(
     sdkOptions.config.model_providers.codemoss_managed_provider.wire_api,
     'responses',
+  );
+  assert.equal(
+    sdkOptions.env.CODEX_API_KEY,
+    'secret-key',
+  );
+});
+
+/**
+ * 验证托管 provider 场景下，当前请求自己的 `CODEX_API_KEY` 必须与 request-scoped
+ * `model_provider.env_key` 成对出现。
+ * 这是本次 MiniMax 报 `Missing environment variable: CODEX_API_KEY` 的直接回归保护：
+ * 如果 override 声明了 `env_key=CODEX_API_KEY`，但 `sdkOptions.env` 中没有同步注入，
+ * 底层 Codex SDK 就会在已命中正确 provider 的情况下仍然因缺少环境变量而失败。
+ */
+test('应在托管 provider 模式下将当前请求的 CODEX_API_KEY 注入到 request-scoped env', () => {
+  const sdkOptions = buildCodexSdkOptions(
+    {
+      providerId: 'minimax-cn',
+      authMode: 'api_key_env',
+      model: 'MiniMax-M3',
+      baseUrl: 'https://api.minimaxi.com/v1',
+      apiKey: 'request-secret',
+      reasoningEffort: 'medium',
+      requestMode: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+    },
+    {
+      PATH: 'C:/Windows/System32',
+      CODEX_API_KEY: 'stale-parent-secret',
+      OPENAI_API_KEY: 'local-secret',
+    },
+  );
+
+  assert.equal(
+    sdkOptions.config.model_providers.codemoss_managed_provider.env_key,
+    'CODEX_API_KEY',
+  );
+  assert.equal(
+    sdkOptions.env.CODEX_API_KEY,
+    'request-secret',
+  );
+  assert.equal(
+    sdkOptions.apiKey,
+    'request-secret',
   );
 });
 
@@ -172,6 +216,7 @@ test('应生成统一且脱敏的运行时诊断信息', () => {
     },
     {
       PATH: 'C:/Windows/System32',
+      CODEX_API_KEY: 'request-secret',
     },
     ['CODEX_SANDBOX_MODE', 'OPENAI_BASE_URL'],
   );
@@ -196,6 +241,10 @@ test('应生成统一且脱敏的运行时诊断信息', () => {
   );
   assert.equal(diagnostics.removedEnvKeys.length, 2);
   assert.equal(diagnostics.hasOpenaiBaseUrlEnv, false);
+  assert.equal(diagnostics.hasCodexApiKeyEnv, true);
+  assert.equal(diagnostics.requestScopedEnvInjected, true);
+  assert.equal(diagnostics.requestScopedEnvKey, 'CODEX_API_KEY');
+  assert.equal(diagnostics.hasDirectApiKeyOption, true);
   assert.equal('apiKey' in diagnostics, false);
 });
 

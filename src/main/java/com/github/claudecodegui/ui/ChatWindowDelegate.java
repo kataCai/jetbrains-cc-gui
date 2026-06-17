@@ -5,6 +5,7 @@ import com.github.claudecodegui.notifications.ClaudeBalloonNotifier;
 import com.github.claudecodegui.notifications.SystemReminderNotifier;
 import com.github.claudecodegui.notifications.TaskReminderPayloadFactory;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.CodexSessionBinding;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.settings.TabStateService;
 import com.github.claudecodegui.handler.AgentHandler;
@@ -255,6 +256,7 @@ public class ChatWindowDelegate {
 
         HandlerContext handlerContext = new HandlerContext(project, claudeSDKBridge, codexSDKBridge, settingsService, jsCallback);
         handlerContext.setSession(host.getSession());
+        handlerContext.setTabSessionPersistenceCallback(host::persistTabSessionState);
         host.setHandlerContext(handlerContext);
 
         MessageDispatcher messageDispatcher = new MessageDispatcher();
@@ -503,8 +505,8 @@ public class ChatWindowDelegate {
             "window.updateLinkifyCapabilities",
             JsUtils.escapeJs(OpenClassHandler.buildCapabilitiesJson())
         );
-        host.getSessionLifecycleManager().sendCurrentPermissionMode();
         replayCurrentSessionStateToFrontend();
+        host.getSessionLifecycleManager().sendCurrentPermissionMode();
         triggerPendingSessionRestoreIfNeeded();
         host.persistTabSessionState();
 
@@ -554,6 +556,16 @@ public class ChatWindowDelegate {
             if (sessionId != null && !sessionId.trim().isEmpty()) {
                 host.callJavaScript("setSessionId", JsUtils.escapeJs(sessionId));
             }
+
+            JsonObject runtimePayload = new JsonObject();
+            runtimePayload.addProperty("provider", hasText(session.getProvider()) ? session.getProvider() : "");
+            runtimePayload.addProperty("model", hasText(session.getModel()) ? session.getModel() : "");
+            runtimePayload.addProperty("permissionMode", hasText(session.getPermissionMode()) ? session.getPermissionMode() : "");
+            runtimePayload.addProperty("reasoningEffort", hasText(session.getReasoningEffort()) ? session.getReasoningEffort() : "");
+            CodexSessionBinding codexBinding = session.getState().getCodexSessionBinding();
+            runtimePayload.addProperty("codexProviderId",
+                    codexBinding != null && hasText(codexBinding.getProviderId()) ? codexBinding.getProviderId() : "");
+            host.callJavaScript("window.restoreTabRuntimeState", JsUtils.escapeJs(runtimePayload.toString()));
 
             List<ClaudeSession.Message> messages = session.getMessages();
             if (!messages.isEmpty()) {

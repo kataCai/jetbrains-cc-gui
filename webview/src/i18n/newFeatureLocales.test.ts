@@ -102,8 +102,6 @@ const REQUIRED_NEW_FEATURE_KEYS = [
   'settings.codexProvider.cliLogin.currentlyUsed',
   'settings.codexProvider.cliLogin.notInUse',
   'settings.codexProvider.cliLogin.authorizeOnly',
-  'settings.codexProvider.cliLogin.useForRequests',
-  'settings.codexProvider.cliLogin.currentlyUsingAction',
   'settings.codexProvider.modelsTitle',
   'settings.codexProvider.modelsDescription',
   'settings.codexProvider.modelsSearchPlaceholder',
@@ -146,5 +144,29 @@ describe('new feature locale coverage', () => {
       expect(value as string).not.toContain('???');
       expect(value as string).not.toContain('????');
     }
+  });
+
+  it('uses configuration-only copy for provider settings instead of runtime switching copy', () => {
+    expect(getValue(en as Record<string, unknown>, 'settings.providersDesc')).toBe(
+      'Manage Claude and Codex API provider configurations. Apply runtime provider or model changes from the chat model picker.',
+    );
+    expect(getValue(zh as Record<string, unknown>, 'settings.providersDesc')).toBe(
+      '管理 Claude 和 Codex API 供应商配置。运行时的 provider 和模型切换请在聊天模型选择器中完成。',
+    );
+    expect(getValue(en as Record<string, unknown>, 'settings.codexProvider.description')).toBe(
+      'Manage CC-GUI owned Codex runtime profiles here. Use the chat model picker to apply them per tab.',
+    );
+    expect(getValue(zh as Record<string, unknown>, 'settings.codexProvider.description')).toBe(
+      '在这里管理 CC-GUI 自有的 Codex 运行时配置，按标签页应用时请使用聊天模型选择器。',
+    );
+  });
+
+  it('drops obsolete settings-page runtime action copy and updates stale runtime provider wording', () => {
+    expect(getValue(en as Record<string, unknown>, 'settings.codexProvider.cliLogin.useForRequests')).toBeUndefined();
+    expect(getValue(zh as Record<string, unknown>, 'settings.codexProvider.cliLogin.useForRequests')).toBeUndefined();
+    expect(getValue(en as Record<string, unknown>, 'settings.codexProvider.cliLogin.currentlyUsingAction')).toBeUndefined();
+    expect(getValue(zh as Record<string, unknown>, 'settings.codexProvider.cliLogin.currentlyUsingAction')).toBeUndefined();
+    expect(getValue(en as Record<string, unknown>, 'config.runtimeProvider.title')).toBe('Switch Session Provider');
+    expect(getValue(zh as Record<string, unknown>, 'config.runtimeProvider.title')).toBe('切换会话供应商');
   });
 });

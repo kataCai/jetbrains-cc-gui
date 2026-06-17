@@ -238,7 +238,6 @@ const CODEX_PROVIDER_COMMON_FIELDS: string[] = [
   'configToml',
   'authJson',
   'customModels',
-  'autoActivate',
 ];
 
 const CODEX_PROVIDER_MODE_FIELDS: Record<CodexRequestMode, string[]> = {
@@ -625,8 +624,6 @@ export interface CodexProviderConfig {
   localConfigConflictDetected?: boolean;
   /** 诊断语义下最终应生效的 model_provider */
   finalModelProvider?: string;
-  /** Whether to auto-activate after saving */
-  autoActivate?: boolean;
 }
 
 /**

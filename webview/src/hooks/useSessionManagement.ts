@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import type { ClaudeMessage, HistoryData } from '../types';
 import { sendBridgeEvent } from '../utils/bridge';
+import { debugLog } from '../utils/debug';
 
 type ViewMode = 'chat' | 'history' | 'settings';
 
@@ -82,6 +83,9 @@ export function useSessionManagement({
   addToast,
   t,
 }: UseSessionManagementOptions): UseSessionManagementReturn {
+  const traceCodexRuntime = useCallback((event: string, payload: Record<string, unknown>) => {
+    debugLog(`[CODEX_RUNTIME_TRACE][Webview] ${event}`, payload);
+  }, []);
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [showInterruptConfirm, setShowInterruptConfirm] = useState(false);
   const pendingActionRef = useRef<'newSession' | null>(null);
@@ -116,6 +120,13 @@ export function useSessionManagement({
    * @return 无返回值
    */
   const beginSessionTransition = useCallback((nextSessionId: string | null, nextTitle: string | null) => {
+    traceCodexRuntime('beginSessionTransition', {
+      previousSessionId: currentSessionId,
+      nextSessionId,
+      nextTitle,
+      loading,
+      messageCount: messages.length,
+    });
     window.__sessionTransitioning = true;
     window.__sessionTransitionToken = createSessionTransitionToken();
     if (typeof window.__resetTransientUiState === 'function') {
@@ -158,6 +169,10 @@ export function useSessionManagement({
     setUsagePercentage,
     setUsageUsedTokens,
     setUsageMaxTokens,
+    currentSessionId,
+    loading,
+    messages.length,
+    traceCodexRuntime,
   ]);
 
   const createNewSession = useCallback(() => {
@@ -174,21 +189,32 @@ export function useSessionManagement({
   }, [beginSessionTransition, messages.length, loading]);
 
   const forceCreateNewSession = useCallback(() => {
+    traceCodexRuntime('forceCreateNewSession', {
+      currentSessionId,
+      loading,
+      messageCount: messages.length,
+    });
     if (loading) {
       sendBridgeEvent('interrupt_session');
     }
     beginSessionTransition(null, null);
     sendBridgeEvent('create_new_session');
-  }, [beginSessionTransition, loading]);
+  }, [beginSessionTransition, currentSessionId, loading, messages.length, traceCodexRuntime]);
 
   const forceCreateNewSessionWithProvider = useCallback((providerId: string) => {
+    traceCodexRuntime('forceCreateNewSessionWithProvider', {
+      currentSessionId,
+      loading,
+      providerId,
+      messageCount: messages.length,
+    });
     if (loading) {
       sendBridgeEvent('interrupt_session');
     }
     beginSessionTransition(null, null);
     sendBridgeEvent('set_provider', providerId);
     sendBridgeEvent('create_new_session');
-  }, [beginSessionTransition, loading]);
+  }, [beginSessionTransition, currentSessionId, loading, messages.length, traceCodexRuntime]);
 
   const handleConfirmNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);

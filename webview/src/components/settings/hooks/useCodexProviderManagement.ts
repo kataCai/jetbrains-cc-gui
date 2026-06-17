@@ -182,13 +182,8 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     (providerData: CodexProviderConfig) => {
       const isAdding = !codexProviderDialog.provider;
       const payload = buildCodexProviderPayload(providerData);
-      const shouldAutoActivate = providerData.autoActivate === true;
-
       if (isAdding) {
         sendToJava(`add_codex_provider:${JSON.stringify(payload)}`);
-        if (shouldAutoActivate) {
-          sendToJava(`switch_codex_provider:${JSON.stringify({ id: providerData.id })}`);
-        }
         onSuccess?.(t('toast.providerAdded'));
       } else {
         const updateData = {
@@ -196,9 +191,6 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
           updates: payload,
         };
         sendToJava(`update_codex_provider:${JSON.stringify(updateData)}`);
-        if (shouldAutoActivate) {
-          sendToJava(`switch_codex_provider:${JSON.stringify({ id: providerData.id })}`);
-        }
         onSuccess?.(t('toast.providerUpdated'));
       }
 
@@ -210,13 +202,6 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     },
     [codexProviderDialog.provider, onSuccess, t]
   );
-
-  // Switch Codex provider
-  const handleSwitchCodexProvider = useCallback((id: string) => {
-    const data = { id };
-    sendToJava(`switch_codex_provider:${JSON.stringify(data)}`);
-    setCodexLoading(true);
-  }, []);
 
   /**
    * 仅授权读取本地 Codex 配置，不直接切换当前运行时 provider。
@@ -288,7 +273,6 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
-    handleSwitchCodexProvider,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,

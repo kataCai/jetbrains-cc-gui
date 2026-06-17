@@ -123,7 +123,6 @@ describe('Codex runtime provider types', () => {
         'configToml',
         'authJson',
         'customModels',
-        'autoActivate',
       ],
       modeFields: ['baseUrl', 'models'],
     });

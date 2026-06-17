@@ -55,6 +55,26 @@ public class EnvironmentConfiguratorTest {
     }
 
     /**
+     * 验证当全局授权态仍然是 CLI Login 时，只要当前请求已经明确命中托管 provider，
+     * 就必须跳过本地 `~/.codex/config.toml.env_key` 同步。
+     * 该场景直接覆盖本次多标签 MiniMax 回归中的关键约束：
+     * request-scoped provider 选择不能再被全局本地授权态反向污染。
+     */
+    @Test
+    public void shouldSkipEnvKeySyncWhenRequestScopedSourceIsManagedProviderEvenIfGlobalModeIsCliLogin() {
+        TestEnvironmentConfigurator configurator = new TestEnvironmentConfigurator(
+                CodemossSettingsService.CODEX_RUNTIME_ACCESS_CLI_LOGIN,
+                Collections.singleton("OPENAI_API_KEY"),
+                Collections.singletonMap("OPENAI_API_KEY", "cli-login-secret")
+        );
+        Map<String, String> env = new HashMap<>();
+
+        configurator.configureCodexEnv(env, "codemoss_managed_provider");
+
+        assertFalse(env.containsKey("OPENAI_API_KEY"));
+    }
+
+    /**
      * 验证即使在 CLI Login 模式下，也不应覆盖上层已经明确传入的环境变量。
      */
     @Test

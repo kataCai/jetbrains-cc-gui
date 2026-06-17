@@ -14,11 +14,13 @@ function createOptions(provider: 'claude' | 'codex' = 'claude') {
     setUsagePercentage: vi.fn(),
     setUsageUsedTokens: vi.fn(),
     setUsageMaxTokens: vi.fn(),
+    setCurrentProvider: vi.fn(),
     setPermissionMode: vi.fn(),
     setClaudePermissionMode: vi.fn(),
     setCodexPermissionMode: vi.fn(),
     setSelectedClaudeModel: vi.fn(),
     setSelectedCodexModel: vi.fn(),
+    setActiveCodexProviderId: vi.fn(),
     setDefaultCodexModelFromConfig: vi.fn(),
     setCodexBaseUrl: vi.fn(),
     setCodexUsesCustomBaseUrl: vi.fn(),
@@ -135,5 +137,29 @@ describe('registerUsageModeCallbacks', () => {
 
     expect(options.setCodexBaseUrl).toHaveBeenCalledWith('https://rayplus.site');
     expect(options.setCodexUsesCustomBaseUrl).toHaveBeenCalledWith(true);
+  });
+
+  it('restores tab-local codex runtime state before generic bootstrap defaults', () => {
+    const options = createOptions('claude');
+    registerUsageModeCallbacks(options);
+
+    window.restoreTabRuntimeState?.(JSON.stringify({
+      provider: 'codex',
+      model: 'MiniMax-M2.5',
+      permissionMode: 'acceptEdits',
+      reasoningEffort: 'high',
+      codexProviderId: 'minimax',
+    }));
+
+    expect(options.setCurrentProvider).toHaveBeenCalledWith('codex');
+    expect(options.setSelectedCodexModel).toHaveBeenCalledWith('MiniMax-M2.5');
+    expect(options.setActiveCodexProviderId).toHaveBeenCalledWith('minimax');
+    expect(options.setReasoningEffort).toHaveBeenCalledWith('high');
+
+    const permissionUpdater = options.setPermissionMode.mock.calls[0][0];
+    const codexUpdater = options.setCodexPermissionMode.mock.calls[0][0];
+    expect(permissionUpdater('default')).toBe('acceptEdits');
+    expect(codexUpdater('default')).toBe('acceptEdits');
+    expect(options.shouldAdoptCodexDefaultModelRef.current).toBe(false);
   });
 });
