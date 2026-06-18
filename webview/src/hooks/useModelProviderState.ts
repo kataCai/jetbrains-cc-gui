@@ -121,6 +121,7 @@ export function useModelProviderState({
    * 后续 CLI 默认模型回推只用于展示，不再覆盖当前标签显式选择。
    */
   const shouldAdoptCodexDefaultModelRef = useRef(true);
+  const shouldAdoptCodexDefaultReasoningEffortRef = useRef(true);
 
   const claude = useClaudeProvider();
   const codex = useCodexProvider();
@@ -144,7 +145,7 @@ export function useModelProviderState({
     setCodexPermissionMode,
     reasoningEffort,
     setReasoningEffort,
-    handleReasoningChange,
+    handleReasoningChange: handleReasoningChangeInternal,
   } = codex;
   const {
     activeProviderConfig,
@@ -387,6 +388,11 @@ export function useModelProviderState({
     }
   }, [currentProvider, selectedClaudeModel, setLongContextEnabled]);
 
+  const handleReasoningChange = useCallback((effort: typeof reasoningEffort) => {
+    shouldAdoptCodexDefaultReasoningEffortRef.current = false;
+    handleReasoningChangeInternal(effort);
+  }, [handleReasoningChangeInternal, reasoningEffort]);
+
   /**
    * 切换 Claude thinking。
    * 特殊 provider 仍走本地状态 + 简化 bridge 事件；普通 provider 回写 provider 配置。
@@ -487,6 +493,7 @@ export function useModelProviderState({
     setActiveCodexProviderId,
     activeProviderConfigRef,
     shouldAdoptCodexDefaultModelRef,
+    shouldAdoptCodexDefaultReasoningEffortRef,
     syncActiveProviderModelMapping,
     handleModeSelect,
     handleModelSelect,

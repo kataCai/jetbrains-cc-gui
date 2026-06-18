@@ -69,6 +69,7 @@ export interface UseWindowCallbacksOptions {
   // Refs
   currentProviderRef: MutableRefObject<string>;
   shouldAdoptCodexDefaultModelRef: MutableRefObject<boolean>;
+  shouldAdoptCodexDefaultReasoningEffortRef: MutableRefObject<boolean>;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   isUserAtBottomRef: MutableRefObject<boolean>;
   userPausedRef: MutableRefObject<boolean>;

@@ -425,6 +425,8 @@ interface Window {
    * 在 React 回调注册之前暂存的标签页运行态快照。
    */
   __pendingTabRuntimeState?: string;
+  applyNewTabDefaults?: (json: string) => void;
+  __pendingNewTabDefaults?: string;
 
   /**
    * Update slash commands list (from SDK)

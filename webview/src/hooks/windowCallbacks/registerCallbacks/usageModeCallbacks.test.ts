@@ -31,8 +31,10 @@ function createOptions(provider: 'claude' | 'codex' = 'claude') {
     setStreamingEnabledSetting: vi.fn(),
     setSendShortcut: vi.fn(),
     setAutoOpenFileEnabled: vi.fn(),
+    setPermissionDialogTimeoutSeconds: vi.fn(),
     currentProviderRef: { current: provider },
     shouldAdoptCodexDefaultModelRef: { current: true },
+    shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
     syncActiveProviderModelMapping: vi.fn(),
   } as any;
 }
@@ -125,6 +127,18 @@ describe('registerUsageModeCallbacks', () => {
     expect(options.setSelectedCodexModel).not.toHaveBeenCalled();
   });
 
+  it('stores cli default reasoning without overriding a user-selected codex session reasoning', () => {
+    const options = createOptions('codex');
+    options.shouldAdoptCodexDefaultReasoningEffortRef.current = false;
+    registerUsageModeCallbacks(options);
+
+    window.updateCodexModelState?.(JSON.stringify({
+      reasoningEffort: 'high',
+    }));
+
+    expect(options.setReasoningEffort).not.toHaveBeenCalled();
+  });
+
   it('stores custom codex base_url warning metadata from backend sync', () => {
     const options = createOptions('codex');
     registerUsageModeCallbacks(options);
@@ -161,5 +175,27 @@ describe('registerUsageModeCallbacks', () => {
     expect(permissionUpdater('default')).toBe('acceptEdits');
     expect(codexUpdater('default')).toBe('acceptEdits');
     expect(options.shouldAdoptCodexDefaultModelRef.current).toBe(false);
+  });
+
+  it('applies fresh new tab defaults and protects remembered model and reasoning from later cli overwrite', () => {
+    const options = createOptions('claude');
+    registerUsageModeCallbacks(options);
+
+    window.applyNewTabDefaults?.(JSON.stringify({
+      provider: 'codex',
+      model: 'gpt-5.4',
+      permissionMode: 'bypassPermissions',
+      reasoningEffort: 'low',
+      codexProviderId: 'managed-openai',
+      modelSource: 'remembered_model',
+      reasoningSource: 'remembered_reasoning',
+    }));
+
+    expect(options.setCurrentProvider).toHaveBeenCalledWith('codex');
+    expect(options.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.4');
+    expect(options.setActiveCodexProviderId).toHaveBeenCalledWith('managed-openai');
+    expect(options.setReasoningEffort).toHaveBeenCalledWith('low');
+    expect(options.shouldAdoptCodexDefaultModelRef.current).toBe(false);
+    expect(options.shouldAdoptCodexDefaultReasoningEffortRef.current).toBe(false);
   });
 });

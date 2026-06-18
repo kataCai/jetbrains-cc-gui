@@ -309,6 +309,7 @@ public class ModelProviderHandler {
             if (context.getSession() != null) {
                 context.getSession().setReasoningEffort(effort);
             }
+            context.getSettingsService().setLastCodexReasoningEffort(effort);
             context.requestTabSessionPersistence();
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to set reasoning effort: " + e.getMessage(), e);
