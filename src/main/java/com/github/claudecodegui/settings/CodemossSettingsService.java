@@ -71,6 +71,7 @@ public class CodemossSettingsService {
     private static final String CODEX_MODEL_DISPLAY_VISIBILITY_KEY = "visibility";
     private static final String CODEX_MODEL_DESCRIPTION_KEY = "description";
     private static final String CODEX_MODEL_REASONING_EFFORT_KEY = "reasoningEffort";
+    private static final String CODEX_LAST_REASONING_EFFORT_KEY = "lastReasoningEffort";
     private static final String CODEX_MODEL_SOURCE_KEY = "source";
     private static final String CODEX_MODEL_RUNNABLE_KEY = "runnable";
     private static final String AI_FEATURE_PROVIDER_KEY = "provider";
@@ -2116,6 +2117,153 @@ public class CodemossSettingsService {
     }
 
     /**
+     * 读取最近一次由用户显式选择的 Codex 思考强度。
+     * 该值仅用于“新建 Tab 默认值”初始化，不参与现有 Tab 运行态恢复，
+     * 以避免把跨 Tab 的全局偏好和单 Tab 的会话快照语义混在一起。
+     *
+     * @return 最近一次记录的思考强度；不存在或为空时返回空字符串
+     * @throws IOException 配置读取失败时抛出
+     */
+    public String getLastCodexReasoningEffort() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        return normalizeString(getOptionalString(codex, CODEX_LAST_REASONING_EFFORT_KEY), "");
+    }
+
+    /**
+     * 持久化最近一次由用户显式选择的 Codex 思考强度。
+     * 只接受非空字符串；空值会清理旧记录，避免脏数据误导新建 Tab 默认值解析。
+     *
+     * @param reasoningEffort 最近一次选择的思考强度
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void setLastCodexReasoningEffort(String reasoningEffort) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        String normalizedReasoningEffort = normalizeString(reasoningEffort, "");
+        if (normalizedReasoningEffort.isEmpty()) {
+            codex.remove(CODEX_LAST_REASONING_EFFORT_KEY);
+        } else {
+            codex.addProperty(CODEX_LAST_REASONING_EFFORT_KEY, normalizedReasoningEffort);
+        }
+        writeConfig(config);
+    }
+
+    /**
+     * 构建仅用于 fresh new tab 的默认初始化快照。
+     * 该快照显式固定 provider/mode，并按“最近选择 -> CLI 默认 -> provider/model 元数据 -> 兜底”
+     * 的顺序解析 model 与 reasoning，避免新建 Tab 首帧与实际发送链路不一致。
+     *
+     * @return 可直接下发给前端的新建 Tab 默认快照
+     * @throws IOException 配置读取失败时抛出
+     */
+    public JsonObject buildFreshNewTabDefaults() throws IOException {
+        JsonObject result = new JsonObject();
+        result.addProperty("provider", AI_FEATURE_PROVIDER_CODEX);
+        result.addProperty("permissionMode", "bypassPermissions");
+
+        JsonObject selectedCodexModel = getSelectedCodexModel();
+        JsonObject cliModelState = getCurrentCodexModelState();
+
+        String rememberedProviderId = normalizeString(getOptionalString(selectedCodexModel, "providerId"), "");
+        String rememberedModelId = normalizeString(getOptionalString(selectedCodexModel, "modelId"), "");
+        String cliModelId = normalizeString(getOptionalString(cliModelState, "model"), "");
+        String cliModelProviderId = normalizeString(getOptionalString(cliModelState, "modelProvider"), "");
+        String rememberedReasoningEffort = normalizeString(getLastCodexReasoningEffort(), "");
+        String cliReasoningEffort = normalizeString(getOptionalString(cliModelState, "reasoningEffort"), "");
+
+        JsonObject rememberedProvider = resolveRunnableCodexProvider(rememberedProviderId);
+        JsonObject cliProvider = resolveRunnableCodexProvider(cliModelProviderId);
+        JsonObject activeProvider = getActiveCodexProvider();
+
+        String resolvedProviderId = "";
+        String resolvedModelId = "";
+        String resolvedModelSource = "runtime_fallback";
+
+        boolean rememberedCliLoginModel = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(rememberedProviderId)
+                && rememberedProvider != null
+                && !rememberedModelId.isEmpty();
+        if (rememberedCliLoginModel || (rememberedProvider != null && providerContainsModel(rememberedProvider, rememberedModelId))) {
+            resolvedProviderId = rememberedProviderId;
+            resolvedModelId = rememberedModelId;
+            resolvedModelSource = "remembered_model";
+        } else if (!rememberedModelId.isEmpty()) {
+            LOG.info("[CodemossSettings] Fresh new tab ignored stale remembered Codex model: providerId="
+                    + rememberedProviderId + ", modelId=" + rememberedModelId);
+        }
+
+        if (resolvedModelId.isEmpty() && !cliModelId.isEmpty()) {
+            if (cliProvider != null && providerContainsModel(cliProvider, cliModelId)) {
+                resolvedProviderId = cliModelProviderId;
+                resolvedModelId = cliModelId;
+                resolvedModelSource = "codex_config";
+            } else if (CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(cliModelProviderId)
+                    || cliModelProviderId.isEmpty()) {
+                resolvedProviderId = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID;
+                resolvedModelId = cliModelId;
+                resolvedModelSource = "codex_config_cli";
+            } else {
+                LOG.info("[CodemossSettings] Fresh new tab ignored CLI model because provider/model is unavailable: providerId="
+                        + cliModelProviderId + ", modelId=" + cliModelId);
+            }
+        }
+
+        if (resolvedModelId.isEmpty()) {
+            JsonObject fallbackProvider = activeProvider != null ? activeProvider : rememberedProvider;
+            String fallbackProviderId = normalizeString(getOptionalString(fallbackProvider, "id"), "");
+            String fallbackModelId = readFirstConfiguredModelId(fallbackProvider);
+            if (!fallbackModelId.isEmpty()) {
+                resolvedProviderId = fallbackProviderId;
+                resolvedModelId = fallbackModelId;
+                resolvedModelSource = "provider_default";
+            }
+        }
+
+        if (resolvedModelId.isEmpty()) {
+            resolvedProviderId = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID;
+            resolvedModelId = "gpt-5.5";
+        }
+
+        JsonObject resolvedProvider = resolveRunnableCodexProvider(resolvedProviderId);
+        String resolvedReasoningEffort = "";
+        String resolvedReasoningSource = "runtime_fallback";
+
+        if (!rememberedReasoningEffort.isEmpty()) {
+            resolvedReasoningEffort = rememberedReasoningEffort;
+            resolvedReasoningSource = "remembered_reasoning";
+        } else if (!cliReasoningEffort.isEmpty()) {
+            resolvedReasoningEffort = cliReasoningEffort;
+            resolvedReasoningSource = "codex_config";
+        } else {
+            JsonObject modelMetadata = findProviderModelById(resolvedProvider, resolvedModelId);
+            if (modelMetadata == null
+                    && CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(resolvedProviderId)) {
+                modelMetadata = findBuiltinCodexCliModelById(resolvedModelId);
+            }
+            String modelReasoningEffort = normalizeString(getOptionalString(modelMetadata, CODEX_MODEL_REASONING_EFFORT_KEY), "");
+            String providerReasoningEffort = normalizeString(getOptionalString(resolvedProvider, CODEX_MODEL_REASONING_EFFORT_KEY), "");
+            if (!modelReasoningEffort.isEmpty()) {
+                resolvedReasoningEffort = modelReasoningEffort;
+                resolvedReasoningSource = "model_metadata";
+            } else if (!providerReasoningEffort.isEmpty()) {
+                resolvedReasoningEffort = providerReasoningEffort;
+                resolvedReasoningSource = "provider_metadata";
+            }
+        }
+
+        if (resolvedReasoningEffort.isEmpty()) {
+            resolvedReasoningEffort = "medium";
+        }
+
+        result.addProperty("model", resolvedModelId);
+        result.addProperty("reasoningEffort", resolvedReasoningEffort);
+        result.addProperty("codexProviderId", resolvedProviderId);
+        result.addProperty("modelSource", resolvedModelSource);
+        result.addProperty("reasoningSource", resolvedReasoningSource);
+        return result;
+    }
+
+    /**
      * 原子切换 Codex 当前运行时 provider 与 selectedModel。
      * 统一模型目录选择事件需要一次性更新 `codex.current` 与 `codex.selectedModel`，
      * 避免界面已切换到新模型，但后端下一条消息仍沿用旧 active provider。
@@ -2475,24 +2623,138 @@ public class CodemossSettingsService {
     private JsonArray buildBuiltinCodexCliModels() {
         JsonArray models = new JsonArray();
         models.add(createBuiltinCodexModel("gpt-5.5", "gpt-5.5",
-                "Frontier model for complex coding, research, and real-world work.", null));
+                "Frontier model for complex coding, research, and real-world work.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.4", "gpt-5.4",
-                "Strong model for everyday coding.", null));
+                "Strong model for everyday coding.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.2-codex", "gpt-5.2-codex",
-                "Frontier agentic coding model.", null));
+                "Frontier agentic coding model.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.1-codex-max", "gpt-5.1-codex-max",
-                "Codex-optimized flagship for deep and fast reasoning.", null));
+                "Codex-optimized flagship for deep and fast reasoning.", "high"));
         models.add(createBuiltinCodexModel("gpt-5.4-mini", "gpt-5.4-mini",
-                "Small, fast, and cost-efficient model for simpler coding tasks.", null));
+                "Small, fast, and cost-efficient model for simpler coding tasks.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.3-codex", "gpt-5.3-codex",
-                "Coding-optimized model.", null));
+                "Coding-optimized model.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.3-codex-spark", "gpt-5.3-codex-spark",
-                "Ultra-fast coding model.", null));
+                "Ultra-fast coding model.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.2", "gpt-5.2",
-                "Optimized for professional work and long-running agents.", null));
+                "Optimized for professional work and long-running agents.", "medium"));
         models.add(createBuiltinCodexModel("gpt-5.1-codex-mini", "gpt-5.1-codex-mini",
-                "Optimized for Codex. Cheaper, faster, but less capable.", null));
+                "Optimized for Codex. Cheaper, faster, but less capable.", "medium"));
         return models;
+    }
+
+    /**
+     * 判断指定 provider 是否声明了指定模型。
+     * 该校验用于 fresh new tab 解析最近模型与 CLI 模型时兜底过滤失效配置，
+     * 避免 UI 命中了已删除 provider/model 后进入不一致状态。
+     *
+     * @param provider Codex provider 配置
+     * @param modelId 待校验的模型 id
+     * @return 命中时返回 true
+     */
+    private boolean providerContainsModel(JsonObject provider, String modelId) {
+        return findProviderModelById(provider, modelId) != null;
+    }
+
+    /**
+     * 在指定 provider 的模型数组中定位目标模型节点。
+     * 同时兼容 `models` 与历史 `customModels`，供新建 Tab 默认值解析读取模型元数据。
+     *
+     * @param provider Codex provider 配置
+     * @param modelId 待定位的模型 id
+     * @return 命中的模型对象；未命中时返回 null
+     */
+    private JsonObject findProviderModelById(JsonObject provider, String modelId) {
+        String normalizedModelId = normalizeString(modelId, "");
+        if (provider == null || normalizedModelId.isEmpty()) {
+            return null;
+        }
+        JsonArray models = readProviderModels(provider);
+        for (JsonElement modelElement : models) {
+            if (modelElement == null || modelElement.isJsonNull() || !modelElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject model = modelElement.getAsJsonObject();
+            if (normalizedModelId.equals(normalizeString(getOptionalString(model, "id"), ""))) {
+                return model;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在内建 CLI Login 模型目录中定位目标模型节点。
+     * CLI Login provider 是虚拟 provider，没有持久化 `models` 字段，
+     * 因此 fresh new tab 回退到内建模型元数据时需要单独从内建目录查询。
+     *
+     * @param modelId 待定位的模型 id
+     * @return 命中的模型对象；未命中时返回 null
+     */
+    private JsonObject findBuiltinCodexCliModelById(String modelId) {
+        String normalizedModelId = normalizeString(modelId, "");
+        if (normalizedModelId.isEmpty()) {
+            return null;
+        }
+        JsonArray builtinModels = buildBuiltinCodexCliModels();
+        for (JsonElement modelElement : builtinModels) {
+            if (modelElement == null || modelElement.isJsonNull() || !modelElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject model = modelElement.getAsJsonObject();
+            if (normalizedModelId.equals(normalizeString(getOptionalString(model, "id"), ""))) {
+                return model;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 读取 provider 的首个可运行模型 id。
+     * 新建 Tab 默认值在没有最近模型和 CLI 模型时需要回退到 provider 默认模型，
+     * 因此单独抽出该逻辑以便复用并保持回退策略一致。
+     *
+     * @param provider Codex provider 配置
+     * @return 首个可用模型 id；不存在时返回空字符串
+     */
+    private String readFirstConfiguredModelId(JsonObject provider) {
+        JsonObject firstModel = provider == null ? null : findFirstProviderModel(provider);
+        return firstModel == null ? "" : normalizeString(getOptionalString(firstModel, "id"), "");
+    }
+
+    /**
+     * 读取 provider 的首个模型节点。
+     *
+     * @param provider Codex provider 配置
+     * @return 首个模型对象；不存在时返回 null
+     */
+    private JsonObject findFirstProviderModel(JsonObject provider) {
+        if (provider == null) {
+            return null;
+        }
+        JsonArray models = readProviderModels(provider);
+        if (models.size() == 0 || !models.get(0).isJsonObject()) {
+            return null;
+        }
+        return models.get(0).getAsJsonObject();
+    }
+
+    /**
+     * 解析一个仍然可用于新建 Tab 初始化的 provider。
+     * 对 CLI Login 虚拟 provider 做单独放行，对普通 provider 则按当前配置只读查询。
+     *
+     * @param providerId 目标 provider id
+     * @return 可用 provider；不可用时返回 null
+     * @throws IOException 配置读取失败时抛出
+     */
+    private JsonObject resolveRunnableCodexProvider(String providerId) throws IOException {
+        String normalizedProviderId = normalizeString(providerId, "");
+        if (normalizedProviderId.isEmpty()) {
+            return null;
+        }
+        if (CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(normalizedProviderId)) {
+            return getCodexProviderById(normalizedProviderId);
+        }
+        return getCodexProviderById(normalizedProviderId);
     }
 
     /**

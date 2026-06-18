@@ -48,6 +48,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class ClaudeChatWindow {
 
+    /**
+     * 标记当前聊天窗口的初始化来源。
+     * 仅 `FRESH_NEW_TAB` 会在前端首帧 ready 后应用“新建 Tab 默认快照”，
+     * 其余场景继续沿用现有恢复链路，避免误伤已恢复 Tab 和同 Tab 新会话。
+     */
+    public enum InitializationSource {
+        NORMAL,
+        FRESH_NEW_TAB
+    }
+
     private static final Logger LOG = Logger.getInstance(ClaudeChatWindow.class);
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
 
@@ -57,6 +67,7 @@ public class ClaudeChatWindow {
     private final Project project;
     private final CodemossSettingsService settingsService;
     private final HtmlLoader htmlLoader;
+    private final InitializationSource initializationSource;
 
     private Content parentContent;
     private String originalTabName;
@@ -91,15 +102,29 @@ public class ClaudeChatWindow {
     private SessionCallbackAdapter sessionCallbackAdapter;
 
     public ClaudeChatWindow(Project project) {
-        this(project, false);
+        this(project, false, InitializationSource.NORMAL);
     }
 
     public ClaudeChatWindow(Project project, boolean skipRegister) {
+        this(project, skipRegister, InitializationSource.NORMAL);
+    }
+
+    /**
+     * 创建聊天窗口并指定初始化来源。
+     * 新增该构造重载是为了让“新建 Tab 默认值”只绑定到 fresh new tab，
+     * 而不影响 IDE 启动恢复、手动强制刷新以及其他普通窗口构建路径。
+     *
+     * @param project 当前项目
+     * @param skipRegister 是否跳过主窗口注册
+     * @param initializationSource 当前窗口初始化来源
+     */
+    public ClaudeChatWindow(Project project, boolean skipRegister, InitializationSource initializationSource) {
         this.project = project;
         this.claudeSDKBridge = new ClaudeSDKBridge();
         this.codexSDKBridge = new CodexSDKBridge();
         this.settingsService = new CodemossSettingsService();
         this.htmlLoader = new HtmlLoader(getClass());
+        this.initializationSource = initializationSource == null ? InitializationSource.NORMAL : initializationSource;
         this.mainPanel = new JPanel(new BorderLayout());
 
         this.mainPanel.setBackground(com.github.claudecodegui.util.ThemeConfigService.getBackgroundColor());
@@ -1301,6 +1326,11 @@ public class ClaudeChatWindow {
             @Override
             public void updateSessionTitle(String title) {
                 ClaudeChatWindow.this.callJavaScript("updateSessionTitle", JsUtils.escapeJs(title));
+            }
+
+            @Override
+            public boolean shouldApplyFreshNewTabDefaults() {
+                return ClaudeChatWindow.this.initializationSource == InitializationSource.FRESH_NEW_TAB;
             }
         };
     }

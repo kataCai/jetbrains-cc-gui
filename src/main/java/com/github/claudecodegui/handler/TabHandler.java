@@ -64,7 +64,11 @@ public class TabHandler extends BaseMessageHandler {
                 }
 
                 // Create a new chat window instance with skipRegister=true (don't replace the main instance)
-                ClaudeChatWindow newChatWindow = new ClaudeChatWindow(project, true);
+                ClaudeChatWindow newChatWindow = new ClaudeChatWindow(
+                        project,
+                        true,
+                        ClaudeChatWindow.InitializationSource.FRESH_NEW_TAB
+                );
 
                 // Get tab index before adding content
                 ContentManager contentManager = toolWindow.getContentManager();

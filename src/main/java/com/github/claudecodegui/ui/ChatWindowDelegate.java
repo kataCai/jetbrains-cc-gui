@@ -113,6 +113,7 @@ public class ChatWindowDelegate {
         TabSessionRestoreState.RestoreRequest consumePendingRestoreRequest();
         void markPendingRestoreStarted();
         void updateSessionTitle(String title);
+        boolean shouldApplyFreshNewTabDefaults();
     }
 
     private final DelegateHost host;
@@ -514,6 +515,7 @@ public class ChatWindowDelegate {
             JsUtils.escapeJs(OpenClassHandler.buildCapabilitiesJson())
         );
         replayCurrentSessionStateToFrontend();
+        applyFreshNewTabDefaultsIfNeeded();
         host.getSessionLifecycleManager().sendCurrentPermissionMode();
         triggerPendingSessionRestoreIfNeeded();
         host.persistTabSessionState();
@@ -626,6 +628,108 @@ public class ChatWindowDelegate {
                     + ", streaming=" + streamActive);
         } catch (Exception e) {
             LOG.warn("Failed to replay current session state to frontend: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 在 fresh new tab 首次 ready 时应用“新建 Tab 默认快照”。
+     * 这里不仅要通知前端更新选择器，还必须同步后端 session 的 provider/model/reasoning/binding，
+     * 否则 UI 默认值与后续真正发消息时使用的运行态会出现偏差。
+     */
+    private void applyFreshNewTabDefaultsIfNeeded() {
+        if (!host.shouldApplyFreshNewTabDefaults()) {
+            return;
+        }
+
+        ClaudeSession session = host.getSession();
+        if (session == null || hasText(session.getSessionId()) || !session.getMessages().isEmpty()) {
+            return;
+        }
+
+        try {
+            JsonObject defaults = host.getSettingsService().buildFreshNewTabDefaults();
+            String provider = hasText(defaults.get("provider") != null ? defaults.get("provider").getAsString() : null)
+                    ? defaults.get("provider").getAsString().trim()
+                    : "codex";
+            String model = hasText(defaults.get("model") != null ? defaults.get("model").getAsString() : null)
+                    ? defaults.get("model").getAsString().trim()
+                    : "";
+            String permissionMode = hasText(defaults.get("permissionMode") != null ? defaults.get("permissionMode").getAsString() : null)
+                    ? defaults.get("permissionMode").getAsString().trim()
+                    : "bypassPermissions";
+            String reasoningEffort = hasText(defaults.get("reasoningEffort") != null ? defaults.get("reasoningEffort").getAsString() : null)
+                    ? defaults.get("reasoningEffort").getAsString().trim()
+                    : "medium";
+            String codexProviderId = hasText(defaults.get("codexProviderId") != null ? defaults.get("codexProviderId").getAsString() : null)
+                    ? defaults.get("codexProviderId").getAsString().trim()
+                    : "";
+
+            session.setProvider(provider);
+            session.setPermissionMode(permissionMode);
+            if (hasText(model)) {
+                session.setModel(model);
+            }
+            session.setReasoningEffort(reasoningEffort);
+            session.getState().setCodexSessionBinding(buildFreshNewTabCodexBinding(codexProviderId, model));
+
+            host.callJavaScript("window.applyNewTabDefaults", JsUtils.escapeJs(defaults.toString()));
+            host.persistTabSessionState();
+            LOG.info("[FreshNewTab] Applied fresh new tab defaults: " + defaults);
+        } catch (Exception e) {
+            LOG.warn("[FreshNewTab] Failed to apply fresh new tab defaults: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 根据 fresh new tab 默认值构建最小可用的 Codex 会话绑定。
+     * 这里复用设置层中的 provider 查询，保证前端命中的 providerId 能在发送链路里继续生效。
+     *
+     * @param providerId 默认快照解析出的 Codex provider id
+     * @param modelId 默认快照解析出的 Codex model id
+     * @return 可写入当前 session 的 Codex 绑定；无法构建时返回 null
+     */
+    private CodexSessionBinding buildFreshNewTabCodexBinding(String providerId, String modelId) {
+        if (!hasText(providerId) || !hasText(modelId)) {
+            return null;
+        }
+
+        try {
+            JsonObject provider = host.getSettingsService().getCodexProviderById(providerId);
+            if (provider == null) {
+                return null;
+            }
+
+            boolean isCliLoginProvider = provider.has("isCodexCliLoginProvider")
+                    && !provider.get("isCodexCliLoginProvider").isJsonNull()
+                    && provider.get("isCodexCliLoginProvider").getAsBoolean();
+            if (isCliLoginProvider) {
+                return new CodexSessionBinding(
+                        providerId,
+                        modelId,
+                        "codex_sdk",
+                        "codex_cli_login",
+                        "codex_cli_login"
+                );
+            }
+
+            String requestMode = provider.has("requestMode") && !provider.get("requestMode").isJsonNull()
+                    ? provider.get("requestMode").getAsString().trim()
+                    : "codex_sdk";
+            String baseUrlSource = provider.has("baseUrl")
+                    && !provider.get("baseUrl").isJsonNull()
+                    && hasText(provider.get("baseUrl").getAsString())
+                    ? "provider"
+                    : "sdk_default";
+            return new CodexSessionBinding(
+                    providerId,
+                    modelId,
+                    hasText(requestMode) ? requestMode : "codex_sdk",
+                    baseUrlSource,
+                    "codemoss_managed_provider"
+            );
+        } catch (Exception e) {
+            LOG.warn("[FreshNewTab] Failed to build Codex binding for providerId=" + providerId + ": " + e.getMessage());
+            return null;
         }
     }
 

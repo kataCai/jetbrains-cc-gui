@@ -233,6 +233,20 @@ public class ModelProviderHandlerTest {
         assertTrue(description.contains("effectiveConfigSource=managed_provider"));
     }
 
+    @Test
+    public void shouldPersistLastCodexReasoningEffortWhenUserChangesReasoning() throws Exception {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TabScopedSettingsService settingsService = new TabScopedSettingsService();
+        HandlerContext context = new HandlerContext(createProject(), null, null, settingsService, jsCallback);
+        context.setSession(new ClaudeSession(createProject(), null, null));
+
+        ModelProviderHandler handler = new ModelProviderHandler(context, new UsagePushService(context));
+        handler.handleSetReasoningEffort("{\"reasoningEffort\":\"low\"}");
+
+        assertEquals("low", context.getSession().getReasoningEffort());
+        assertEquals("low", settingsService.lastReasoningEffort);
+    }
+
     private static Project createProject() {
         return (Project) Proxy.newProxyInstance(
                 Project.class.getClassLoader(),
@@ -274,6 +288,7 @@ public class ModelProviderHandlerTest {
         private boolean selectCodexModelCalled;
         private String lastSetSelectedProviderId = "";
         private String lastSetSelectedModelId = "";
+        private String lastReasoningEffort = "";
 
         void addProvider(String providerId, String... modelIds) {
             JsonObject provider = new JsonObject();
@@ -315,6 +330,11 @@ public class ModelProviderHandlerTest {
         public JsonObject getCodexProviderById(String providerId) {
             JsonObject provider = providers.get(providerId);
             return provider == null ? null : provider.deepCopy();
+        }
+
+        @Override
+        public void setLastCodexReasoningEffort(String reasoningEffort) {
+            lastReasoningEffort = reasoningEffort;
         }
     }
 

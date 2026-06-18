@@ -10,6 +10,7 @@ import com.github.claudecodegui.session.StreamMessageCoalescer;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.ui.toolwindow.TabSessionRestoreState;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.content.Content;
@@ -79,6 +80,32 @@ public class ChatWindowDelegateRestoreTest {
         assertEquals("provider-b", payload.get("codexProviderId").getAsString());
     }
 
+    @Test
+    public void shouldApplyFreshNewTabDefaultsOnlyForFreshNewTabWindows() {
+        RecordingSessionLifecycleManager lifecycleManager = new RecordingSessionLifecycleManager();
+        RecordingHost host = new RecordingHost(lifecycleManager);
+        host.applyFreshNewTabDefaults = true;
+        host.freshNewTabDefaults = new JsonObject();
+        host.freshNewTabDefaults.addProperty("provider", "codex");
+        host.freshNewTabDefaults.addProperty("permissionMode", "bypassPermissions");
+        host.freshNewTabDefaults.addProperty("model", "gpt-5.4");
+        host.freshNewTabDefaults.addProperty("reasoningEffort", "low");
+        host.freshNewTabDefaults.addProperty("codexProviderId", "provider-a");
+
+        ChatWindowDelegate delegate = new ChatWindowDelegate(host);
+        delegate.handleFrontendReady();
+
+        JsonObject payload = host.findFirstPayload("window.applyNewTabDefaults");
+        assertEquals("codex", payload.get("provider").getAsString());
+        assertEquals("gpt-5.4", payload.get("model").getAsString());
+        assertEquals("low", payload.get("reasoningEffort").getAsString());
+        assertEquals("provider-a", payload.get("codexProviderId").getAsString());
+        assertEquals("codex", host.session.getProvider());
+        assertEquals("gpt-5.4", host.session.getModel());
+        assertEquals("low", host.session.getReasoningEffort());
+        assertEquals("provider-a", host.session.getState().getCodexSessionBinding().getProviderId());
+    }
+
     private static Project createProject() {
         return (Project) Proxy.newProxyInstance(
                 Project.class.getClassLoader(),
@@ -113,6 +140,8 @@ public class ChatWindowDelegateRestoreTest {
         private final List<String> jsFunctionNames = new ArrayList<>();
         private final List<String> jsPayloads = new ArrayList<>();
         private boolean frontendReady;
+        private boolean applyFreshNewTabDefaults;
+        private JsonObject freshNewTabDefaults;
 
         private RecordingHost(RecordingSessionLifecycleManager lifecycleManager) {
             this.lifecycleManager = lifecycleManager;
@@ -177,7 +206,25 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public CodemossSettingsService getSettingsService() {
-            return settingsService;
+            return new CodemossSettingsService() {
+                @Override
+                public JsonObject buildFreshNewTabDefaults() {
+                    return freshNewTabDefaults == null ? new JsonObject() : freshNewTabDefaults.deepCopy();
+                }
+
+                @Override
+                public JsonObject getCodexProviderById(String providerId) {
+                    JsonObject provider = new JsonObject();
+                    provider.addProperty("id", providerId);
+                    provider.addProperty("requestMode", "codex_sdk");
+                    JsonArray models = new JsonArray();
+                    JsonObject model = new JsonObject();
+                    model.addProperty("id", "gpt-5.4");
+                    models.add(model);
+                    provider.add("models", models);
+                    return provider;
+                }
+            };
         }
 
         @Override
@@ -299,6 +346,11 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public void updateSessionTitle(String title) {
+        }
+
+        @Override
+        public boolean shouldApplyFreshNewTabDefaults() {
+            return applyFreshNewTabDefaults;
         }
     }
 

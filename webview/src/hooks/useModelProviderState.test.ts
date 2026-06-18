@@ -156,6 +156,24 @@ describe('useModelProviderState', () => {
     expect(result.current.defaultCodexModelFromConfig).toBeNull();
   });
 
+  it('stops adopting cli default reasoning after the user manually changes codex reasoning effort', () => {
+    const { result } = renderHook(() => useModelProviderState({
+      addToast: vi.fn(),
+      t: ((key: string) => key) as any,
+    }));
+
+    act(() => {
+      result.current.handleProviderSelect('codex');
+    });
+
+    act(() => {
+      result.current.handleReasoningChange('low');
+    });
+
+    expect(result.current.shouldAdoptCodexDefaultReasoningEffortRef.current).toBe(false);
+    expect(sendBridgeEvent).toHaveBeenCalledWith('set_reasoning_effort', 'low');
+  });
+
   it('uses the provider id encoded in the composite catalog key for codex selection', () => {
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),

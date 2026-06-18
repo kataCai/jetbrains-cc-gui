@@ -157,6 +157,35 @@ public class CodemossSettingsServiceCodexModelDisplayConfigTest {
                 .getAsBoolean());
     }
 
+    @Test
+    public void shouldBuildFreshNewTabDefaultsFromRememberedModelAndReasoningFirst() throws Exception {
+        Path tempHome = Files.createTempDirectory("codex-new-tab-defaults-home");
+        useTemporaryHomeDirectory(tempHome);
+
+        JsonObject config = new JsonObject();
+        JsonObject codex = new JsonObject();
+        codex.addProperty("current", "provider-a");
+        codex.add("providers", createProviders());
+        JsonObject selectedModel = new JsonObject();
+        selectedModel.addProperty("providerId", "provider-b");
+        selectedModel.addProperty("modelId", "o3");
+        codex.add("selectedModel", selectedModel);
+        codex.addProperty("lastReasoningEffort", "low");
+        config.add("codex", codex);
+        Files.writeString(tempHome.resolve(".codemoss").resolve("config.json"), config.toString());
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        JsonObject defaults = service.buildFreshNewTabDefaults();
+
+        assertEquals("codex", defaults.get("provider").getAsString());
+        assertEquals("bypassPermissions", defaults.get("permissionMode").getAsString());
+        assertEquals("provider-b", defaults.get("codexProviderId").getAsString());
+        assertEquals("o3", defaults.get("model").getAsString());
+        assertEquals("remembered_model", defaults.get("modelSource").getAsString());
+        assertEquals("low", defaults.get("reasoningEffort").getAsString());
+        assertEquals("remembered_reasoning", defaults.get("reasoningSource").getAsString());
+    }
+
     private JsonObject invokeGetCodexModelDisplayConfig(CodemossSettingsService service) throws Exception {
         Method method;
         try {

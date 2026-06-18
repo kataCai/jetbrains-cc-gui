@@ -598,6 +598,14 @@ if (typeof window !== 'undefined' && !window.restoreTabRuntimeState) {
   };
 }
 
+if (typeof window !== 'undefined' && !window.applyNewTabDefaults) {
+  debugLog('[Main] Pre-registering applyNewTabDefaults placeholder');
+  window.applyNewTabDefaults = (json: string) => {
+    debugLog('[Main] Storing pending fresh new tab defaults, length=' + (json ? json.length : 0));
+    window.__pendingNewTabDefaults = json;
+  };
+}
+
 if (typeof window !== 'undefined' && !window.historyLoadComplete) {
   debugLog('[Main] Pre-registering historyLoadComplete placeholder');
   window.historyLoadComplete = () => {
