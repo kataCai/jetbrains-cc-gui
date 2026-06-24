@@ -114,6 +114,8 @@ public class ChatWindowDelegate {
         void markPendingRestoreStarted();
         void updateSessionTitle(String title);
         boolean shouldApplyFreshNewTabDefaults();
+        boolean areFreshNewTabDefaultsApplied();
+        void markFreshNewTabDefaultsApplied();
     }
 
     private final DelegateHost host;
@@ -509,6 +511,7 @@ public class ChatWindowDelegate {
     public void handleFrontendReady() {
         LOG.info("Received frontend_ready signal, frontend is now ready to receive data");
         host.setFrontendReady(true);
+        host.getWebviewWatchdog().suppressRecovery("frontend_ready");
 
         host.callJavaScript(
             "window.updateLinkifyCapabilities",
@@ -518,7 +521,6 @@ public class ChatWindowDelegate {
         applyFreshNewTabDefaultsIfNeeded();
         host.getSessionLifecycleManager().sendCurrentPermissionMode();
         triggerPendingSessionRestoreIfNeeded();
-        host.persistTabSessionState();
 
         if (pendingQuickFixPrompt != null && pendingQuickFixCallback != null) {
             LOG.info("Processing pending QuickFix message after frontend ready");
@@ -640,6 +642,9 @@ public class ChatWindowDelegate {
         if (!host.shouldApplyFreshNewTabDefaults()) {
             return;
         }
+        if (host.areFreshNewTabDefaultsApplied()) {
+            return;
+        }
 
         ClaudeSession session = host.getSession();
         if (session == null || hasText(session.getSessionId()) || !session.getMessages().isEmpty()) {
@@ -673,6 +678,8 @@ public class ChatWindowDelegate {
             session.getState().setCodexSessionBinding(buildFreshNewTabCodexBinding(codexProviderId, model));
 
             host.callJavaScript("window.applyNewTabDefaults", JsUtils.escapeJs(defaults.toString()));
+            // 只在同一 tab 生命周期内首次应用默认值时写回 snapshot，避免 watchdog reload 重复覆盖运行态。
+            host.markFreshNewTabDefaultsApplied();
             host.persistTabSessionState();
             LOG.info("[FreshNewTab] Applied fresh new tab defaults: " + defaults);
         } catch (Exception e) {

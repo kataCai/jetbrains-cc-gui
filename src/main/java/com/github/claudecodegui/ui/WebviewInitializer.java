@@ -310,6 +310,7 @@ public class WebviewInitializer {
 
             // Reset webview health markers and start watchdog once the browser is created.
             host.getWebviewWatchdog().resetTimestamps();
+            host.getWebviewWatchdog().suppressRecovery("webview_created");
             host.getWebviewWatchdog().start();
 
             JComponent browserComponent = browser.getComponent();
@@ -661,6 +662,7 @@ public class WebviewInitializer {
                 return;
             }
             host.setFrontendReady(false);
+            host.getWebviewWatchdog().suppressRecovery(reason + "_reload_started");
             try {
                 browser.loadHTML(host.getHtmlLoader().loadChatHtml());
                 host.getMainPanel().revalidate();
@@ -679,6 +681,7 @@ public class WebviewInitializer {
             if (host.isDisposed()) { return; }
 
             host.setFrontendReady(false);
+            host.getWebviewWatchdog().suppressRecovery(reason + "_recreate_started");
             JPanel mainPanel = host.getMainPanel();
             JBCefBrowser browser = host.getBrowser();
             try {

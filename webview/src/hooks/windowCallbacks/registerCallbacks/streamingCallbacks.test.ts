@@ -47,6 +47,7 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   setSelectedAgent: vi.fn(),
   currentProviderRef: { current: 'claude' },
   shouldAdoptCodexDefaultModelRef: { current: true },
+  shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
   messagesContainerRef: { current: null },
   isUserAtBottomRef: { current: true },
   userPausedRef: { current: false },

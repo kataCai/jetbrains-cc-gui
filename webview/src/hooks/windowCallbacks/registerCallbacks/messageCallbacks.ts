@@ -567,10 +567,6 @@ export function registerMessageCallbacks(
     }
     window.__lastStreamEndedTurnId = undefined;
     window.__lastStreamEndedAt = undefined;
-    setMessages((prev) => {
-      if (prev.length === 0) return prev;
-      return prev.map((m) => ({ ...m }));
-    });
   };
 
   if (window.__pendingHistoryLoadComplete) {

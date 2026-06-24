@@ -37,10 +37,15 @@ import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentManager;
 import com.intellij.ui.jcef.JBCefBrowser;
+import com.intellij.util.concurrency.AppExecutorUtil;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.Objects;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Chat window instance. Coordinates UI components, session management,
@@ -60,6 +65,8 @@ public class ClaudeChatWindow {
 
     private static final Logger LOG = Logger.getInstance(ClaudeChatWindow.class);
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
+    private static final long PROJECT_STATE_FLUSH_DEBOUNCE_MS = 1500L;
+    private static final long WEBVIEW_RECOVERY_MIN_INTERVAL_MS = 10_000L;
 
     private final JPanel mainPanel;
     private final ClaudeSDKBridge claudeSDKBridge;
@@ -83,6 +90,12 @@ public class ClaudeChatWindow {
     private volatile boolean frontendReady = false;
     private volatile boolean slashCommandsFetched = false;
     private final AtomicBoolean restoredHistoryLoadStarted = new AtomicBoolean(false);
+    private final AtomicBoolean freshNewTabDefaultsApplied = new AtomicBoolean(false);
+    private final Object projectStateFlushLock = new Object();
+    private final AtomicInteger projectStateFlushRequestCount = new AtomicInteger(0);
+    private final AtomicInteger projectStateFlushExecuteCount = new AtomicInteger(0);
+    private volatile ScheduledFuture<?> pendingProjectStateFlush;
+    private volatile long lastWebviewRecoveryRequestAtMs = 0L;
 
     // Daemon event listener for AI title forwarding. Held so it can be removed on dispose.
     private DaemonBridge.DaemonEventListener titleEventListener;
@@ -155,7 +168,11 @@ public class ClaudeChatWindow {
                 mainPanel,
                 () -> browser,
                 htmlLoader,
-                () -> webviewInitializer.recreateWebview("watchdog_recreate"),
+                () -> {
+                    if (canRequestWebviewRecovery("watchdog_recreate")) {
+                        webviewInitializer.recreateWebview("watchdog_recreate");
+                    }
+                },
                 () -> disposed,
                 () -> streamCoalescer.isStreamActive()
         );
@@ -399,7 +416,8 @@ public class ClaudeChatWindow {
             TabStateService tabStateService = TabStateService.getInstance(project);
             tabStateService.saveTabName(tabIndex, normalizedTitle);
             tabStateService.saveTabTitleBindingMode(tabIndex, TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE);
-            flushProjectStateToDisk("tab_title_synced", tabIndex, sessionId);
+            // 标题同步可能与恢复链路、sessionId 建立同时发生，这里统一走延迟落盘避免阻塞 UI。
+            requestProjectStateFlush("tab_title_synced", tabIndex, sessionId);
             LOG.info("[HistoryTitleSync] Persisted synced tab title. tabIndex=" + tabIndex
                     + ", sessionId=" + sessionId + ", title=" + normalizedTitle);
         } else {
@@ -537,6 +555,9 @@ public class ClaudeChatWindow {
         if (disposed || webviewInitializer == null || session == null) {
             return;
         }
+        if (!canRequestWebviewRecovery("manual_force_refresh")) {
+            return;
+        }
 
         String currentSessionId = session.getSessionId();
         String currentProjectPath = session.getCwd();
@@ -568,6 +589,29 @@ public class ClaudeChatWindow {
                 tabSessionRestoreState.getLastTransitionToken()
         );
         webviewInitializer.recreateWebview("manual_force_refresh");
+    }
+
+    /**
+     * 判断当前是否允许发起一次新的 WebView 恢复请求。
+     * 这里统一限制手动 force refresh 与 watchdog recreate 的最小触发间隔，
+     * 避免窗口已经处于恢复中时再次触发重建，放大 Android Studio 卡顿。
+     *
+     * @param recoveryReason 本次恢复原因
+     * @return 允许发起恢复时返回 true
+     */
+    private boolean canRequestWebviewRecovery(String recoveryReason) {
+        long now = System.currentTimeMillis();
+        long elapsed = now - lastWebviewRecoveryRequestAtMs;
+        if (elapsed < WEBVIEW_RECOVERY_MIN_INTERVAL_MS) {
+            LOG.info("[WebviewRecovery] Skip recovery request: reason=" + recoveryReason
+                    + ", elapsedMs=" + elapsed
+                    + ", minIntervalMs=" + WEBVIEW_RECOVERY_MIN_INTERVAL_MS);
+            return false;
+        }
+        lastWebviewRecoveryRequestAtMs = now;
+        LOG.info("[WebviewRecovery] Accept recovery request: reason=" + recoveryReason
+                + ", timestamp=" + now);
+        return true;
     }
 
     public void executeJavaScriptCode(String jsCode) {
@@ -838,6 +882,11 @@ public class ClaudeChatWindow {
                 ? persistedState.getEffectiveTitleBindingMode()
                 : TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE;
 
+        // 恢复链路和前端 ready 会频繁进入这里；若快照内容未变，则跳过重复写入与重复落盘请求。
+        if (areTabSessionStatesEquivalent(persistedState, snapshot)) {
+            return;
+        }
+
         if (persistedState != null && tabSessionRestoreState.shouldBlockEmptySessionSnapshotOverwrite(
                 persistedState.sessionId,
                 snapshot.sessionId
@@ -859,8 +908,8 @@ public class ClaudeChatWindow {
                 false,
                 tabSessionRestoreState.getLastTransitionToken()
         );
-        if (shouldFlushProjectStateAfterSnapshotSave(persistedState, snapshot)) {
-            flushProjectStateToDisk("session_snapshot_updated", tabIndex, snapshot.sessionId);
+        if (shouldRequestProjectStateFlushAfterSnapshotSave(persistedState, snapshot)) {
+            requestProjectStateFlush("session_snapshot_updated", tabIndex, snapshot.sessionId);
         }
     }
 
@@ -873,13 +922,43 @@ public class ClaudeChatWindow {
      * @param snapshot 准备写回的新快照
      * @return 需要立即落盘时返回 true
      */
-    private boolean shouldFlushProjectStateAfterSnapshotSave(
+    private boolean shouldRequestProjectStateFlushAfterSnapshotSave(
             TabStateService.TabSessionState persistedState,
             TabStateService.TabSessionState snapshot
     ) {
-        String persistedSessionId = persistedState != null ? normalizeValue(persistedState.sessionId) : null;
-        String currentSessionId = normalizeValue(snapshot.sessionId);
-        return currentSessionId != null && !currentSessionId.equals(persistedSessionId);
+        return !areTabSessionStatesEquivalent(persistedState, snapshot);
+    }
+
+    /**
+     * 判断两份 Tab 会话快照在持久化语义上是否等价。
+     * 该比较用于抑制恢复热路径里的重复 snapshot 写入，避免同一份状态反复触发 IDE 项目保存。
+     *
+     * @param persistedState 已持久化的旧快照
+     * @param snapshot 当前准备写入的新快照
+     * @return 两份快照字段等价时返回 true
+     */
+    private boolean areTabSessionStatesEquivalent(
+            TabStateService.TabSessionState persistedState,
+            TabStateService.TabSessionState snapshot
+    ) {
+        if (persistedState == snapshot) {
+            return true;
+        }
+        if (persistedState == null || snapshot == null) {
+            return false;
+        }
+        return Objects.equals(normalizeValue(persistedState.provider), normalizeValue(snapshot.provider))
+                && Objects.equals(normalizeValue(persistedState.getEffectiveRuntimeFamily()), normalizeValue(snapshot.getEffectiveRuntimeFamily()))
+                && Objects.equals(normalizeValue(persistedState.sessionId), normalizeValue(snapshot.sessionId))
+                && Objects.equals(normalizeValue(persistedState.cwd), normalizeValue(snapshot.cwd))
+                && Objects.equals(normalizeValue(persistedState.model), normalizeValue(snapshot.model))
+                && Objects.equals(normalizeValue(persistedState.permissionMode), normalizeValue(snapshot.permissionMode))
+                && Objects.equals(normalizeValue(persistedState.reasoningEffort), normalizeValue(snapshot.reasoningEffort))
+                && Objects.equals(normalizeValue(persistedState.codexProviderId), normalizeValue(snapshot.codexProviderId))
+                && Objects.equals(normalizeValue(persistedState.codexRequestMode), normalizeValue(snapshot.codexRequestMode))
+                && Objects.equals(normalizeValue(persistedState.codexBaseUrlSource), normalizeValue(snapshot.codexBaseUrlSource))
+                && Objects.equals(normalizeValue(persistedState.codexEffectiveConfigSource), normalizeValue(snapshot.codexEffectiveConfigSource))
+                && Objects.equals(normalizeValue(persistedState.getEffectiveTitleBindingMode()), normalizeValue(snapshot.getEffectiveTitleBindingMode()));
     }
 
     /**
@@ -931,18 +1010,47 @@ public class ClaudeChatWindow {
      * @param tabIndex 当前 Tab 索引
      * @param currentSessionId 当前会话 ID
      */
-    private void flushProjectStateToDisk(String reason, int tabIndex, String currentSessionId) {
+    private void requestProjectStateFlush(String reason, int tabIndex, String currentSessionId) {
         if (project == null || project.isDisposed()) {
             return;
         }
+        int requestCount = projectStateFlushRequestCount.incrementAndGet();
+        LOG.info("[TabStateService] Queue project state flush: reason=" + reason
+                + ", tabIndex=" + tabIndex
+                + ", sessionId=" + currentSessionId
+                + ", requestCount=" + requestCount);
+        synchronized (projectStateFlushLock) {
+            if (pendingProjectStateFlush != null) {
+                pendingProjectStateFlush.cancel(false);
+            }
+            pendingProjectStateFlush = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+                    () -> flushProjectStateToDisk(reason, tabIndex, currentSessionId),
+                    PROJECT_STATE_FLUSH_DEBOUNCE_MS,
+                    TimeUnit.MILLISECONDS
+            );
+        }
+    }
 
+    /**
+     * 执行真正的项目级状态落盘。
+     * 该方法只允许从防抖调度器进入，避免 session 恢复、frontend ready 等热路径直接阻塞 EDT。
+     *
+     * @param reason 落盘原因
+     * @param tabIndex 当前 Tab 索引
+     * @param currentSessionId 当前会话 ID
+     */
+    private void flushProjectStateToDisk(String reason, int tabIndex, String currentSessionId) {
         Runnable saveTask = () -> {
             if (project.isDisposed()) {
                 return;
             }
+            int executeCount = projectStateFlushExecuteCount.incrementAndGet();
             project.save();
-            LOG.info("[TabStateService] Forced project state flush: reason=" + reason
-                    + ", tabIndex=" + tabIndex + ", sessionId=" + currentSessionId);
+            LOG.info("[TabStateService] Flushed project state: reason=" + reason
+                    + ", tabIndex=" + tabIndex
+                    + ", sessionId=" + currentSessionId
+                    + ", executeCount=" + executeCount
+                    + ", requestCount=" + projectStateFlushRequestCount.get());
         };
 
         Application application = ApplicationManager.getApplication();
@@ -950,11 +1058,7 @@ public class ClaudeChatWindow {
             saveTask.run();
             return;
         }
-        if (application.isDispatchThread()) {
-            saveTask.run();
-            return;
-        }
-        application.invokeAndWait(saveTask);
+        application.invokeLater(saveTask);
     }
 
     /**
@@ -1018,6 +1122,12 @@ public class ClaudeChatWindow {
     public synchronized void dispose() {
         if (this.disposed) { return; }
         this.disposed = true;
+        synchronized (projectStateFlushLock) {
+            if (pendingProjectStateFlush != null) {
+                pendingProjectStateFlush.cancel(false);
+                pendingProjectStateFlush = null;
+            }
+        }
 
         chatWindowDelegate.dispose();
         editorContextTracker.dispose();
@@ -1331,6 +1441,16 @@ public class ClaudeChatWindow {
             @Override
             public boolean shouldApplyFreshNewTabDefaults() {
                 return ClaudeChatWindow.this.initializationSource == InitializationSource.FRESH_NEW_TAB;
+            }
+
+            @Override
+            public boolean areFreshNewTabDefaultsApplied() {
+                return freshNewTabDefaultsApplied.get();
+            }
+
+            @Override
+            public void markFreshNewTabDefaultsApplied() {
+                freshNewTabDefaultsApplied.set(true);
             }
         };
     }

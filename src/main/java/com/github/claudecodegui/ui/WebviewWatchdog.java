@@ -24,6 +24,7 @@ public class WebviewWatchdog {
     private static final long HEARTBEAT_TIMEOUT_MS = 45_000L;
     private static final long WATCHDOG_INTERVAL_MS = 10_000L;
     private static final long RECOVERY_COOLDOWN_MS = 60_000L;
+    private static final long RESTORE_SUPPRESSION_MS = 30_000L;
 
     private volatile long lastHeartbeatAtMs = System.currentTimeMillis();
     private volatile long lastRafAtMs = System.currentTimeMillis();
@@ -31,6 +32,7 @@ public class WebviewWatchdog {
     private volatile Boolean lastHasFocus = null;
     private volatile int stallCount = 0;
     private volatile long lastRecoveryAtMs = 0L;
+    private volatile long suppressRecoveryUntilMs = 0L;
     private volatile ScheduledFuture<?> watchdogFuture = null;
 
     private final JPanel mainPanel;
@@ -156,6 +158,22 @@ public class WebviewWatchdog {
         lastRafAtMs = now;
     }
 
+    /**
+     * 在恢复链路、reload/recreate 或前端刚 ready 的短窗口内抑制 watchdog 恢复。
+     * 这样可以避免 React 尚未完成回放时被再次判定为卡死，从而触发二次放大。
+     *
+     * @param reason 抑制原因，仅用于日志排查
+     */
+    public void suppressRecovery(String reason) {
+        long now = System.currentTimeMillis();
+        suppressRecoveryUntilMs = Math.max(suppressRecoveryUntilMs, now + RESTORE_SUPPRESSION_MS);
+        lastHeartbeatAtMs = now;
+        lastRafAtMs = now;
+        LOG.info("[WebviewWatchdog] Suppressing recovery for " + RESTORE_SUPPRESSION_MS
+                + "ms, reason=" + reason
+                + ", until=" + suppressRecoveryUntilMs);
+    }
+
     private void checkHealth() {
         if (disposedCheck.isDisposed()) { return; }
         if (!mainPanel.isShowing()) { return; }
@@ -171,6 +189,9 @@ public class WebviewWatchdog {
         }
 
         if (now - lastRecoveryAtMs < RECOVERY_COOLDOWN_MS) {
+            return;
+        }
+        if (now < suppressRecoveryUntilMs) {
             return;
         }
 

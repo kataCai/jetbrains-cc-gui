@@ -73,6 +73,7 @@ describe('useWindowCallbacks integration', () => {
     // Refs
     currentProviderRef: { current: 'claude' },
     shouldAdoptCodexDefaultModelRef: { current: true },
+    shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
     messagesContainerRef: { current: null },
     isUserAtBottomRef: { current: true },
     userPausedRef: { current: false },
@@ -151,7 +152,7 @@ describe('useWindowCallbacks integration', () => {
     renderHook(() => useWindowCallbacks(opts));
 
     expect(window.__pendingHistoryLoadComplete).toBe(false);
-    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    expect(opts.setMessages).not.toHaveBeenCalled();
   });
 
   it('historyLoadComplete shows pending session transition toast', () => {
@@ -171,36 +172,9 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__pendingSessionTransitionToast).toBeUndefined();
   });
 
-  // ===== historyLoadComplete triggers full message re-render =====
+  // ===== historyLoadComplete no longer forces full message re-render =====
 
-  it('historyLoadComplete creates new object references for all messages', () => {
-    const opts = createOptions();
-    renderHook(() => useWindowCallbacks(opts));
-
-    const originalMessages: ClaudeMessage[] = [
-      { type: 'user', content: 'question', timestamp: '2024-01-01T00:00:00Z' },
-      { type: 'assistant', content: 'answer', timestamp: '2024-01-01T00:01:00Z' },
-    ];
-
-    act(() => {
-      window.historyLoadComplete!();
-    });
-
-    expect(opts.setMessages).toHaveBeenCalledTimes(1);
-    const updater = (opts.setMessages as any).mock.calls[0][0] as (prev: ClaudeMessage[]) => ClaudeMessage[];
-    const result = updater(originalMessages);
-
-    // Verify full shallow copy: array is new, each message object is new
-    expect(result).not.toBe(originalMessages);
-    expect(result.length).toBe(originalMessages.length);
-    for (let i = 0; i < result.length; i++) {
-      expect(result[i]).not.toBe(originalMessages[i]);
-      expect(result[i].content).toBe(originalMessages[i].content);
-      expect(result[i].type).toBe(originalMessages[i].type);
-    }
-  });
-
-  it('historyLoadComplete returns unchanged array when messages are empty', () => {
+  it('historyLoadComplete does not rebuild message objects when only releasing transition state', () => {
     const opts = createOptions();
     renderHook(() => useWindowCallbacks(opts));
 
@@ -208,14 +182,7 @@ describe('useWindowCallbacks integration', () => {
       window.historyLoadComplete!();
     });
 
-    expect(opts.setMessages).toHaveBeenCalledTimes(1);
-    const updater = (opts.setMessages as any).mock.calls[0][0] as (prev: ClaudeMessage[]) => ClaudeMessage[];
-    const emptyArray: ClaudeMessage[] = [];
-    const result = updater(emptyArray);
-
-    // Returns the same empty array reference (no unnecessary copy)
-    expect(result).toBe(emptyArray);
-    expect(result.length).toBe(0);
+    expect(opts.setMessages).not.toHaveBeenCalled();
   });
 
   // ===== setSessionId releases transition guard =====

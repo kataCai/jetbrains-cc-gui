@@ -106,6 +106,29 @@ public class ChatWindowDelegateRestoreTest {
         assertEquals("provider-a", host.session.getState().getCodexSessionBinding().getProviderId());
     }
 
+    @Test
+    public void shouldApplyFreshNewTabDefaultsAtMostOncePerTabLifecycle() {
+        RecordingSessionLifecycleManager lifecycleManager = new RecordingSessionLifecycleManager();
+        RecordingHost host = new RecordingHost(lifecycleManager);
+        host.applyFreshNewTabDefaults = true;
+        host.freshNewTabDefaults = new JsonObject();
+        host.freshNewTabDefaults.addProperty("provider", "codex");
+        host.freshNewTabDefaults.addProperty("permissionMode", "bypassPermissions");
+        host.freshNewTabDefaults.addProperty("model", "gpt-5.4");
+        host.freshNewTabDefaults.addProperty("reasoningEffort", "low");
+        host.freshNewTabDefaults.addProperty("codexProviderId", "provider-a");
+
+        ChatWindowDelegate delegate = new ChatWindowDelegate(host);
+        delegate.handleFrontendReady();
+        delegate.handleFrontendReady();
+
+        long applyCalls = host.jsFunctionNames.stream()
+                .filter("window.applyNewTabDefaults"::equals)
+                .count();
+        assertEquals(1L, applyCalls);
+        assertTrue(host.freshNewTabDefaultsApplied);
+    }
+
     private static Project createProject() {
         return (Project) Proxy.newProxyInstance(
                 Project.class.getClassLoader(),
@@ -137,10 +160,19 @@ public class ChatWindowDelegateRestoreTest {
         private final JPanel mainPanel = new JPanel();
         private final CodemossSettingsService settingsService = new CodemossSettingsService();
         private final TabSessionRestoreState restoreState = new TabSessionRestoreState();
+        private final WebviewWatchdog webviewWatchdog = new WebviewWatchdog(
+                mainPanel,
+                () -> null,
+                null,
+                () -> { },
+                () -> false,
+                () -> false
+        );
         private final List<String> jsFunctionNames = new ArrayList<>();
         private final List<String> jsPayloads = new ArrayList<>();
         private boolean frontendReady;
         private boolean applyFreshNewTabDefaults;
+        private boolean freshNewTabDefaultsApplied;
         private JsonObject freshNewTabDefaults;
 
         private RecordingHost(RecordingSessionLifecycleManager lifecycleManager) {
@@ -300,7 +332,7 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public WebviewWatchdog getWebviewWatchdog() {
-            return null;
+            return webviewWatchdog;
         }
 
         @Override
@@ -351,6 +383,16 @@ public class ChatWindowDelegateRestoreTest {
         @Override
         public boolean shouldApplyFreshNewTabDefaults() {
             return applyFreshNewTabDefaults;
+        }
+
+        @Override
+        public boolean areFreshNewTabDefaultsApplied() {
+            return freshNewTabDefaultsApplied;
+        }
+
+        @Override
+        public void markFreshNewTabDefaultsApplied() {
+            freshNewTabDefaultsApplied = true;
         }
     }
 
