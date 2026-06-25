@@ -3,6 +3,7 @@ import type { Attachment } from '../types.js';
 import { generateId } from '../utils/generateId.js';
 import { insertTextAtCursor } from '../utils/selectionUtils.js';
 import { perfTimer } from '../../../utils/debug.js';
+import type { ClipboardImagePayload, ClipboardRichBlock } from '../../../utils/imageClipboard.js';
 
 declare global {
   interface Window {
@@ -34,6 +35,13 @@ interface UsePasteAndDropReturn {
   handleDrop: (e: React.DragEvent) => void;
 }
 
+interface JavaRichClipboardPayload {
+  text?: string;
+  image?: ClipboardImagePayload;
+  images?: ClipboardImagePayload[];
+  orderedBlocks?: ClipboardRichBlock[];
+}
+
 /**
  * usePasteAndDrop - Handle paste and drag-drop operations
  *
@@ -56,6 +64,71 @@ export function usePasteAndDrop({
   handleInput,
   flushInput,
 }: UsePasteAndDropOptions): UsePasteAndDropReturn {
+  /**
+   * 将 Java 侧图片负载转换为输入框附件。
+   * 保留原始文件名，缺失时再按媒体类型兜底扩展名，避免历史会话回贴后附件列表变得难以辨认。
+   *
+   * @param payload Java 侧派发的单张图片负载
+   * @param index 当前图片在富剪贴板中的顺序索引
+   * @return 对应的输入框附件；若负载无效则返回 null
+   */
+  const buildAttachmentFromClipboardPayload = useCallback((payload: ClipboardImagePayload | undefined, index: number): Attachment | null => {
+    if (!payload?.data) {
+      return null;
+    }
+    const mediaType = payload.mediaType || 'image/png';
+    const ext = mediaType.split('/')[1] || 'png';
+    return {
+      id: generateId(),
+      fileName: payload.fileName || `pasted-image-${Date.now()}-${index}.${ext}`,
+      mediaType,
+      data: payload.data,
+    };
+  }, []);
+
+  /**
+   * 恢复 Java 富剪贴板事件中的文本与多图附件。
+   * 输入框当前不支持图片内联，因此这里采用“文本照常插入 + 附件区按历史顺序追加图片”的策略恢复会话复制结果。
+   *
+   * @param payload Java 侧派发的富剪贴板负载
+   */
+  const applyRichClipboardPayload = useCallback((payload: JavaRichClipboardPayload) => {
+    const text = payload.text ?? '';
+    const imagePayloads = payload.images?.length
+      ? payload.images
+      : (payload.image ? [payload.image] : []);
+
+    if (text.trim()) {
+      insertTextAtCursor(text, editableRef.current);
+      handleInput(false);
+      flushInput();
+    }
+
+    if (imagePayloads.length === 0) {
+      return;
+    }
+
+    const attachments = imagePayloads
+      .map((item, index) => buildAttachmentFromClipboardPayload(item, index))
+      .filter((item): item is Attachment => Boolean(item));
+    if (attachments.length === 0) {
+      return;
+    }
+
+    /**
+     * 当前附件区天然是线性列表，因此这里优先恢复图片之间的相对顺序。
+     * orderedBlocks 仍会继续透传，后续如果输入框支持更细粒度图文混排，可直接在此扩展恢复逻辑。
+     */
+    const orderedAttachments = payload.orderedBlocks?.length
+      ? payload.orderedBlocks
+          .filter((block): block is Extract<ClipboardRichBlock, { type: 'image' }> => block.type === 'image')
+          .map((block) => attachments[block.imageIndex])
+          .filter((item): item is Attachment => Boolean(item))
+      : attachments;
+
+    setInternalAttachments((prev) => [...prev, ...orderedAttachments]);
+  }, [buildAttachmentFromClipboardPayload, editableRef, flushInput, handleInput, setInternalAttachments]);
+
   /**
    * Handle paste event - detect images and plain text
    */
@@ -343,6 +416,18 @@ export function usePasteAndDrop({
     window.addEventListener('java-paste-image', onJavaPasteImage);
     return () => window.removeEventListener('java-paste-image', onJavaPasteImage);
   }, [setInternalAttachments]);
+
+  /**
+   * 监听 Java 侧统一派发的富剪贴板事件。
+   * 该事件用于承接“历史会话图文消息整体复制后再粘贴回输入框”的场景，避免旧协议只能恢复首图。
+   */
+  useEffect(() => {
+    const onJavaPasteRichContent = (event: Event) => {
+      applyRichClipboardPayload((event as CustomEvent<JavaRichClipboardPayload>).detail ?? {});
+    };
+    window.addEventListener('java-paste-rich-content', onJavaPasteRichContent);
+    return () => window.removeEventListener('java-paste-rich-content', onJavaPasteRichContent);
+  }, [applyRichClipboardPayload]);
 
   return {
     handlePaste,

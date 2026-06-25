@@ -17,7 +17,7 @@ import {
 } from '../toolBlocks';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { formatTime } from '../../utils/helpers';
-import { copyToClipboard } from '../../utils/copyUtils';
+import { copyMessageToClipboard } from '../../utils/copyUtils';
 import { READ_TOOL_NAMES, EDIT_TOOL_NAMES, BASH_TOOL_NAMES, SEARCH_TOOL_NAMES, isToolName } from '../../utils/toolConstants';
 
 export interface MessageItemProps {
@@ -288,6 +288,8 @@ export const MessageItem = memo(function MessageItem({
 
   const isLastAssistantMessage = message.type === 'assistant' && isLast;
   const isMessageStreaming = streamingActive && isLastAssistantMessage;
+  // 先计算内容块，再判断消息是否含图，避免复制按钮仍只按纯文本显隐。
+  const blocks = useMemo(() => getContentBlocks(message), [message, getContentBlocks]);
 
   // Cache markdown content extraction for better performance
   const markdownContent = useMemo(() => {
@@ -297,13 +299,13 @@ export const MessageItem = memo(function MessageItem({
     }
     return '';
   }, [message, extractMarkdownContent]);
-  const hasCopyableText = markdownContent.trim().length > 0;
+  const hasCopyableContent = markdownContent.trim().length > 0 || blocks.some((block) => block.type === 'image');
 
   const handleCopyMessage = useCallback(async () => {
     // Prevent copying if message is empty or already in "copied" state
-    if (!hasCopyableText || copiedMessageIndex === messageIndex) return;
+    if (!hasCopyableContent || copiedMessageIndex === messageIndex) return;
 
-    const success = await copyToClipboard(markdownContent);
+    const success = await copyMessageToClipboard(message);
     if (success) {
       setCopiedMessageIndex(messageIndex);
 
@@ -318,7 +320,7 @@ export const MessageItem = memo(function MessageItem({
         copyTimeoutRef.current = null;
       }, 1500);
     }
-  }, [hasCopyableText, markdownContent, messageIndex, copiedMessageIndex]);
+  }, [hasCopyableContent, message, messageIndex, copiedMessageIndex]);
 
   // Cleanup timeout on unmount to prevent memory leaks
   useEffect(() => {
@@ -330,8 +332,6 @@ export const MessageItem = memo(function MessageItem({
     };
   }, []);
 
-  // Memoize blocks and grouped blocks to avoid recalculation on every render
-  const blocks = useMemo(() => getContentBlocks(message), [message, getContentBlocks]);
   const isEmptyStreamingPlaceholder =
     message.type === 'assistant' &&
     isMessageStreaming &&
@@ -604,7 +604,7 @@ export const MessageItem = memo(function MessageItem({
           <div className="message-timestamp-header">
             {formatTime(message.timestamp)}
           </div>
-          {hasCopyableText && (
+          {hasCopyableContent && (
             <CopyButton
               className="message-copy-btn-inline"
               isCopied={copiedMessageIndex === messageIndex}
@@ -617,7 +617,7 @@ export const MessageItem = memo(function MessageItem({
       )}
 
       {/* Copy button for assistant messages only */}
-      {message.type === 'assistant' && !isMessageStreaming && hasCopyableText && (
+      {message.type === 'assistant' && !isMessageStreaming && hasCopyableContent && (
         <CopyButton
           isCopied={copiedMessageIndex === messageIndex}
           onClick={handleCopyMessage}

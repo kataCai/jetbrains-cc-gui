@@ -74,6 +74,30 @@ describe('useContextMenu', () => {
     expect(result.current.savedRange).not.toBeNull();
   });
 
+  it('captures image copy metadata when right-clicking a copyable image node', () => {
+    mockSelection({ text: '', rangeCount: 0 });
+    const image = document.createElement('img');
+    image.setAttribute('data-copy-image-src', 'data:image/png;base64,QUJD');
+    image.setAttribute('data-copy-image-media-type', 'image/png');
+    image.setAttribute('data-copy-image-file-name', 'demo.png');
+
+    const { result } = renderHook(() => useContextMenu());
+
+    act(() => {
+      result.current.open({
+        preventDefault: vi.fn(),
+        clientX: 5,
+        clientY: 6,
+        target: image,
+      } as unknown as ReactMouseEvent);
+    });
+
+    expect(result.current.visible).toBe(true);
+    expect(result.current.imageTarget).not.toBeNull();
+    expect(result.current.imageTarget?.src).toBe('data:image/png;base64,QUJD');
+    expect(result.current.imageTarget?.fileName).toBe('demo.png');
+  });
+
   it('cuts a file tag by copying its path and removing the tag', () => {
     const editable = document.createElement('div');
     const fileTag = document.createElement('span');

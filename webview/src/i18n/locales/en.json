@@ -124,6 +124,13 @@
     },
     "totalDuration": "This reply took"
   },
+  "contextMenu": {
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "newline": "Insert Newline",
+    "copyImage": "Copy image"
+  },
   "settings": {
     "title": "Settings",
     "basic": {

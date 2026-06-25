@@ -10,8 +10,11 @@ import {
   GenericToolBlock,
   TaskExecutionBlock,
 } from '../toolBlocks';
+import { ImagePreviewDialog } from '../ImagePreviewDialog';
 import { EDIT_TOOL_NAMES, BASH_TOOL_NAMES, isToolName, isTransientInternalToolName, normalizeToolName } from '../../utils/toolConstants';
 import { TASK_STATUS_COLORS } from '../../utils/messageUtils';
+import { setActiveImageTarget } from '../../utils/activeImageTarget';
+import { buildCopyableImageDataset, copyImageViaBridge } from '../../utils/imageClipboard';
 
 const IMAGE_BLOCK_STYLE: React.CSSProperties = { cursor: 'pointer' };
 const THINKING_VISIBLE_STYLE: React.CSSProperties = { display: 'block' };
@@ -26,9 +29,6 @@ function getImageStyle(isUser: boolean): React.CSSProperties {
   };
 }
 
-/**
- * Get file icon class (consistent with AttachmentList)
- */
 function getFileIcon(mediaType?: string): string {
   if (!mediaType) return 'codicon-file';
   if (mediaType.startsWith('text/')) return 'codicon-file-text';
@@ -38,9 +38,6 @@ function getFileIcon(mediaType?: string): string {
   return 'codicon-file';
 }
 
-/**
- * Get file extension
- */
 function getExtension(fileName?: string): string {
   if (!fileName) return '';
   const parts = fileName.split('.');
@@ -57,18 +54,13 @@ interface CompactSummaryBlockProps {
   t: TFunction;
 }
 
-/**
- * Compact summary block - collapsed by default, click/Enter/Space to expand.
- * Memoized to prevent state reset on parent re-renders during streaming.
- * `block.title` is an i18n key resolved via t() at render time.
- */
 const CompactSummaryBlock = memo(function CompactSummaryBlock({ block, t }: CompactSummaryBlockProps) {
   const [expanded, setExpanded] = useState(false);
-  const toggleExpanded = useCallback(() => setExpanded(e => !e), []);
-  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      setExpanded(prev => !prev);
+  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setExpanded((value) => !value);
     }
   }, []);
   const meta = block.metadata;
@@ -83,7 +75,7 @@ const CompactSummaryBlock = memo(function CompactSummaryBlock({ block, t }: Comp
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        aria-label={`${titleText} — ${toggleLabel}`}
+        aria-label={`${titleText} - ${toggleLabel}`}
         onClick={toggleExpanded}
         onKeyDown={onKeyDown}
       >
@@ -131,6 +123,10 @@ export interface ContentBlockRendererProps {
   findToolResult: (toolId: string | undefined, messageIndex: number) => ToolResultBlock | null | undefined;
 }
 
+/**
+ * 统一渲染消息内容块。
+ * 其中图片块额外补齐焦点激活、预览弹层和 Ctrl/Cmd+C 复制能力。
+ */
 export function ContentBlockRenderer({
   block,
   messageIndex,
@@ -144,6 +140,8 @@ export function ContentBlockRenderer({
   onToggleThinking,
   findToolResult,
 }: ContentBlockRendererProps): React.ReactElement | null {
+  const [previewImage, setPreviewImage] = useState<{ src: string; mediaType?: string; alt?: string } | null>(null);
+
   if (block.type === 'text') {
     return messageType === 'user' ? (
       <CollapsibleTextBlock content={block.text ?? ''} />
@@ -156,52 +154,40 @@ export function ContentBlockRenderer({
   }
 
   if (block.type === 'image' && block.src) {
-    const handleImagePreview = () => {
-      const previewRoot = document.getElementById('image-preview-root');
-      if (!previewRoot || !block.src) return;
-
-      // Clear previous content safely
-      previewRoot.innerHTML = '';
-
-      // Create overlay container
-      const overlay = document.createElement('div');
-      overlay.className = 'image-preview-overlay';
-      overlay.onclick = () => overlay.remove();
-
-      // Create image element safely (prevents XSS)
-      const img = document.createElement('img');
-      img.src = block.src;
-      img.alt = t('chat.imagePreview');
-      img.className = 'image-preview-content';
-      img.onclick = (e) => e.stopPropagation();
-
-      // Create close button
-      const closeBtn = document.createElement('div');
-      closeBtn.className = 'image-preview-close';
-      closeBtn.textContent = '×';
-      closeBtn.onclick = (e) => {
-        e.stopPropagation();
-        overlay.remove();
-      };
-
-      overlay.appendChild(img);
-      overlay.appendChild(closeBtn);
-      previewRoot.appendChild(overlay);
+    const imageSource = {
+      src: block.src,
+      mediaType: block.mediaType,
+      alt: block.alt ?? t('chat.userUploadedImage'),
     };
 
     return (
-      <div
-        className={`message-image-block ${messageType === 'user' ? 'user-image' : ''}`}
-        onClick={handleImagePreview}
-        style={IMAGE_BLOCK_STYLE}
-        title={t('chat.clickToPreview')}
-      >
-        <img
-          src={block.src}
-          alt={t('chat.userUploadedImage')}
-          style={getImageStyle(messageType === 'user')}
-        />
-      </div>
+      <>
+        <div
+          className={`message-image-block ${messageType === 'user' ? 'user-image' : ''}`}
+          onClick={() => {
+            setActiveImageTarget(imageSource);
+            setPreviewImage(imageSource);
+          }}
+          style={IMAGE_BLOCK_STYLE}
+          title={t('chat.clickToPreview')}
+        >
+          <img
+            src={block.src}
+            alt={t('chat.userUploadedImage')}
+            style={getImageStyle(messageType === 'user')}
+            tabIndex={0}
+            onFocus={() => setActiveImageTarget(imageSource)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+                event.preventDefault();
+                void copyImageViaBridge(imageSource);
+              }
+            }}
+            {...buildCopyableImageDataset(imageSource)}
+          />
+        </div>
+        <ImagePreviewDialog image={previewImage} onClose={() => setPreviewImage(null)} />
+      </>
     );
   }
 
@@ -301,7 +287,6 @@ export function ContentBlockRenderer({
     );
   }
 
-  // Compact notification block - renders as header + indented sub-items
   if (block.type === 'compact_notification') {
     return (
       <div className="compact-notification-block">
@@ -312,7 +297,7 @@ export function ContentBlockRenderer({
           <div className="compact-notification-items">
             {block.items.map((item, idx) => (
               <div key={idx} className="compact-notification-item">
-                <span className="compact-notification-prefix">⎿</span>
+                <span className="compact-notification-prefix">&gt;</span>
                 <span className="compact-notification-text">{item.text}</span>
               </div>
             ))}
@@ -322,14 +307,11 @@ export function ContentBlockRenderer({
     );
   }
 
-  // Compact summary block - collapsed by default, click to expand
   if (block.type === 'compact_summary') {
     return <CompactSummaryBlock block={block} t={t} />;
   }
 
-  // Task notification block - renders as "● summary" with status color
   if (block.type === 'task_notification') {
-    // TypeScript narrows block to { type: 'task_notification'; icon: string; summary: string; status: string }
     const statusColor = TASK_STATUS_COLORS[block.status] || 'text';
     const statusLabel = block.status === 'completed'
       ? t('common.completed')

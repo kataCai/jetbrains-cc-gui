@@ -2,10 +2,15 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Attachment, AttachmentListProps } from './types';
 import { isImageAttachment } from './types';
+import { ImagePreviewDialog } from '../ImagePreviewDialog';
+import { ContextMenu } from '../ContextMenu/ContextMenu';
+import { setActiveImageTarget } from '../../utils/activeImageTarget';
+import { buildCopyableImageDataset, copyImageViaBridge } from '../../utils/imageClipboard';
+import { copyImageSelection, useContextMenu } from '../../hooks/useContextMenu';
 
 /**
- * AttachmentList - Attachment list component
- * Displays image thumbnails or file icons
+ * 输入区附件列表。
+ * 图片附件除了预览外，还补齐焦点激活、快捷键复制和右键复制入口，保证缩略图与消息区图片交互一致。
  */
 export const AttachmentList = ({
   attachments,
@@ -14,37 +19,64 @@ export const AttachmentList = ({
 }: AttachmentListProps) => {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<Attachment | null>(null);
+  const ctxMenu = useContextMenu();
 
   /**
-   * Handle attachment click
+   * 将输入区附件转换成统一图片复制来源，避免缩略图、预览态和右键逻辑各自拼接 data URL。
+   *
+   * @param attachment 当前附件
+   * @return 统一图片来源
+   */
+  const buildImageSource = useCallback((attachment: Attachment) => ({
+    src: `data:${attachment.mediaType};base64,${attachment.data}`,
+    mediaType: attachment.mediaType,
+    fileName: attachment.fileName,
+    alt: attachment.fileName,
+  }), []);
+
+  /**
+   * 处理附件点击事件。
+   * 图片附件优先同步当前激活目标，再根据外部是否接管预览决定走回调还是内部弹层。
+   *
+   * @param attachment 当前点击的附件
    */
   const handleClick = useCallback((attachment: Attachment) => {
-    if (isImageAttachment(attachment)) {
-      if (onPreview) {
-        onPreview(attachment);
-      } else {
-        setPreviewImage(attachment);
-      }
+    if (!isImageAttachment(attachment)) {
+      return;
     }
-  }, [onPreview]);
+
+    setActiveImageTarget(buildImageSource(attachment));
+    if (onPreview) {
+      onPreview(attachment);
+      return;
+    }
+    setPreviewImage(attachment);
+  }, [buildImageSource, onPreview]);
 
   /**
-   * Handle attachment removal
+   * 处理附件删除按钮点击。
+   * 这里显式阻止冒泡，避免点击关闭按钮时误触发图片预览。
+   *
+   * @param event 点击事件
+   * @param id 待删除附件 ID
    */
-  const handleRemove = useCallback((e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
+  const handleRemove = useCallback((event: React.MouseEvent, id: string) => {
+    event.stopPropagation();
     onRemove?.(id);
   }, [onRemove]);
 
   /**
-   * Close preview
+   * 关闭内部图片预览弹层。
    */
   const closePreview = useCallback(() => {
     setPreviewImage(null);
   }, []);
 
   /**
-   * Get file icon
+   * 根据媒体类型选择文件图标。
+   *
+   * @param mediaType 附件媒体类型
+   * @return 对应 codicon 类名
    */
   const getFileIcon = (mediaType: string): string => {
     if (mediaType.startsWith('text/')) return 'codicon-file-text';
@@ -55,7 +87,10 @@ export const AttachmentList = ({
   };
 
   /**
-   * Get file extension
+   * 提取附件扩展名展示文本。
+   *
+   * @param fileName 附件文件名
+   * @return 大写扩展名；若无扩展名则返回空字符串
    */
   const getExtension = (fileName: string): string => {
     const parts = fileName.split('.');
@@ -68,63 +103,71 @@ export const AttachmentList = ({
 
   return (
     <>
-      <div className="attachment-list">
-        {attachments.map((attachment) => (
-          <div
-            key={attachment.id}
-            className="attachment-item"
-            onClick={() => handleClick(attachment)}
-            title={attachment.fileName}
-          >
-            {isImageAttachment(attachment) ? (
-              <img
-                className="attachment-thumbnail"
-                src={`data:${attachment.mediaType};base64,${attachment.data}`}
-                alt={attachment.fileName}
-              />
-            ) : (
-              <div className="attachment-file">
-                <span className={`attachment-file-icon codicon ${getFileIcon(attachment.mediaType)}`} />
-                <span className="attachment-file-name">
-                  {getExtension(attachment.fileName) || attachment.fileName.slice(0, 6)}
-                </span>
-              </div>
-            )}
+      <div className="attachment-list" onContextMenu={ctxMenu.open}>
+        {attachments.map((attachment) => {
+          const imageSource = isImageAttachment(attachment) ? buildImageSource(attachment) : null;
 
-            <button
-              className="attachment-remove"
-              onClick={(e) => handleRemove(e, attachment.id)}
-              title={t('chat.removeAttachment')}
+          return (
+            <div
+              key={attachment.id}
+              className="attachment-item"
+              onClick={() => handleClick(attachment)}
+              title={attachment.fileName}
             >
-              ×
-            </button>
-          </div>
-        ))}
+              {imageSource ? (
+                <img
+                  className="attachment-thumbnail"
+                  src={imageSource.src}
+                  alt={attachment.fileName}
+                  tabIndex={0}
+                  onFocus={() => setActiveImageTarget(imageSource)}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+                      event.preventDefault();
+                      void copyImageViaBridge(imageSource);
+                    }
+                  }}
+                  {...buildCopyableImageDataset(imageSource)}
+                />
+              ) : (
+                <div className="attachment-file">
+                  <span className={`attachment-file-icon codicon ${getFileIcon(attachment.mediaType)}`} />
+                  <span className="attachment-file-name">
+                    {getExtension(attachment.fileName) || attachment.fileName.slice(0, 6)}
+                  </span>
+                </div>
+              )}
+
+              <button
+                className="attachment-remove"
+                onClick={(event) => handleRemove(event, attachment.id)}
+                title={t('chat.removeAttachment')}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
 
-      {/* Image preview dialog */}
-      {previewImage && (
-        <div
-          className="image-preview-overlay"
-          onClick={closePreview}
-          onKeyDown={(e) => e.key === 'Escape' && closePreview()}
-          tabIndex={0}
-        >
-          <img
-            className="image-preview-content"
-            src={`data:${previewImage.mediaType};base64,${previewImage.data}`}
-            alt={previewImage.fileName}
-            onClick={(e) => e.stopPropagation()}
-          />
-          <button
-            className="image-preview-close"
-            onClick={closePreview}
-            title={t('chat.closePreview')}
-          >
-            ×
-          </button>
-        </div>
+      {ctxMenu.visible && ctxMenu.imageTarget && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={ctxMenu.close}
+          items={[
+            {
+              label: t('contextMenu.copyImage', '复制图片'),
+              action: () => void copyImageSelection(ctxMenu.imageTarget),
+            },
+          ]}
+        />
       )}
+
+      <ImagePreviewDialog
+        image={previewImage ? buildImageSource(previewImage) : null}
+        onClose={closePreview}
+      />
     </>
   );
 };

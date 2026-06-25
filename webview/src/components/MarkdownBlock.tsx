@@ -35,6 +35,9 @@ import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import 'highlight.js/styles/github-dark.css';
 import { markedHighlight } from 'marked-highlight';
+import { buildCopyableImageDataset } from '../utils/imageClipboard';
+import { setActiveImageTarget } from '../utils/activeImageTarget';
+import { ImagePreviewDialog } from './ImagePreviewDialog';
 
 const SAFE_HREF_PROTOCOL_REGEX = /^(?:https?|mailto):/i;
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
@@ -275,14 +278,14 @@ function stripAndEscapeOutsideCodeBlocks(content: string): string {
 
   return fenceParts
     .map((fencePart, fenceIdx) => {
-      // Odd indices are code fence matches — leave untouched
+      // Odd indices are code fence matches 鈥?leave untouched
       if (fenceIdx % 2 === 1) return fencePart;
 
       // Then split by inline code within prose segments
       const inlineParts = fencePart.split(INLINE_CODE_RE);
       return inlineParts
         .map((inlinePart, inlineIdx) => {
-          // Odd indices are inline code matches — leave untouched for marked to handle
+          // Odd indices are inline code matches 鈥?leave untouched for marked to handle
           if (inlineIdx % 2 === 1) return inlinePart;
           return escapeXmlTags(stripSystemTags(inlinePart));
         })
@@ -297,7 +300,7 @@ function stripAndEscapeOutsideCodeBlocks(content: string): string {
  * without the heavy marked.parse() + DOMPurify + DOMParser pipeline.
  * Full markdown parsing is deferred to when streaming ends.
  */
-/** Sanitize code language identifier — only allow safe characters for HTML class attribute. */
+/** Sanitize code language identifier 鈥?only allow safe characters for HTML class attribute. */
 function safeLang(lang: string): string {
   return lang.replace(/[^a-zA-Z0-9_.-]/g, '');
 }
@@ -359,12 +362,12 @@ function renderStreamingProseSegment(
   const inlineParts = cleaned.split(INLINE_CODE_RE);
 
   const processedParts = inlineParts.map((part, idx) => {
-    // Odd indices are inline code — pass to linkifyPlainTextSegment which escapes HTML
+    // Odd indices are inline code 鈥?pass to linkifyPlainTextSegment which escapes HTML
     if (idx % 2 === 1) {
       const inlineContent = part.slice(1, -1); // Remove surrounding backticks
       return `<code>${linkifyPlainTextSegment(inlineContent, capabilities)}</code>`;
     }
-    // Even indices are prose — escape XML tags then render inline formatting
+    // Even indices are prose 鈥?escape XML tags then render inline formatting
     return renderStreamingInlineText(escapeXmlTags(part), capabilities, false);
   });
 
@@ -410,7 +413,7 @@ function renderStreamingContent(
         inCode = true;
         codeLang = safeLang(trimmed.slice(3).trim());
       } else {
-        // End code block — emit as <pre><code>
+        // End code block 鈥?emit as <pre><code>
         const escaped = current
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
@@ -445,7 +448,7 @@ function renderStreamingContent(
   // Process prose segments (non-code)
   const raw = segments
     .map((seg) => {
-      // Already wrapped in <pre> — pass through
+      // Already wrapped in <pre> 鈥?pass through
       if (seg.startsWith('<pre>')) return seg;
 
       // renderStreamingProseSegment handles stripSystemTags + escapeXmlTags internally,
@@ -700,11 +703,24 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
       });
 
       linkifyHtml(doc.body, linkifyCapabilities);
+      doc.body.querySelectorAll('img').forEach((image) => {
+        const src = image.getAttribute('src');
+        if (!src) {
+          return;
+        }
+        Object.entries(buildCopyableImageDataset({
+          src,
+          alt: image.getAttribute('alt') ?? undefined,
+        })).forEach(([key, value]) => {
+          image.setAttribute(key, value);
+        });
+        image.setAttribute('tabindex', '0');
+      });
 
       return doc.body.innerHTML.trim();
     } catch (e) {
       // If marked/DOMPurify throws, never return raw `content` to
-      // dangerouslySetInnerHTML — escape HTML special chars so any malicious
+      // dangerouslySetInnerHTML 鈥?escape HTML special chars so any malicious
       // payload renders as literal text instead of executable markup.
       if (typeof console !== 'undefined' && console.error) {
         console.error('[MarkdownBlock] Render failed, falling back to escaped text:', e);
@@ -786,7 +802,15 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
 
     const img = target?.closest('img');
     if (img && img.getAttribute('src')) {
-      setPreviewSrc(img.getAttribute('src'));
+      const src = img.getAttribute('src');
+      if (!src) {
+        return;
+      }
+      setActiveImageTarget({
+        src,
+        alt: img.getAttribute('alt') ?? undefined,
+      });
+      setPreviewSrc(src);
       return;
     }
 
@@ -846,36 +870,33 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
         className="markdown-content"
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleClick}
+        onFocus={(event) => {
+          const target = event.target as HTMLElement | null;
+          const image = target?.closest?.('[data-copy-image-src]') as HTMLElement | null;
+          const src = image?.getAttribute('data-copy-image-src');
+          if (!src) {
+            return;
+          }
+          setActiveImageTarget({
+            src,
+            mediaType: image?.getAttribute('data-copy-image-media-type') ?? undefined,
+            fileName: image?.getAttribute('data-copy-image-file-name') ?? undefined,
+            alt: image?.getAttribute('data-copy-image-alt') ?? undefined,
+          });
+        }}
         onMouseOver={fileLinkTooltip.handleMouseOver}
         onMouseMove={fileLinkTooltip.handleMouseMove}
         onMouseOut={fileLinkTooltip.handleMouseOut}
       />
       {/* Tooltip is managed via native DOM API in handleMouseOver/handleMouseOut
           to avoid React re-render issues that break click events in JCEF. */}
-      {previewSrc && (
-        <div
-          className="image-preview-overlay"
-          onClick={() => setPreviewSrc(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setPreviewSrc(null)}
-          tabIndex={0}
-        >
-          <img
-            className="image-preview-content"
-            src={previewSrc}
-            alt=""
-            onClick={(e) => e.stopPropagation()}
-          />
-          <button
-            className="image-preview-close"
-            onClick={() => setPreviewSrc(null)}
-            title={t('chat.closePreview')}
-          >
-            ×
-          </button>
-        </div>
-      )}
+      <ImagePreviewDialog
+        image={previewSrc ? { src: previewSrc } : null}
+        onClose={() => setPreviewSrc(null)}
+      />
     </>
   );
 };
 
 export default memo(MarkdownBlock);
+
