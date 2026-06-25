@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { sendBridgeEvent } from '../utils/bridge';
 import { insertNewlineAtCursor } from './useContextMenu';
+import { copyActiveImageTarget } from '../utils/activeImageTarget';
 
 /**
  * Registers IDEA shortcut action handler (copy/cut/send/newline from Java-registered Actions).
@@ -10,16 +11,23 @@ export function useContextActions() {
     window.execContextAction = (action: string) => {
       switch (action) {
         case 'copy': {
-          const activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-          let text = '';
-          if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
-            text = activeEl.value.substring(activeEl.selectionStart ?? 0, activeEl.selectionEnd ?? 0);
-          } else {
-            text = window.getSelection()?.toString() ?? '';
-          }
-          if (text) {
-            sendBridgeEvent('write_clipboard', text);
-          }
+          // 优先复制当前激活图片，补齐 IDE Ctrl/Cmd+C 在非文本选区下的图片复制能力。
+          void copyActiveImageTarget().then((copied) => {
+            if (copied) {
+              return;
+            }
+
+            const activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+            let text = '';
+            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+              text = activeEl.value.substring(activeEl.selectionStart ?? 0, activeEl.selectionEnd ?? 0);
+            } else {
+              text = window.getSelection()?.toString() ?? '';
+            }
+            if (text) {
+              sendBridgeEvent('write_clipboard', text);
+            }
+          });
           break;
         }
         case 'cut': {

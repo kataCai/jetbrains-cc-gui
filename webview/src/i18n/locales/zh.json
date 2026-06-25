@@ -124,6 +124,13 @@
     },
     "totalDuration": "本次耗时"
   },
+  "contextMenu": {
+    "copy": "复制",
+    "cut": "剪切",
+    "paste": "粘贴",
+    "newline": "插入换行",
+    "copyImage": "复制图片"
+  },
   "settings": {
     "title": "设置",
     "basic": {

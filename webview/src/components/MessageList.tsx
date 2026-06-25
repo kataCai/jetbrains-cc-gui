@@ -5,7 +5,7 @@ import { getMessageKey } from '../utils/messageUtils';
 import { MessageItem } from './MessageItem';
 import WaitingIndicator from './WaitingIndicator';
 import { ContextMenu } from './ContextMenu';
-import { useContextMenu, copySelection } from '../hooks/useContextMenu.js';
+import { useContextMenu, copyImageSelection, copySelection } from '../hooks/useContextMenu.js';
 
 /** Always render at least this many recent messages. Earlier messages are collapsed. */
 const VISIBLE_MESSAGE_WINDOW = 15;
@@ -92,10 +92,7 @@ export const MessageList = memo(function MessageList({
   // Context menu for message list (copy only, when text selected)
   const ctxMenu = useContextMenu();
   const handleMessageContextMenu = useCallback((e: React.MouseEvent) => {
-    const sel = window.getSelection();
-    if (sel && sel.toString().trim().length > 0) {
-      ctxMenu.open(e);
-    }
+    ctxMenu.open(e);
   }, [ctxMenu.open]);
 
   // Reset revealed count when a new session starts (first message ID changes)
@@ -135,7 +132,15 @@ export const MessageList = memo(function MessageList({
           y={ctxMenu.y}
           onClose={ctxMenu.close}
           items={[
-            { label: t('contextMenu.copy', 'Copy'), action: () => copySelection(ctxMenu.savedRange, ctxMenu.selectedText) },
+            ...(ctxMenu.imageTarget
+              ? [{ label: t('contextMenu.copyImage', '复制图片'), action: () => void copyImageSelection(ctxMenu.imageTarget) } as const]
+              : []),
+            ...(ctxMenu.imageTarget ? [{ separator: true as const }] : []),
+            {
+              label: t('contextMenu.copy', 'Copy'),
+              action: () => copySelection(ctxMenu.savedRange, ctxMenu.selectedText),
+              disabled: !ctxMenu.hasSelection,
+            },
           ]}
         />
       )}

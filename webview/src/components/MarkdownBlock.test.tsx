@@ -297,6 +297,23 @@ describe('MarkdownBlock linkify integration', () => {
     expect(screen.getByRole('link', { name: 'https://example.com/docs' })).toBeTruthy();
   });
 
+  /**
+   * 验证 Markdown 图片点击后会进入统一预览弹层，但不再展示显式复制按钮。
+   * 该用例覆盖需求图 2：预览弹层保留关闭能力，图片复制收敛为右键菜单和快捷键，不再占用显式按钮位置。
+   */
+  it('uses the shared preview dialog for markdown images without showing a copy button', () => {
+    render(<MarkdownBlock content={'![demo](data:image/png;base64,QUJD)'} />);
+
+    const image = screen.getByRole('img', { name: 'demo' });
+    fireEvent.click(image);
+
+    const closeButton = document.querySelector('.image-preview-close');
+    const copyButton = document.querySelector('.image-preview-copy');
+
+    expect(copyButton).toBeNull();
+    expect(closeButton?.textContent).toBe('×');
+  });
+
   it('falls back to the link href when tooltip resolution returns null', () => {
     // Backend cannot produce a display path (e.g. no project root,
     // canonicalization failure). The tooltip should still show the user where

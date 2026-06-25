@@ -1,6 +1,11 @@
 import { useState, useCallback, useRef } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { sendToJava } from '../utils/bridge.js';
+import {
+  copyImageViaBridge,
+  getCopyableImageSourceFromElement,
+  type CopyableImageSource,
+} from '../utils/imageClipboard';
 
 interface ContextMenuState {
   visible: boolean;
@@ -9,6 +14,7 @@ interface ContextMenuState {
   hasSelection: boolean;
   savedRange: Range | null;
   selectedText: string;
+  imageTarget: CopyableImageSource | null;
 }
 
 function placeCursorAfterRemoval(
@@ -54,7 +60,7 @@ function restoreRange(range: Range | null): void {
 
 export function useContextMenu() {
   const [state, setState] = useState<ContextMenuState>({
-    visible: false, x: 0, y: 0, hasSelection: false, savedRange: null, selectedText: '',
+    visible: false, x: 0, y: 0, hasSelection: false, savedRange: null, selectedText: '', imageTarget: null,
   });
   const targetFileTagRef = useRef<HTMLElement | null>(null);
 
@@ -64,6 +70,7 @@ export function useContextMenu() {
     const textSelection = sel?.toString() ?? '';
     const fileTag = (e.target as HTMLElement | null)?.closest('.file-tag') as HTMLElement | null;
     const fileTagPath = fileTag?.getAttribute('data-file-path')?.trim() ?? '';
+    const imageTarget = getCopyableImageSourceFromElement(e.target as HTMLElement | null);
     // When right-clicking on a file tag, copy its full @path reference instead of misjudging as "no selection".
     const selectedText = textSelection.trim().length > 0
       ? textSelection
@@ -78,6 +85,7 @@ export function useContextMenu() {
       hasSelection,
       savedRange,
       selectedText,
+      imageTarget,
     });
   }, []);
 
@@ -92,6 +100,18 @@ export function useContextMenu() {
 export function copySelection(_savedRange: Range | null, text: string): void {
   if (!text) return;
   sendToJava('write_clipboard', text);
+}
+
+/**
+ * 将右键命中的图片写入系统剪贴板。
+ *
+ * @param imageTarget 图片复制来源
+ */
+export async function copyImageSelection(imageTarget: CopyableImageSource | null): Promise<void> {
+  if (!imageTarget) {
+    return;
+  }
+  await copyImageViaBridge(imageTarget);
 }
 
 /** Cut saved selection text via Java bridge (for contenteditable) */
