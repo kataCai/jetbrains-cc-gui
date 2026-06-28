@@ -189,6 +189,7 @@ describe('useModelProviderState', () => {
     });
 
     expect(result.current.selectedCodexModel).toBe('gpt-5.5');
+    expect(result.current.selectedCodexSelectionKey).toBe('managed-openai::gpt-5.5');
     expect(sendBridgeEvent).toHaveBeenCalledWith(
       'select_codex_model',
       JSON.stringify({

@@ -4,7 +4,9 @@ import type { ButtonAreaProps, ModelInfo, PermissionMode, ReasoningEffort } from
 import { ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
 import { CLAUDE_MODELS, CODEX_MODELS, createRuntimeModelInfo } from './types';
 import {
+  buildCodexSelectedModelKey,
   buildCodexModelCatalogKey,
+  parseCodexModelCatalogKey,
   STORAGE_KEYS,
   validateCodexCustomModels,
 } from '../../types/provider';
@@ -159,6 +161,7 @@ export const ButtonArea = ({
   isLoading = false,
   isEnhancing = false,
   selectedModel = 'claude-sonnet-4-6',
+  selectedCodexSelectionKey = '',
   defaultCodexModelFromConfig = null,
   codexBaseUrl = null,
   codexUsesCustomBaseUrl = false,
@@ -311,24 +314,32 @@ export const ButtonArea = ({
    */
   const ensureSelectedCodexCatalogModelVisible = useCallback((
     models: CodexSelectorModelInfo[],
+    selectedCodexSelectionValue: string,
     selectedCodexModelId: string,
     provider: CodexProviderConfig | null,
   ): CodexSelectorModelInfo[] => {
-    if (!selectedCodexModelId) {
+    const normalizedSelectionValue = selectedCodexSelectionValue.trim();
+    const normalizedModelId = selectedCodexModelId.trim();
+    const parsedSelection = parseCodexModelCatalogKey(normalizedSelectionValue);
+    if (!normalizedSelectionValue && !normalizedModelId) {
       return models;
     }
-    if (models.some(model => model.rawModelId === selectedCodexModelId || model.id === selectedCodexModelId)) {
+    if (normalizedSelectionValue && models.some(model => model.id === normalizedSelectionValue)) {
       return models;
     }
-    const runtimeModel = createRuntimeModelInfo(selectedCodexModelId);
+    if (!normalizedSelectionValue && models.some(model => model.rawModelId === normalizedModelId || model.id === normalizedModelId)) {
+      return models;
+    }
+    const runtimeModel = createRuntimeModelInfo(normalizedModelId || normalizedSelectionValue);
     if (!runtimeModel) {
       return models;
     }
     return [{
       ...runtimeModel,
-      providerId: provider?.id,
+      id: normalizedSelectionValue || buildCodexSelectedModelKey(provider?.id, normalizedModelId),
+      providerId: parsedSelection?.providerId || provider?.id,
       providerLabel: provider?.name,
-      rawModelId: selectedCodexModelId,
+      rawModelId: normalizedModelId || runtimeModel.id,
       runnable: true,
     }, ...models];
   }, []);
@@ -365,6 +376,7 @@ export const ButtonArea = ({
       if (catalogModels.length > 0) {
         return ensureSelectedCodexCatalogModelVisible(
           catalogModels,
+          selectedCodexSelectionKey,
           selectedModel,
           activeCodexProvider,
         );
@@ -424,6 +436,7 @@ export const ButtonArea = ({
     currentProvider,
     customModelsVersion,
     ensureSelectedCodexCatalogModelVisible,
+    selectedCodexSelectionKey,
     selectedModel,
   ]);
 
@@ -539,7 +552,8 @@ export const ButtonArea = ({
         )}
         <ModeSelect value={chatExecutionMode} onChange={handleModeSelect} provider={currentProvider} />
         <ModelSelect
-          value={selectedModel}
+          value={currentProvider === 'codex' ? (selectedCodexSelectionKey || selectedModel) : selectedModel}
+          selectedCodexSelectionKey={currentProvider === 'codex' ? selectedCodexSelectionKey : undefined}
           onChange={handleModelSelect}
           models={availableModels}
           currentProvider={currentProvider}

@@ -45,6 +45,7 @@ export interface UseWindowCallbacksOptions {
   setCodexPermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
   setSelectedClaudeModel: React.Dispatch<React.SetStateAction<string>>;
   setSelectedCodexModel: React.Dispatch<React.SetStateAction<string>>;
+  setSelectedCodexSelectionKey: React.Dispatch<React.SetStateAction<string>>;
   setActiveCodexProviderId: React.Dispatch<React.SetStateAction<string>>;
   setDefaultCodexModelFromConfig: React.Dispatch<React.SetStateAction<string | null>>;
   setCodexBaseUrl: React.Dispatch<React.SetStateAction<string | null>>;
@@ -68,6 +69,7 @@ export interface UseWindowCallbacksOptions {
 
   // Refs
   currentProviderRef: MutableRefObject<string>;
+  activeCodexProviderIdRef: MutableRefObject<string>;
   shouldAdoptCodexDefaultModelRef: MutableRefObject<boolean>;
   shouldAdoptCodexDefaultReasoningEffortRef: MutableRefObject<boolean>;
   messagesContainerRef: RefObject<HTMLDivElement | null>;

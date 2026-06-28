@@ -1,6 +1,7 @@
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { PermissionMode, ReasoningEffort } from '../../../components/ChatInputBox/types';
 import { isValidPermissionMode, normalizeClaudeModelId } from '../../../components/ChatInputBox/types';
+import { buildCodexSelectedModelKey } from '../../../types/provider';
 import { clampPermissionDialogTimeoutSeconds } from '../../../utils/permissionDialogTimeout';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
@@ -24,6 +25,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setSelectedCodexSelectionKey,
     setActiveCodexProviderId,
     setDefaultCodexModelFromConfig,
     setCodexBaseUrl,
@@ -37,6 +39,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setAutoOpenFileEnabled,
     setPermissionDialogTimeoutSeconds,
     currentProviderRef,
+    activeCodexProviderIdRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
     syncActiveProviderModelMapping,
@@ -106,6 +109,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setSelectedClaudeModel(normalizeClaudeModelId(modelId));
     } else if (provider === 'codex') {
       setSelectedCodexModel(modelId);
+      setSelectedCodexSelectionKey(buildCodexSelectedModelKey(activeCodexProviderIdRef.current, modelId));
     }
   };
 
@@ -114,6 +118,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setSelectedClaudeModel(normalizeClaudeModelId(modelId));
     } else if (provider === 'codex') {
       setSelectedCodexModel(modelId);
+      setSelectedCodexSelectionKey(buildCodexSelectedModelKey(activeCodexProviderIdRef.current, modelId));
     }
   };
 
@@ -138,11 +143,15 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       if (nextProvider === 'codex' && typeof data.model === 'string' && data.model.trim().length > 0) {
         const normalizedModel = data.model.trim();
         setSelectedCodexModel(normalizedModel);
+        // 恢复标签页快照时同步重建复合 key，避免前端退化成仅凭 modelId 判断勾选状态。
+        setSelectedCodexSelectionKey(buildCodexSelectedModelKey(data.codexProviderId, normalizedModel));
         shouldAdoptCodexDefaultModelRef.current = false;
       }
 
       if (typeof data.codexProviderId === 'string') {
-        setActiveCodexProviderId(data.codexProviderId.trim());
+        const normalizedProviderId = data.codexProviderId.trim();
+        activeCodexProviderIdRef.current = normalizedProviderId;
+        setActiveCodexProviderId(normalizedProviderId);
       }
 
       updateMode(data.permissionMode, nextProvider);
@@ -184,14 +193,18 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       currentProviderRef.current = nextProvider;
 
       if (nextProvider === 'codex' && typeof data.model === 'string' && data.model.trim().length > 0) {
-        setSelectedCodexModel(data.model.trim());
+        const normalizedModel = data.model.trim();
+        setSelectedCodexModel(normalizedModel);
+        setSelectedCodexSelectionKey(buildCodexSelectedModelKey(data.codexProviderId, normalizedModel));
         if (data.modelSource === 'remembered_model') {
           shouldAdoptCodexDefaultModelRef.current = false;
         }
       }
 
       if (typeof data.codexProviderId === 'string') {
-        setActiveCodexProviderId(data.codexProviderId.trim());
+        const normalizedProviderId = data.codexProviderId.trim();
+        activeCodexProviderIdRef.current = normalizedProviderId;
+        setActiveCodexProviderId(normalizedProviderId);
       }
 
       updateMode(data.permissionMode, nextProvider);
@@ -232,6 +245,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         setDefaultCodexModelFromConfig(normalizedModel);
         if (shouldAdoptCodexDefaultModelRef.current) {
           setSelectedCodexModel(normalizedModel);
+          setSelectedCodexSelectionKey(buildCodexSelectedModelKey(activeCodexProviderIdRef.current, normalizedModel));
         }
       }
 

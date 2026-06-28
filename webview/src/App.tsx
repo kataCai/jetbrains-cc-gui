@@ -264,11 +264,13 @@ const App = () => {
   const {
     currentProvider,
     selectedModel,
+    selectedCodexSelectionKey,
     permissionMode,
     selectedAgent,
     sdkStatusLoaded,
     currentSdkInstalled,
     currentProviderRef,
+    activeCodexProviderIdRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
     activeProviderConfig,
@@ -287,6 +289,7 @@ const App = () => {
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setSelectedCodexSelectionKey,
     setActiveCodexProviderId,
     setDefaultCodexModelFromConfig,
     setCodexBaseUrl,
@@ -436,6 +439,7 @@ const App = () => {
     setCodexPermissionMode,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    setSelectedCodexSelectionKey,
     setActiveCodexProviderId,
     setDefaultCodexModelFromConfig,
     setCodexBaseUrl,
@@ -456,6 +460,7 @@ const App = () => {
     setSelectedAgent,
     setSubagentHistories,
     currentProviderRef,
+    activeCodexProviderIdRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
     messagesContainerRef,
@@ -749,6 +754,7 @@ const App = () => {
           onProviderSelect={wrappedHandleProviderSelect}
           currentProvider={currentProvider}
           selectedModel={selectedModel}
+          selectedCodexSelectionKey={selectedCodexSelectionKey}
           permissionMode={permissionMode}
           selectedAgent={selectedAgent}
           sdkStatusLoaded={sdkStatusLoaded}

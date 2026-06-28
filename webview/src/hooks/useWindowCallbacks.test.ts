@@ -50,6 +50,7 @@ describe('useWindowCallbacks integration', () => {
     setCodexPermissionMode: vi.fn(),
     setSelectedClaudeModel: vi.fn(),
     setSelectedCodexModel: vi.fn(),
+    setSelectedCodexSelectionKey: vi.fn(),
     setActiveCodexProviderId: vi.fn(),
     setDefaultCodexModelFromConfig: vi.fn(),
     setCodexBaseUrl: vi.fn(),
@@ -72,6 +73,7 @@ describe('useWindowCallbacks integration', () => {
 
     // Refs
     currentProviderRef: { current: 'claude' },
+    activeCodexProviderIdRef: { current: '' },
     shouldAdoptCodexDefaultModelRef: { current: true },
     shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
     messagesContainerRef: { current: null },
@@ -124,6 +126,44 @@ describe('useWindowCallbacks integration', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('restoreTabRuntimeState 会为 Codex 恢复 provider 维度的复合选中 key', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      activeCodexProviderIdRef: { current: '' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.restoreTabRuntimeState?.(JSON.stringify({
+        provider: 'codex',
+        model: 'gpt-5.4',
+        codexProviderId: 'custom_gateway',
+      }));
+    });
+
+    expect(opts.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.4');
+    expect(opts.setSelectedCodexSelectionKey).toHaveBeenCalledWith('custom_gateway::gpt-5.4');
+    expect(opts.setActiveCodexProviderId).toHaveBeenCalledWith('custom_gateway');
+  });
+
+  it('updateCodexModelState 在沿用 CLI 默认模型时会同步复合选中 key', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      activeCodexProviderIdRef: { current: 'custom_gateway' },
+      shouldAdoptCodexDefaultModelRef: { current: true },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.updateCodexModelState?.(JSON.stringify({
+        model: 'gpt-5.5',
+      }));
+    });
+
+    expect(opts.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.5');
+    expect(opts.setSelectedCodexSelectionKey).toHaveBeenCalledWith('custom_gateway::gpt-5.5');
   });
 
   // ===== historyLoadComplete releases transition guard =====
