@@ -43,6 +43,7 @@ interface SelectorModelInfo extends ModelInfo {
 
 interface ModelSelectProps {
   value: string;
+  selectedCodexSelectionKey?: string;
   onChange: (modelId: string) => void;
   models?: SelectorModelInfo[];
   currentProvider?: string;
@@ -174,6 +175,7 @@ const resolveModelIdForIcon = (
  */
 export const ModelSelect = ({
   value,
+  selectedCodexSelectionKey = '',
   onChange,
   models = AVAILABLE_MODELS,
   currentProvider = 'claude',
@@ -193,10 +195,14 @@ export const ModelSelect = ({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const parsedCompositeValue = parseCodexModelCatalogKey(value);
+  const effectiveCodexSelectionValue = currentProvider === 'codex'
+    ? selectedCodexSelectionKey.trim() || value
+    : value;
+  const parsedCompositeValue = parseCodexModelCatalogKey(effectiveCodexSelectionValue);
   const strippedValue = strip1MContextSuffix(parsedCompositeValue?.modelId ?? value);
   const normalizedValue = currentProvider === 'claude' ? normalizeClaudeModelId(strippedValue) : strippedValue;
-  const currentModel = models.find(m => m.id === value)
+  const currentModel = models.find(m => m.id === effectiveCodexSelectionValue)
+    || models.find(m => m.id === value)
     || models.find(m => m.rawModelId === normalizedValue)
     || models.find(m => m.id === normalizedValue)
     || models.find(m => m.id === strippedValue)
@@ -217,15 +223,19 @@ export const ModelSelect = ({
   const isSelectedModel = (modelId: string): boolean => {
     if (currentProvider !== 'claude') {
       const parsedOption = parseCodexModelCatalogKey(modelId);
-      const parsedCurrent = parseCodexModelCatalogKey(value);
+      const parsedCurrent = parseCodexModelCatalogKey(effectiveCodexSelectionValue);
       if (parsedOption && parsedCurrent) {
         return parsedOption.providerId === parsedCurrent.providerId
           && parsedOption.modelId === parsedCurrent.modelId;
       }
+      if (parsedCurrent) {
+        // 当前显式持有复合 key 时，只允许完全匹配项或 runtime fallback 的 raw modelId 命中。
+        return modelId === effectiveCodexSelectionValue || modelId === parsedCurrent.modelId;
+      }
       if (parsedOption) {
         return parsedOption.modelId === strippedValue;
       }
-      return modelId === value || modelId === strippedValue;
+      return modelId === effectiveCodexSelectionValue || modelId === strippedValue;
     }
     return normalizeClaudeModelId(modelId) === normalizedValue;
   };

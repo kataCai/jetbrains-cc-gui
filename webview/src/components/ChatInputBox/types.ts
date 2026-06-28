@@ -582,6 +582,8 @@ export interface ChatInputBoxProps {
   isLoading?: boolean;
   /** Current model */
   selectedModel?: string;
+  /** Codex 聊天区显式选中项 key，用于区分同名模型来自哪个 provider */
+  selectedCodexSelectionKey?: string;
   /** Codex default model from local CLI config (display only) */
   defaultCodexModelFromConfig?: string | null;
   /** Codex base_url from local CLI config (display only) */
@@ -718,6 +720,8 @@ export interface ButtonAreaProps {
   isEnhancing?: boolean;
   /** Current model */
   selectedModel?: string;
+  /** Codex 聊天区显式选中项 key，用于区分同名模型来自哪个 provider */
+  selectedCodexSelectionKey?: string;
   /** Codex default model from local CLI config (display only) */
   defaultCodexModelFromConfig?: string | null;
   /** Codex base_url from local CLI config (display only) */

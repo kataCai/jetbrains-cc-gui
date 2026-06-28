@@ -448,6 +448,30 @@ export function parseCodexModelCatalogKey(compositeKey: string): CodexSelectedMo
 }
 
 /**
+ * 生成聊天区使用的 Codex 选中 key。
+ * 当前端同时持有 providerId 与 modelId 时，必须使用复合 key 唯一标识 catalog 选中项；
+ * 若当前仅知道 raw modelId，则回退为 modelId 本身，以兼容 runtime fallback 场景。
+ *
+ * @param providerId 当前选中模型所属 providerId
+ * @param modelId 当前选中模型的 raw modelId
+ * @returns 优先返回 providerId::modelId；缺少 providerId 时回退为裁剪后的 modelId；都为空时返回空串
+ */
+export function buildCodexSelectedModelKey(
+  providerId: string | null | undefined,
+  modelId: string | null | undefined,
+): string {
+  const normalizedProviderId = typeof providerId === 'string' ? providerId.trim() : '';
+  const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!normalizedModelId) {
+    return '';
+  }
+  if (!normalizedProviderId) {
+    return normalizedModelId;
+  }
+  return buildCodexModelCatalogKey(normalizedProviderId, normalizedModelId);
+}
+
+/**
  * Codex 子进程环境变量条目。
  * 设置页使用该结构保存用户显式声明的附加环境变量，后端会按用途分别注入消息发送进程和 MCP 工具发现进程。
  */

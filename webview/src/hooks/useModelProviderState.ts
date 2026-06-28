@@ -8,7 +8,11 @@ import {
   strip1MContextSuffix,
 } from '../components/ChatInputBox/types';
 import type { PermissionMode } from '../components/ChatInputBox/types';
-import { isSpecialProviderId, parseCodexModelCatalogKey } from '../types/provider';
+import {
+  buildCodexSelectedModelKey,
+  isSpecialProviderId,
+  parseCodexModelCatalogKey,
+} from '../types/provider';
 import { useClaudeProvider } from './providers/useClaudeProvider';
 import { useCodexProvider } from './providers/useCodexProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
@@ -115,6 +119,10 @@ export function useModelProviderState({
 
   const currentProviderRef = useRef(currentProvider);
   currentProviderRef.current = currentProvider;
+  const activeCodexProviderIdRef = useRef(activeCodexProviderId);
+  useEffect(() => {
+    activeCodexProviderIdRef.current = activeCodexProviderId;
+  }, [activeCodexProviderId]);
 
   /**
    * 当标签页已经从持久化状态或后端恢复过 Codex 模型后，
@@ -141,6 +149,8 @@ export function useModelProviderState({
   const {
     selectedCodexModel,
     setSelectedCodexModel,
+    selectedCodexSelectionKey,
+    setSelectedCodexSelectionKey,
     codexPermissionMode,
     setCodexPermissionMode,
     reasoningEffort,
@@ -302,6 +312,8 @@ export function useModelProviderState({
         resolvedCodexModelId,
       });
       shouldAdoptCodexDefaultModelRef.current = false;
+      // 聊天区选中态必须保留 provider 维度，否则同名模型会在下拉中被同时勾选。
+      setSelectedCodexSelectionKey(buildCodexSelectedModelKey(targetProviderId, resolvedCodexModelId));
       setSelectedCodexModel(resolvedCodexModelId);
       sendBridgeEvent('set_model', resolvedCodexModelId);
       sendBridgeEvent('select_codex_model', JSON.stringify({
@@ -318,6 +330,7 @@ export function useModelProviderState({
     longContextEnabled,
     onCodexConversationConfigChanged,
     selectedCodexModel,
+    setSelectedCodexSelectionKey,
     setSelectedClaudeModel,
     setSelectedCodexModel,
     traceCodexRuntime,
@@ -451,6 +464,8 @@ export function useModelProviderState({
     setSelectedClaudeModel,
     selectedCodexModel,
     setSelectedCodexModel,
+    selectedCodexSelectionKey,
+    setSelectedCodexSelectionKey,
     defaultCodexModelFromConfig,
     setDefaultCodexModelFromConfig,
     codexBaseUrl,
@@ -491,6 +506,7 @@ export function useModelProviderState({
     currentProviderRef,
     activeCodexProviderId,
     setActiveCodexProviderId,
+    activeCodexProviderIdRef,
     activeProviderConfigRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,

@@ -58,6 +58,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
     {
       isLoading = false,
       selectedModel = 'claude-sonnet-4-6',
+      selectedCodexSelectionKey = '',
       defaultCodexModelFromConfig = null,
       codexBaseUrl = null,
       codexUsesCustomBaseUrl = false,
@@ -685,6 +686,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           isLoading={isLoading}
         isEnhancing={isEnhancing}
         selectedModel={selectedModel}
+        selectedCodexSelectionKey={selectedCodexSelectionKey}
         defaultCodexModelFromConfig={defaultCodexModelFromConfig}
         codexBaseUrl={codexBaseUrl}
         codexUsesCustomBaseUrl={codexUsesCustomBaseUrl}

@@ -10,6 +10,7 @@ import type { PermissionMode, ReasoningEffort } from '../../components/ChatInput
  */
 export function useCodexProvider() {
   const [selectedCodexModel, setSelectedCodexModel] = useState(CODEX_MODELS[0].id);
+  const [selectedCodexSelectionKey, setSelectedCodexSelectionKey] = useState(CODEX_MODELS[0].id);
   const [codexPermissionMode, setCodexPermissionMode] = useState<PermissionMode>('default');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('high');
 
@@ -21,6 +22,8 @@ export function useCodexProvider() {
   return {
     selectedCodexModel,
     setSelectedCodexModel,
+    selectedCodexSelectionKey,
+    setSelectedCodexSelectionKey,
     codexPermissionMode,
     setCodexPermissionMode,
     reasoningEffort,

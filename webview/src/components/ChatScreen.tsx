@@ -75,6 +75,7 @@ export interface ChatScreenProps {
   // Model / provider state (slice from useModelProviderState)
   currentProvider: ProviderState['currentProvider'];
   selectedModel: ProviderState['selectedModel'];
+  selectedCodexSelectionKey: ProviderState['selectedCodexSelectionKey'];
   permissionMode: ProviderState['permissionMode'];
   selectedAgent: ProviderState['selectedAgent'];
   sdkStatusLoaded: ProviderState['sdkStatusLoaded'];
@@ -127,7 +128,7 @@ export const ChatScreen = ({
   onUndoFile, onDiscardAll, onKeepAll,
   onSubmit, onInterrupt, onRewind,
   onNavigateToProviderSettings, onProviderSelect,
-  currentProvider, selectedModel, permissionMode, selectedAgent,
+  currentProvider, selectedModel, selectedCodexSelectionKey, permissionMode, selectedAgent,
   sdkStatusLoaded, currentSdkInstalled,
   activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
   reasoningEffort, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
@@ -236,6 +237,7 @@ export const ChatScreen = ({
           ref={chatInputRef}
           isLoading={loading}
           selectedModel={selectedModel}
+          selectedCodexSelectionKey={selectedCodexSelectionKey}
           permissionMode={permissionMode}
           currentProvider={currentProvider}
           usagePercentage={usagePercentage}
@@ -310,4 +312,3 @@ export const ChatScreen = ({
     </>
   );
 };
-

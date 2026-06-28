@@ -198,6 +198,7 @@ describe('ModelSelect', () => {
     const { container } = render(
       <ModelSelect
         value="managed-openai::gpt-5.5"
+        selectedCodexSelectionKey="managed-openai::gpt-5.5"
         onChange={vi.fn()}
         models={[{
           id: 'managed-openai::gpt-5.5',
@@ -216,6 +217,47 @@ describe('ModelSelect', () => {
     const dropdown = container.querySelector('.selector-dropdown');
     expect(dropdown).toBeTruthy();
     expect(within(dropdown as HTMLElement).getByText('Managed OpenAI')).toBeTruthy();
+  });
+
+  /**
+   * 验证 Codex catalog 出现同名模型时，选中态必须按 providerId + modelId 精确匹配。
+   * 避免仅凭 raw modelId 回退比较，导致不同供应商的同名模型被同时勾选。
+   */
+  it('只勾选与复合 key 完全匹配的 Codex catalog 模型项', () => {
+    const { container } = render(
+      <ModelSelect
+        value="gpt-5.4"
+        selectedCodexSelectionKey="managed-openai::gpt-5.4"
+        onChange={vi.fn()}
+        models={[
+          {
+            id: 'managed-openai::gpt-5.4',
+            rawModelId: 'gpt-5.4',
+            label: 'gpt-5.4',
+            providerId: 'managed-openai',
+            providerLabel: 'Managed OpenAI',
+            runnable: true,
+          },
+          {
+            id: 'custom_gateway::gpt-5.4',
+            rawModelId: 'gpt-5.4',
+            label: 'gpt-5.4',
+            providerId: 'custom_gateway',
+            providerLabel: 'Buycode',
+            runnable: true,
+          },
+        ]}
+        currentProvider="codex"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    const dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    const selectedOptions = dropdown?.querySelectorAll('.selector-option.selected') ?? [];
+    expect(selectedOptions).toHaveLength(1);
+    expect(within(selectedOptions[0] as HTMLElement).getByText('Managed OpenAI')).toBeTruthy();
   });
 
   /**
