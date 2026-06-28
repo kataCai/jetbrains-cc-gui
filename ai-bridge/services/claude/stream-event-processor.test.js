@@ -474,6 +474,53 @@ test('processStreamEvent: snapshot-mode block absorbs corrective rewrites withou
   );
 });
 
+test('processMessageContent: tail-fill snapshot followed by corrective rewrite does not emit duplicate suffix', () => {
+  const state = makeTurnState(true);
+
+  const captured = captureStdout(() => {
+    processMessageContent(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Now I can see' }] },
+      },
+      state
+    );
+
+    processMessageContent(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Now I can see the actual code. Let me implement' }] },
+      },
+      state
+    );
+
+    processMessageContent(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Now I can see the actuall code. Let me implement the changes.' }] },
+      },
+      state
+    );
+  });
+
+  const deltaLines = tagLines(captured, '[CONTENT_DELTA]');
+  const totalEmitted = deltaLines
+    .map((line) => JSON.parse(line.replace(/^\[CONTENT_DELTA\]\s+/, '').trim()))
+    .join('');
+
+  assert.equal(deltaLines.length, 2);
+  assert.match(deltaLines[0], /"Now I can see"/);
+  assert.match(deltaLines[1], /" the actual code\. Let me implement"/);
+  assert.ok(
+    !totalEmitted.includes('Now I can seeNow I can see'),
+    'Snapshot corrective rewrite must not replay the whole prefix. Emitted: ' + JSON.stringify(totalEmitted),
+  );
+  assert.ok(
+    !totalEmitted.includes('Let me implementNow I can see'),
+    'Snapshot corrective rewrite must not append duplicated rewrite fragments. Emitted: ' + JSON.stringify(totalEmitted),
+  );
+});
+
 test('processStreamEvent: incremental-mode block keeps appending novel deltas', () => {
   const state = makeTurnState(true);
 

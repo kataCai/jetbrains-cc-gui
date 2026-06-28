@@ -60,6 +60,8 @@ const FILE_WITH_LINE_REGEX = new RegExp(
 const JAVA_FQCN_REGEX = /[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*/g;
 const FILE_LINE_INFO_REGEX = /^(.*):(\d+)(?:-(\d+))?$/;
 const HTTP_LINK_REGEX = /^(https?:|mailto:)/i;
+const FILE_URI_SCHEME_REGEX = /^file:/i;
+const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
 const JAVA_FQCN_CANDIDATE_REGEX = /^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*$/;
 
 // Standalone filename regex: matches single filenames with common source file extensions
@@ -450,6 +452,99 @@ function shouldSkipTextNode(textNode: Text): boolean {
   return parentElement.closest('a, pre') !== null;
 }
 
+/**
+ * 重复解码 href，兼容 `%2520 -> %20 -> 空格` 这类双重编码路径。
+ *
+ * @param value 原始 href
+ * @param maxPasses 最大重复解码次数
+ * @return 解码后的文本
+ */
+function decodeHrefRepeatedly(value: string, maxPasses = 3): string {
+  let current = value;
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    try {
+      const decoded = decodeURIComponent(current.replace(/\+/g, ' '));
+      if (decoded === current) {
+        break;
+      }
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+/**
+ * 将 file:// URI 归一化成本地路径。
+ *
+ * @param uri file URI
+ * @return 可用于文件导航的路径
+ */
+function fileUriToPath(uri: string): string {
+  try {
+    const url = new URL(uri);
+    let pathname = decodeHrefRepeatedly(url.pathname);
+    if (/^\/[A-Za-z]:\//.test(pathname)) {
+      pathname = pathname.slice(1);
+    }
+    return pathname;
+  } catch {
+    const withoutScheme = uri.replace(/^file:\/\//i, '');
+    if (/^[A-Za-z]:\//.test(withoutScheme)) {
+      return decodeHrefRepeatedly(withoutScheme);
+    }
+    const posixish = withoutScheme.startsWith('/') ? withoutScheme : `/${withoutScheme}`;
+    return decodeHrefRepeatedly(posixish);
+  }
+}
+
+/**
+ * 归一化 Markdown 文件导航目标。
+ *
+ * @param href 原始 href
+ * @return 归一化后的文件路径；为空时返回 null
+ */
+export function normalizeFileNavigationTarget(href: string): string | null {
+  const trimmed = href.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (FILE_URI_SCHEME_REGEX.test(trimmed)) {
+    return fileUriToPath(trimmed);
+  }
+
+  return decodeHrefRepeatedly(trimmed);
+}
+
+/**
+ * 判断现有 anchor 的 href 是否应视为文件导航链接。
+ *
+ * @param href 原始 href
+ * @return 是否属于文件导航
+ */
+export function isMarkdownFileNavigationHref(href: string): boolean {
+  const normalized = normalizeFileNavigationTarget(href);
+  if (!normalized) {
+    return false;
+  }
+
+  if (FILE_URI_SCHEME_REGEX.test(href.trim())) {
+    return true;
+  }
+
+  if (WINDOWS_DRIVE_PATH_REGEX.test(normalized)) {
+    return true;
+  }
+
+  if (normalized.startsWith('./') || normalized.startsWith('../') || normalized.startsWith('/')) {
+    return true;
+  }
+
+  return /\.[A-Za-z0-9._-]+$/.test(normalized);
+}
+
 export function parseFileLinkTarget(value: string): FileLinkTarget | null {
   const trimmedValue = value.trim();
   if (!trimmedValue) {
@@ -499,12 +594,20 @@ export function isJavaFqcnCandidate(value: string): boolean {
 export function decorateExistingAnchors(root: Element): void {
   root.querySelectorAll('a[href]').forEach((anchor) => {
     const href = anchor.getAttribute('href')?.trim();
-    if (!href || !HTTP_LINK_REGEX.test(href)) {
+    if (!href) {
       return;
     }
 
-    anchor.classList.add('url-link');
-    anchor.setAttribute('data-linkify', 'url');
+    if (HTTP_LINK_REGEX.test(href)) {
+      anchor.classList.add('url-link');
+      anchor.setAttribute('data-linkify', 'url');
+      return;
+    }
+
+    if (isMarkdownFileNavigationHref(href)) {
+      anchor.classList.add('file-link');
+      anchor.setAttribute('data-linkify', 'file');
+    }
   });
 }
 

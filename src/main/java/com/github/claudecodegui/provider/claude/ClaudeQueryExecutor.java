@@ -5,6 +5,8 @@ import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.bridge.ProcessManager;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
+import com.github.claudecodegui.util.ClaudeCliPathResolver;
+import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
@@ -15,12 +17,15 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
- * Handles one-shot simple query execution for the Claude bridge.
+ * 负责 Claude 单轮 simple-query 调用。
+ * 该类同时覆盖同步查询和流式查询，两条路径都会直接拉起短生命周期 Node 子进程，
+ * 因此需要统一接入 ProcessManager，确保超时、中断和异常路径都能释放进程资源。
  */
 class ClaudeQueryExecutor {
 
@@ -49,11 +54,22 @@ class ClaudeQueryExecutor {
         this.outputExtractor = outputExtractor;
     }
 
+    /**
+     * 以阻塞方式执行一次 simple-query。
+     * 会把查询进程注册到 ProcessManager，并在超时或异常时执行兜底终止，
+     * 避免同步查询长期占用 Node 子进程。
+     *
+     * @param prompt 用户输入提示词
+     * @param timeoutSeconds 最大等待秒数
+     * @return SDKResult，包含原始输出、提取到的 assistant 内容及错误信息
+     */
     SDKResult executeQuerySync(String prompt, int timeoutSeconds) {
         SDKResult result = new SDKResult();
         StringBuilder output = new StringBuilder();
         StringBuilder jsonBuffer = new StringBuilder();
         boolean inJson = false;
+        String channelId = "claude-query-sync-" + UUID.randomUUID();
+        Process process = null;
 
         try {
             String node = nodeDetector.findNodeExecutable();
@@ -77,8 +93,10 @@ class ClaudeQueryExecutor {
             pb.redirectErrorStream(true);
             envConfigurator.updateProcessEnvironment(pb, node);
             pb.environment().put("CLAUDE_USE_STDIN", "true");
+            injectClaudeCliOverride(pb.environment());
 
-            Process process = pb.start();
+            process = pb.start();
+            processManager.registerProcess(channelId, process);
             ClaudeBridgeUtils.writeStdin(stdinJson, process);
 
             try (BufferedReader reader = new BufferedReader(
@@ -109,7 +127,7 @@ class ClaudeQueryExecutor {
 
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
             if (!finished) {
-                process.destroyForcibly();
+                PlatformUtils.terminateProcess(process);
                 result.success = false;
                 result.error = "Process timeout";
                 return result;
@@ -145,21 +163,42 @@ class ClaudeQueryExecutor {
             result.success = false;
             result.error = e.getMessage();
             result.rawOutput = output.toString();
+        } finally {
+            processManager.unregisterProcess(channelId, process);
+            processManager.waitForProcessTermination(process);
+            if (process != null && process.isAlive()) {
+                PlatformUtils.terminateProcess(process);
+            }
         }
 
         return result;
     }
 
+    /**
+     * 异步包装同步 simple-query，用于不要求流式回调的调用方。
+     *
+     * @param prompt 用户输入提示词
+     * @return 异步结果
+     */
     CompletableFuture<SDKResult> executeQueryAsync(String prompt) {
         return CompletableFuture.supplyAsync(() -> executeQuerySync(prompt, 60));
     }
 
+    /**
+     * 以流式方式执行 simple-query，并把中间输出回调给前端。
+     * 该路径和同步路径一样会注册进程，确保流式回调结束后没有残留 Node 子进程。
+     *
+     * @param prompt 用户输入提示词
+     * @param callback 前端消息回调
+     * @return 包含最终状态的异步结果
+     */
     CompletableFuture<SDKResult> executeQueryStream(String prompt, MessageCallback callback) {
         return CompletableFuture.supplyAsync(() -> {
             SDKResult result = new SDKResult();
             StringBuilder output = new StringBuilder();
             StringBuilder jsonBuffer = new StringBuilder();
             boolean inJson = false;
+            String channelId = "claude-query-stream-" + UUID.randomUUID();
 
             try {
                 String node = nodeDetector.findNodeExecutable();
@@ -189,10 +228,12 @@ class ClaudeQueryExecutor {
                 envConfigurator.configureTempDir(env, processTempDir);
                 envConfigurator.updateProcessEnvironment(pb, node);
                 env.put("CLAUDE_USE_STDIN", "true");
+                injectClaudeCliOverride(env);
 
                 Process process = null;
                 try {
                     process = pb.start();
+                    processManager.registerProcess(channelId, process);
                     ClaudeBridgeUtils.writeStdin(stdinJson, process);
 
                     try (BufferedReader reader = new BufferedReader(
@@ -267,7 +308,11 @@ class ClaudeQueryExecutor {
                         }
                     }
                 } finally {
+                    processManager.unregisterProcess(channelId, process);
                     processManager.waitForProcessTermination(process);
+                    if (process != null && process.isAlive()) {
+                        PlatformUtils.terminateProcess(process);
+                    }
                 }
             } catch (Exception e) {
                 result.success = false;
@@ -280,4 +325,16 @@ class ClaudeQueryExecutor {
         });
     }
 
+    /**
+     * 向 Claude 直连查询进程环境中注入自定义 CLI 路径。
+     * 与消息发送链路保持一致的环境变量契约，避免设置只对部分入口生效。
+     *
+     * @param env 目标环境变量集合
+     */
+    private void injectClaudeCliOverride(Map<String, String> env) {
+        String claudeCliPath = ClaudeCliPathResolver.getConfiguredPathOrNull();
+        if (claudeCliPath != null) {
+            env.put("CLAUDE_CODE_PATH", claudeCliPath);
+        }
+    }
 }

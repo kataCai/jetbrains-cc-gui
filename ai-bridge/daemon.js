@@ -549,7 +549,7 @@ async function processRequest(request) {
       isDaemonMode = false;
       _originalExit(0);
     }
-  }, 10000);
+  }, 3000);
   ppidMonitor.unref();
 
   // --- Keep alive ---

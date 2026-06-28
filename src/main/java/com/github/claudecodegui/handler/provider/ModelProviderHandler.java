@@ -4,6 +4,7 @@ import com.github.claudecodegui.handler.UsagePushService;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import com.github.claudecodegui.session.CodexSessionBinding;
+import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.github.claudecodegui.skill.SlashCommandRegistry;
 import com.github.claudecodegui.settings.CodexProviderManager;
 import com.github.claudecodegui.util.EditorFileUtils;
@@ -482,6 +483,9 @@ public class ModelProviderHandler {
                 : null;
 
         payload.addProperty("provider", provider);
+        // 中文注释：聊天区即时切换与窗口重建恢复共用同一个 restoreTabRuntimeState 回调，
+        // 必须显式带上 runtimeFamily，避免两条入口对同一前端状态协议产生分叉。
+        payload.addProperty("runtimeFamily", SessionRuntimeFamily.resolve(provider, null, binding));
         payload.addProperty("model", model);
         payload.addProperty("permissionMode", permissionMode);
         payload.addProperty("reasoningEffort", reasoningEffort);

@@ -171,6 +171,7 @@ public class ModelProviderHandlerTest {
 
         JsonObject runtimePayload = jsCallback.findFirstPayload("window.restoreTabRuntimeState");
         assertEquals("codex", runtimePayload.get("provider").getAsString());
+        assertEquals("codex", runtimePayload.get("runtimeFamily").getAsString());
         assertEquals("gpt-5.4", runtimePayload.get("model").getAsString());
         assertEquals("provider-a", runtimePayload.get("codexProviderId").getAsString());
     }
@@ -210,6 +211,7 @@ public class ModelProviderHandlerTest {
         assertEquals(1, persistCount.get());
 
         JsonObject runtimePayload = jsCallback.findFirstPayload("window.restoreTabRuntimeState");
+        assertEquals("codex", runtimePayload.get("runtimeFamily").getAsString());
         assertEquals("provider-b", runtimePayload.get("codexProviderId").getAsString());
         assertEquals("gpt-5.5", runtimePayload.get("model").getAsString());
     }

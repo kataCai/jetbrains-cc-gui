@@ -1,17 +1,13 @@
 package com.github.claudecodegui.handler;
 
+import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.util.ManagedProcessRunner;
 
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Handles input history management messages.
@@ -170,49 +166,34 @@ public class InputHistoryHandler {
     }
 
     /**
-     * Execute a Node.js script, optionally writing stdinData to the process stdin.
-     * Handles process creation, stdin write, stdout read, 30s timeout, and exit code check.
+     * 执行一次短生命周期的 Node.js inline script，并返回 stdout 最后一行 JSON。
+     * 这里统一复用 ManagedProcessRunner，避免旧实现“先阻塞读完 stdout，再 waitFor 超时”
+     * 导致子进程卡住但 stdout 未关闭时，30 秒超时分支永远无法触达。
      *
-     * @param nodePath   path to the node executable
-     * @param nodeScript the JavaScript code to run via node -e
-     * @param stdinData  data to write to stdin, or null to skip stdin write
-     * @return the last non-empty line of stdout
+     * @param nodePath Node 可执行文件路径
+     * @param nodeScript 通过 `node -e` 执行的脚本文本
+     * @param stdinData 需要写入 stdin 的内容；为 null 时表示无输入
+     * @return stdout 最后一行；若无输出则返回空对象 JSON
+     * @throws Exception 当子进程超时、退出码非 0 或执行链路失败时抛出
      */
     private String executeNodeScript(String nodePath, String nodeScript, String stdinData) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder(nodePath, "-e", nodeScript);
+        ProcessBuilder pb = new ProcessBuilder(NodeDetector.buildNodeInlineCommand(nodePath, nodeScript));
         pb.redirectErrorStream(true);
 
-        Process process = pb.start();
-
-        if (stdinData != null) {
-            try (BufferedWriter writer = new BufferedWriter(
-                    new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8))) {
-                writer.write(stdinData);
-                writer.flush();
-            }
+        ManagedProcessRunner.RunResult result = ManagedProcessRunner.run(
+                pb,
+                context.getClaudeSDKBridge().getProcessManager(),
+                "input-history",
+                stdinData,
+                30,
+                5,
+                null
+        );
+        if (result.getExitCode() != 0) {
+            throw new Exception("Node.js process exited with code "
+                    + result.getExitCode() + ": " + result.getOutput());
         }
-
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-            }
-        }
-
-        boolean finished = process.waitFor(30, TimeUnit.SECONDS);
-        if (!finished) {
-            process.destroyForcibly();
-            throw new Exception("Node.js process timeout after 30 seconds");
-        }
-
-        int exitCode = process.exitValue();
-        if (exitCode != 0) {
-            throw new Exception("Node.js process exited with code " + exitCode + ": " + output);
-        }
-
-        String[] lines = output.toString().split("\n");
+        String[] lines = result.getOutput().split("\n");
         return lines.length > 0 ? lines[lines.length - 1] : "{}";
     }
 }

@@ -1,13 +1,15 @@
 package com.github.claudecodegui.provider.claude;
 
-import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.bridge.EnvironmentConfigurator;
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.bridge.ProcessManager;
+import com.github.claudecodegui.handler.ClaudeCliPathHandler;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
+import com.github.claudecodegui.session.ClaudeSession;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.diagnostic.Logger;
 
 import java.io.BufferedReader;
@@ -135,6 +137,7 @@ class ClaudeProcessInvoker {
                 env.put("CLAUDE_USE_STDIN", "true");
                 pb.redirectErrorStream(true);
                 envConfigurator.updateProcessEnvironment(pb, node);
+                injectClaudeCliOverride(env);
 
                 Process process = null;
                 try {
@@ -275,6 +278,20 @@ class ClaudeProcessInvoker {
                 || line.startsWith("[MESSAGE_END]");
     }
 
+    /**
+     * 向 Claude Node 子进程环境中注入自定义 CLI 路径。
+     * 这里只在用户显式配置路径时覆盖默认 CLI 发现逻辑，避免影响未配置用户。
+     *
+     * @param env 目标进程环境变量集合
+     */
+    private void injectClaudeCliOverride(Map<String, String> env) {
+        String claudeCliPath = PropertiesComponent.getInstance()
+                .getValue(ClaudeCliPathHandler.CLAUDE_CLI_PATH_PROPERTY_KEY);
+        if (claudeCliPath != null && !claudeCliPath.trim().isEmpty()) {
+            env.put("CLAUDE_CODE_PATH", claudeCliPath.trim());
+        }
+    }
+
     private String formatSendError(String line, String node, String nodeVersion, File workDir) {
         String jsonStr = line.substring("[SEND_ERROR]".length()).trim();
         String errorMessage = jsonStr;
@@ -318,5 +335,4 @@ class ClaudeProcessInvoker {
             log.debug("[ProcessInvoker] Early exit check failed: " + earlyCheckError.getMessage());
         }
     }
-
 }

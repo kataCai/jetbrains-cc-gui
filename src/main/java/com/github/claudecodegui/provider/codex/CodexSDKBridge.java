@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
 
 /**
  * Codex SDK bridge.
@@ -812,6 +813,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
     public CompletableFuture<JsonObject> getMcpServerTools(String serverId, JsonObject serverConfig) {
         return CompletableFuture.supplyAsync(() -> {
             Process process = null;
+            String channelId = "__codex_mcp_tools__-" + UUID.randomUUID();
             long startTime = System.currentTimeMillis();
             LOG.info("[CodexMcpTools] Starting getMcpServerTools, serverId=" + serverId);
 
@@ -850,7 +852,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 injectCustomEnvVars(pb.environment(), "mcp");
 
                 process = pb.start();
-                processManager.registerProcess("__codex_mcp_tools__", process);
+                processManager.registerProcess(channelId, process);
                 final Process finalProcess = process;
 
                 try (java.io.OutputStream stdin = process.getOutputStream()) {
@@ -936,7 +938,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
                             PlatformUtils.terminateProcess(process);
                         }
                     } finally {
-                        processManager.unregisterProcess("__codex_mcp_tools__", process);
+                        // 这里使用唯一 channelId，避免并发查询 MCP tools 时互相覆盖注册状态。
+                        processManager.unregisterProcess(channelId, process);
                     }
                 }
             }

@@ -38,6 +38,8 @@ export interface UseSettingsBasicActionsReturn {
   nodeVersion: string | null;
   minNodeVersion: number;
   savingNodePath: boolean;
+  claudeCliPath: string;
+  savingClaudeCliPath: boolean;
   workingDirectory: string;
   savingWorkingDirectory: boolean;
   editorFontConfig:
@@ -70,6 +72,7 @@ export interface UseSettingsBasicActionsReturn {
   promptEnhancerConfig: PromptEnhancerConfig;
 
   handleSaveNodePath: () => void;
+  handleSaveClaudeCliPath: () => void;
   handleSaveWorkingDirectory: () => void;
   handleUiFontSelectionChange: (selection: string) => void;
   handleSaveUiFontCustomPath: (path: string) => void;
@@ -118,6 +121,8 @@ export interface UseSettingsBasicActionsReturn {
   setNodeVersion: (version: string | null) => void;
   setMinNodeVersion: (version: number) => void;
   setSavingNodePath: (saving: boolean) => void;
+  setClaudeCliPath: (path: string) => void;
+  setSavingClaudeCliPath: (saving: boolean) => void;
   setWorkingDirectory: (dir: string) => void;
   setSavingWorkingDirectory: (saving: boolean) => void;
   setEditorFontConfig: (
@@ -182,6 +187,8 @@ export function useSettingsBasicActions({
   const [nodeVersion, setNodeVersion] = useState<string | null>(null);
   const [minNodeVersion, setMinNodeVersion] = useState(18);
   const [savingNodePath, setSavingNodePath] = useState(false);
+  const [claudeCliPath, setClaudeCliPath] = useState('');
+  const [savingClaudeCliPath, setSavingClaudeCliPath] = useState(false);
 
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [savingWorkingDirectory, setSavingWorkingDirectory] = useState(false);
@@ -279,6 +286,11 @@ export function useSettingsBasicActions({
     setSavingNodePath(true);
     sendToJava(`set_node_path:${JSON.stringify({ path: (nodePath || '').trim() })}`);
   }, [nodePath]);
+
+  const handleSaveClaudeCliPath = useCallback(() => {
+    setSavingClaudeCliPath(true);
+    sendToJava(`set_claude_cli_path:${JSON.stringify({ path: (claudeCliPath || '').trim() })}`);
+  }, [claudeCliPath]);
 
   const handleSaveWorkingDirectory = useCallback(() => {
     setSavingWorkingDirectory(true);
@@ -591,6 +603,10 @@ export function useSettingsBasicActions({
     setMinNodeVersion,
     savingNodePath,
     setSavingNodePath,
+    claudeCliPath,
+    setClaudeCliPath,
+    savingClaudeCliPath,
+    setSavingClaudeCliPath,
     workingDirectory,
     setWorkingDirectory,
     savingWorkingDirectory,
@@ -621,6 +637,7 @@ export function useSettingsBasicActions({
     historyCompletionEnabled,
     setHistoryCompletionEnabled,
     handleSaveNodePath,
+    handleSaveClaudeCliPath,
     handleSaveWorkingDirectory,
     handleUiFontSelectionChange,
     handleSaveUiFontCustomPath,

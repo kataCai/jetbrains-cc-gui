@@ -10,6 +10,7 @@ import { setupApiKey, buildCliEnv } from '../../config/api-config.js';
 import { getClaudeDir, getRealHomeDir, selectWorkingDirectory } from '../../utils/path-utils.js';
 import { ensureClaudeSdk, hasClaudeProjectSessionFile, waitForClaudeProjectSessionFile, isNoConversationFoundError } from './message-utils.js';
 import { getActiveQueryResult, getActiveSessionIds } from './message-session-registry.js';
+import { getClaudeCliPathOverride } from '../../utils/claude-cli-path.js';
 
 export async function rewindFiles(sessionId, userMessageId, cwd = null) {
   let result = null;
@@ -48,6 +49,7 @@ export async function rewindFiles(sessionId, userMessageId, cwd = null) {
         }
 
         const options = {
+          ...(getClaudeCliPathOverride() && { pathToClaudeCodeExecutable: getClaudeCliPathOverride() }),
           resume: sessionId,
           cwd: workingDirectory,
           permissionMode: 'default',

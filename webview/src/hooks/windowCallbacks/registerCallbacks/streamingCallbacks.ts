@@ -23,6 +23,110 @@ const STREAM_STALL_TIMEOUT_MS = 60_000;
 const STREAM_STALL_CHECK_INTERVAL_MS = 5_000;
 const TASK_COMPLETED_DEFER_FRAME_LIMIT = 8;
 
+type ToolResultBlock = {
+  type?: string;
+  tool_use_id?: string;
+};
+
+type ToolResultSnapshotMessage = {
+  type: 'user';
+  content: string;
+  timestamp: string;
+  raw: ClaudeRawMessage | string;
+};
+
+/**
+ * 从消息 raw 中提取 tool_result block 列表。
+ * 这里兼容 WebView 当前可能收到的 `raw.content` 与 `raw.message.content` 两种结构，
+ * 只返回真正的 tool_result block，供 stream_end 收尾时去重恢复。
+ *
+ * @param raw 消息 raw 对象或 JSON 字符串
+ * @return tool_result block 列表；解析失败或不匹配时返回空数组
+ */
+function extractToolResultBlocks(raw: unknown): ToolResultBlock[] {
+  let parsedRaw: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsedRaw = JSON.parse(raw);
+    } catch (error) {
+      console.warn('[Frontend] Failed to parse tool_result raw JSON:', error);
+      return [];
+    }
+  }
+  if (!parsedRaw || typeof parsedRaw !== 'object') {
+    return [];
+  }
+  const rawObj = parsedRaw as { content?: unknown; message?: { content?: unknown } };
+  const content = rawObj.content ?? rawObj.message?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter(
+    (block): block is ToolResultBlock =>
+      !!block
+      && typeof block === 'object'
+      && (block as ToolResultBlock).type === 'tool_result'
+      && typeof (block as ToolResultBlock).tool_use_id === 'string',
+  );
+}
+
+/**
+ * 从 pending snapshot 中提取尚未落地的 tool_result 用户消息。
+ * 这里不关心 assistant patch 是否能命中，只负责把 snapshot 中已经出现的 tool_result
+ * 先独立提取出来，后续在 setMessages updater 中按 tool_use_id 去重补回。
+ *
+ * @param snapshotJson stream_end 前缓存的 pending updateMessages JSON
+ * @return 候选 tool_result 用户消息列表
+ */
+function collectPendingToolResultMessages(snapshotJson: string | null | undefined): ToolResultSnapshotMessage[] {
+  if (typeof snapshotJson !== 'string' || snapshotJson.length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(snapshotJson) as Array<Record<string, unknown>>;
+    const recoveredMessages: ToolResultSnapshotMessage[] = [];
+    const recoveredIds = new Set<string>();
+
+    for (const msg of parsed) {
+      if (msg?.type !== 'user') {
+        continue;
+      }
+      const content = typeof msg.content === 'string' ? msg.content.trim() : '';
+      if (content !== '[tool_result]') {
+        continue;
+      }
+      const rawVal = msg.raw;
+      if (rawVal == null || (typeof rawVal !== 'object' && typeof rawVal !== 'string')) {
+        continue;
+      }
+
+      const blocks = extractToolResultBlocks(rawVal);
+      if (blocks.length === 0) {
+        continue;
+      }
+
+      const firstToolUseId = blocks[0]?.tool_use_id;
+      if (!firstToolUseId || recoveredIds.has(firstToolUseId)) {
+        continue;
+      }
+
+      recoveredIds.add(firstToolUseId);
+      recoveredMessages.push({
+        type: 'user',
+        content: '[tool_result]',
+        timestamp: new Date().toISOString(),
+        raw: rawVal as ClaudeRawMessage | string,
+      });
+    }
+
+    return recoveredMessages;
+  } catch (error) {
+    console.warn('[Frontend] Failed to parse __pendingUpdateJson on stream end:', error);
+    return [];
+  }
+}
+
 export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): void {
   const {
     setMessages,
@@ -281,19 +385,19 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
     let backendSnapshotContent: string | undefined;
     let backendSnapshotRaw: ClaudeRawMessage | string | undefined;
+    const pendingToolResultMessages = collectPendingToolResultMessages(window.__pendingUpdateJson);
     if (typeof window.__pendingUpdateJson === 'string' && window.__pendingUpdateJson.length > 0) {
       try {
         const parsed = JSON.parse(window.__pendingUpdateJson) as Array<Record<string, unknown>>;
         for (let i = parsed.length - 1; i >= 0; i -= 1) {
           if (parsed[i]?.type !== 'assistant') continue;
           const rawContent = parsed[i].content;
-          const content = typeof rawContent === 'string' ? rawContent : '';
-          if (content) {
-            backendSnapshotContent = content;
-            const rawVal = parsed[i].raw;
-            if (rawVal != null && (typeof rawVal === 'object' || typeof rawVal === 'string')) {
-              backendSnapshotRaw = rawVal as ClaudeRawMessage | string;
-            }
+          if (typeof rawContent === 'string') {
+            backendSnapshotContent = rawContent;
+          }
+          const rawVal = parsed[i].raw;
+          if (rawVal != null && (typeof rawVal === 'object' || typeof rawVal === 'string')) {
+            backendSnapshotRaw = rawVal as ClaudeRawMessage | string;
           }
           break;
         }
@@ -323,35 +427,10 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     // streaming delta 和后端快照都可能在收尾阶段略有滞后；
     // 取更长的文本作为最终内容，既保留完整 delta，也避免丢掉刚落地的后端最终快照。
     const streamingContent = streamingContentRef.current || '';
-    const snapshotContent = backendSnapshotContent || '';
-    const endedStreamingContent = snapshotContent.length > streamingContent.length
-      ? snapshotContent
+    const endedStreamingContent = backendSnapshotContent !== undefined
+      ? backendSnapshotContent
       : streamingContent;
     const endedBackendRaw = backendSnapshotRaw;
-
-    type TextBlock = { type: 'text'; text: string };
-    const hasTextBlocks = (value: unknown): value is { message: { content: TextBlock[] } } => {
-      if (!value || typeof value !== 'object') return false;
-      const msg = (value as { message?: unknown }).message;
-      if (!msg || typeof msg !== 'object') return false;
-      const content = (msg as { content?: unknown }).content;
-      return Array.isArray(content);
-    };
-    const getTextLenFromRaw = (raw: unknown): number => {
-      let parsedRaw: unknown = raw;
-      if (typeof raw === 'string') {
-        try {
-          parsedRaw = JSON.parse(raw);
-        } catch (error) {
-          console.warn('[Frontend] Failed to parse raw JSON for length comparison:', error);
-          return 0;
-        }
-      }
-      if (!hasTextBlocks(parsedRaw)) return 0;
-      return parsedRaw.message.content
-        .filter((b): b is TextBlock => b?.type === 'text' && typeof b.text === 'string')
-        .reduce((sum, b) => sum + b.text.length, 0);
-    };
 
     // 在进入 updater 之前先清空 refs，避免 deferred updateMessages 与旧 streaming refs 竞态。
     isStreamingRef.current = false;
@@ -375,19 +454,46 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
           typeof turnStartedAt === 'number' && turnStartedAt > 0
             ? Date.now() - turnStartedAt
             : undefined;
-        let finalRaw = newMessages[idx].raw;
-        if (endedBackendRaw != null && getTextLenFromRaw(endedBackendRaw) >= getTextLenFromRaw(finalRaw)) {
-          finalRaw = endedBackendRaw;
-        }
         newMessages[idx] = {
           ...newMessages[idx],
           content: finalContent,
-          raw: finalRaw,
+          raw: endedBackendRaw ?? newMessages[idx].raw,
           isStreaming: false,
           __turnId: endedStreamingTurnId,
           ...(durationMs != null ? { durationMs } : {}),
         };
       }
+
+      if (pendingToolResultMessages.length > 0) {
+        const existingToolResultIds = new Set<string>();
+
+        for (const existingMessage of newMessages) {
+          if (existingMessage.type !== 'user') {
+            continue;
+          }
+          const blocks = extractToolResultBlocks(existingMessage.raw);
+          for (const block of blocks) {
+            if (block.tool_use_id) {
+              existingToolResultIds.add(block.tool_use_id);
+            }
+          }
+        }
+
+        for (const pendingMessage of pendingToolResultMessages) {
+          const blocks = extractToolResultBlocks(pendingMessage.raw);
+          const toolUseId = blocks[0]?.tool_use_id;
+          if (!toolUseId || existingToolResultIds.has(toolUseId)) {
+            continue;
+          }
+
+          if (newMessages === prev) {
+            newMessages = [...prev];
+          }
+          newMessages.push(pendingMessage);
+          existingToolResultIds.add(toolUseId);
+        }
+      }
+
       return newMessages;
     });
 

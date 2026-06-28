@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   decorateExistingAnchors,
+  isMarkdownFileNavigationHref,
   isJavaFqcnCandidate,
   linkifyHtml,
   linkifyPlainTextSegment,
+  normalizeFileNavigationTarget,
   parseFileLinkTarget,
 } from './linkify';
 import { DEFAULT_LINKIFY_CAPABILITIES } from './linkifyCapabilities';
@@ -163,5 +165,34 @@ describe('linkify', () => {
     linkifyHtml(root, DEFAULT_LINKIFY_CAPABILITIES);
 
     expect(root.querySelector('a.class-link')).toBeNull();
+  });
+
+  it('normalizes file navigation hrefs with spaces and file uri schemes', () => {
+    expect(normalizeFileNavigationTarget('src/foo%20bar.ts')).toBe('src/foo bar.ts');
+    expect(normalizeFileNavigationTarget('file:///tmp/foo%20bar.ts')).toBe('/tmp/foo bar.ts');
+    expect(normalizeFileNavigationTarget('file:///C:/repo/foo%20bar.ts')).toBe('C:/repo/foo bar.ts');
+  });
+
+  it('detects markdown file navigation hrefs for local anchors', () => {
+    expect(isMarkdownFileNavigationHref('file:///tmp/demo.txt')).toBe(true);
+    expect(isMarkdownFileNavigationHref('/tmp/demo.txt')).toBe(true);
+    expect(isMarkdownFileNavigationHref('./foo bar.ts')).toBe(true);
+    expect(isMarkdownFileNavigationHref('https://example.com/docs')).toBe(false);
+  });
+
+  it('marks markdown file anchors as file links while keeping http anchors as url links', () => {
+    const root = document.createElement('div');
+    root.innerHTML = [
+      '<a href="https://example.com/docs">docs</a>',
+      '<a href="file:///tmp/foo%20bar.ts">local</a>',
+      '<a href="./notes/foo bar.md">relative</a>',
+    ].join('');
+
+    decorateExistingAnchors(root);
+
+    const anchors = root.querySelectorAll('a');
+    expect(anchors[0].getAttribute('data-linkify')).toBe('url');
+    expect(anchors[1].getAttribute('data-linkify')).toBe('file');
+    expect(anchors[2].getAttribute('data-linkify')).toBe('file');
   });
 });

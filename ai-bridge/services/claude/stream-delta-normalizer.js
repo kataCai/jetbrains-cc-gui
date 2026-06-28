@@ -122,6 +122,25 @@ export function normalizeStreamDelta(turnState, kind, index, incoming) {
  * @param {string} snapshot snapshot 内容
  * @returns {void}
  */
+/**
+ * 统一处理 snapshot 路径的补发逻辑。
+ * 这里直接复用 `normalizeStreamDelta` 的 block 状态机，让 stream_event 与 snapshot
+ * 走同一套 corrective rewrite / 去重规则，避免两条路径各自做长度比较后产生分叉。
+ *
+ * @param {object} turnState 当前 turn 状态
+ * @param {'text'|'thinking'} kind block 类型
+ * @param {number|string|undefined|null} index block 索引
+ * @param {string} snapshot 当前 snapshot 内容
+ * @returns {string} 需要补发给前端的新增片段；无新增时返回空字符串
+ */
+export function resolveSnapshotDelta(turnState, kind, index, snapshot) {
+  const text = typeof snapshot === 'string' ? snapshot : '';
+  if (!text) {
+    return '';
+  }
+  return normalizeStreamDelta(turnState, kind, index, text);
+}
+
 export function rememberStreamSnapshot(turnState, kind, index, snapshot) {
   const text = typeof snapshot === 'string' ? snapshot : '';
   const key = kind === 'thinking' ? 'thinkingBlockContentByIndex' : 'textBlockContentByIndex';

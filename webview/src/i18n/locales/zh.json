@@ -175,6 +175,11 @@
         "invalidFileName": "Windows 下路径必须以 node.exe 结尾，macOS/Linux 下必须以 node 结尾",
         "cannotExecute": "文件存在但无法执行，请检查文件权限"
       },
+      "claudeCliPath": {
+        "label": "Claude CLI 路径",
+        "placeholder": "可选：Claude Code 可执行文件的绝对路径",
+        "hint": "覆盖 Claude 请求、历史读取、rewind 和 prompt enhancer 流程使用的 Claude Code 可执行文件。留空时保持自动发现。"
+      },
       "workingDirectory": {
         "label": "工作目录",
         "placeholder": "例如 project1 或留空使用项目根目录",

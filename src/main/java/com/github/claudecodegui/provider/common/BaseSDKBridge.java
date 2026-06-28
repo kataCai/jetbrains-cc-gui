@@ -8,6 +8,7 @@ import com.github.claudecodegui.bridge.EnvironmentConfigurator;
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.bridge.ProcessManager;
 import com.github.claudecodegui.startup.BridgePreloader;
+import com.github.claudecodegui.util.PlatformUtils;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.util.concurrency.AppExecutorUtil;
 
@@ -107,6 +108,17 @@ public abstract class BaseSDKBridge {
      */
     public int getActiveProcessCount() {
         return processManager.getActiveProcessCount();
+    }
+
+    /**
+     * 获取当前 bridge 共享的进程管理器。
+     * 供外层 handler 复用统一的子进程注册与清理能力，避免短生命周期 Node 进程
+     * 游离在 SDK bridge 的清理体系之外。
+     *
+     * @return 当前 bridge 持有的共享 ProcessManager
+     */
+    public ProcessManager getProcessManager() {
+        return processManager;
     }
 
     /**
@@ -397,6 +409,9 @@ public abstract class BaseSDKBridge {
                 } finally {
                     processManager.unregisterProcess(channelId, process);
                     processManager.waitForProcessTermination(process);
+                    if (process != null && process.isAlive()) {
+                        PlatformUtils.terminateProcess(process);
+                    }
                 }
 
             } catch (Exception e) {

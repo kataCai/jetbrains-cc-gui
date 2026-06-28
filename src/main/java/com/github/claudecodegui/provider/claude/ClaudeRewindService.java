@@ -3,6 +3,7 @@ package com.github.claudecodegui.provider.claude;
 import com.github.claudecodegui.bridge.EnvironmentConfigurator;
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.bridge.ProcessManager;
+import com.github.claudecodegui.util.ClaudeCliPathResolver;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -14,6 +15,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -54,6 +56,8 @@ class ClaudeRewindService {
     CompletableFuture<JsonObject> rewindFiles(String sessionId, String userMessageId, String cwd) {
         return CompletableFuture.supplyAsync(() -> {
             JsonObject response = new JsonObject();
+            String channelId = "claude-rewind-" + UUID.randomUUID();
+            Process process = null;
 
             try {
                 String node = nodeDetector.findNodeExecutable();
@@ -89,16 +93,19 @@ class ClaudeRewindService {
                 envConfigurator.configureTempDir(env, processTempDir);
                 env.put("CLAUDE_USE_STDIN", "true");
                 envConfigurator.updateProcessEnvironment(pb, node);
+                injectClaudeCliOverride(env);
 
-                Process process = pb.start();
+                process = pb.start();
+                processManager.registerProcess(channelId, process);
                 log.info("[Rewind] Process started, PID: " + process.pid());
 
                 ClaudeBridgeUtils.writeStdin(stdinJson, process);
+                final Process finalProcess = process;
 
                 CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> {
                     StringBuilder output = new StringBuilder();
                     try (BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                            new InputStreamReader(finalProcess.getInputStream(), StandardCharsets.UTF_8))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             log.info("[Rewind] Output: " + line);
@@ -147,8 +154,27 @@ class ClaudeRewindService {
                 response.addProperty("success", false);
                 response.addProperty("error", e.getMessage());
                 return response;
+            } finally {
+                processManager.unregisterProcess(channelId, process);
+                processManager.waitForProcessTermination(process);
+                if (process != null && process.isAlive()) {
+                    PlatformUtils.terminateProcess(process);
+                }
             }
         });
+    }
+
+    /**
+     * 把自定义 Claude CLI 路径注入到 rewind 子进程环境。
+     *
+     * @param env 目标环境变量集合
+     * @return 无返回值
+     */
+    private void injectClaudeCliOverride(Map<String, String> env) {
+        String claudeCliPath = ClaudeCliPathResolver.getConfiguredPathOrNull();
+        if (claudeCliPath != null) {
+            env.put("CLAUDE_CODE_PATH", claudeCliPath);
+        }
     }
 
 }

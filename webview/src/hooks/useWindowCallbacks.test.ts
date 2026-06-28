@@ -754,5 +754,239 @@ describe('useWindowCallbacks integration', () => {
 
       vi.useRealTimers();
     });
+
+    it('onStreamEnd recovers missing tool_result snapshot even when no assistant index is available', () => {
+      const opts = createOptions({
+        isStreamingRef: { current: true },
+        streamingMessageIndexRef: { current: -1 },
+      });
+      renderHook(() => useWindowCallbacks(opts));
+
+      const toolResultRaw = {
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool-1',
+              content: 'done',
+            },
+          ],
+        },
+      };
+
+      act(() => {
+        window.onStreamStart?.();
+        window.__pendingUpdateJson = JSON.stringify([
+          {
+            type: 'assistant',
+            content: 'final answer',
+            raw: {
+              message: {
+                content: [{ type: 'text', text: 'final answer' }],
+              },
+            },
+          },
+          {
+            type: 'user',
+            content: '[tool_result]',
+            raw: toolResultRaw,
+          },
+        ]);
+        window.onStreamEnd?.('12');
+      });
+
+      const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as
+        | ((messages: ClaudeMessage[]) => ClaudeMessage[])
+        | undefined;
+      expect(updater).toBeTypeOf('function');
+
+      const previousMessages: ClaudeMessage[] = [
+        {
+          type: 'assistant',
+          content: 'calling tool',
+          timestamp: '2026-06-27T09:00:00.000Z',
+          raw: {
+            message: {
+              content: [{ type: 'tool_use', id: 'tool-1', name: 'Read' }],
+            },
+          } as any,
+        },
+      ];
+      const nextMessages = updater!(previousMessages);
+
+      expect(nextMessages).toHaveLength(2);
+      expect(nextMessages[1]).toMatchObject({
+        type: 'user',
+        content: '[tool_result]',
+        raw: toolResultRaw,
+      });
+      // 中文注释：这里先收窄 timestamp 的类型，再校验恢复出来的工具结果消息时间戳仍是合法 ISO 字符串，
+      // 避免 tsconfig.test 在严格空值检查下把可选字段直接传给 Date 构造函数时报错。
+      const recoveredTimestamp = nextMessages[1].timestamp;
+      expect(typeof recoveredTimestamp).toBe('string');
+      expect(new Date(recoveredTimestamp as string).toISOString()).toBe(recoveredTimestamp);
+    });
+
+    it('onStreamEnd deduplicates tool_result recovery against existing messages and within snapshot', () => {
+      const opts = createOptions({
+        isStreamingRef: { current: true },
+        streamingMessageIndexRef: { current: 0 },
+      });
+      renderHook(() => useWindowCallbacks(opts));
+
+      const sharedToolResultRaw = {
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool-1',
+              content: 'done',
+            },
+          ],
+        },
+      };
+      const secondToolResultRaw = {
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool-2',
+              content: 'done-2',
+            },
+          ],
+        },
+      };
+
+      act(() => {
+        window.onStreamStart?.();
+        window.__pendingUpdateJson = JSON.stringify([
+          {
+            type: 'assistant',
+            content: 'final answer',
+            raw: {
+              message: {
+                content: [{ type: 'text', text: 'final answer' }],
+              },
+            },
+          },
+          {
+            type: 'user',
+            content: '   [tool_result]   ',
+            raw: sharedToolResultRaw,
+          },
+          {
+            type: 'user',
+            content: '[tool_result]',
+            raw: sharedToolResultRaw,
+          },
+          {
+            type: 'user',
+            content: '[tool_result]',
+            raw: secondToolResultRaw,
+          },
+        ]);
+        window.onStreamEnd?.('18');
+      });
+
+      const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as
+        | ((messages: ClaudeMessage[]) => ClaudeMessage[])
+        | undefined;
+      expect(updater).toBeTypeOf('function');
+
+      const previousMessages: ClaudeMessage[] = [
+        {
+          type: 'assistant',
+          content: 'calling tool',
+          timestamp: '2026-06-27T09:10:00.000Z',
+          isStreaming: true,
+          __turnId: 1,
+          raw: {
+            message: {
+              content: [{ type: 'tool_use', id: 'tool-1', name: 'Read' }],
+            },
+          } as any,
+        },
+        {
+          type: 'user',
+          content: '[tool_result]',
+          timestamp: '2026-06-27T09:10:01.000Z',
+          raw: sharedToolResultRaw as any,
+        },
+      ];
+      const nextMessages = updater!(previousMessages);
+      const recoveredMessages = nextMessages.filter((msg) => msg.type === 'user');
+
+      expect(recoveredMessages).toHaveLength(2);
+      expect(
+        recoveredMessages.filter(
+          (msg) =>
+            ((msg.raw as any)?.message?.content?.[0]?.tool_use_id) === 'tool-1',
+        ),
+      ).toHaveLength(1);
+      expect(
+        recoveredMessages.filter(
+          (msg) =>
+            ((msg.raw as any)?.message?.content?.[0]?.tool_use_id) === 'tool-2',
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('onStreamEnd prefers the backend snapshot when it rewrites content with the same length', () => {
+      const opts = createOptions({
+        isStreamingRef: { current: true },
+        streamingMessageIndexRef: { current: 0 },
+      });
+      renderHook(() => useWindowCallbacks(opts));
+
+      const correctedRaw = {
+        message: {
+          content: [{ type: 'text', text: 'Alpha zeta' }],
+        },
+      };
+
+      act(() => {
+        window.onStreamStart?.();
+        // 中文注释：测试环境里的 setMessages mock 不会真正执行 onStreamStart 内部的 updater，
+        // 因此这里手动补回当前流式 assistant 索引，模拟真实页面中“已有第 0 条 assistant 正在 streaming”的状态。
+        opts.streamingMessageIndexRef.current = 0;
+        window.onContentDelta?.('Alpha beta');
+        window.__pendingUpdateJson = JSON.stringify([
+          {
+            type: 'assistant',
+            content: 'Alpha zeta',
+            raw: correctedRaw,
+          },
+        ]);
+        window.onStreamEnd?.('21');
+      });
+
+      const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as
+        | ((messages: ClaudeMessage[]) => ClaudeMessage[])
+        | undefined;
+      expect(updater).toBeTypeOf('function');
+
+      const previousMessages: ClaudeMessage[] = [
+        {
+          type: 'assistant',
+          content: 'Alpha beta',
+          timestamp: '2026-06-27T10:00:00.000Z',
+          isStreaming: true,
+          __turnId: 1,
+          raw: {
+            message: {
+              content: [{ type: 'text', text: 'Alpha beta' }],
+            },
+          } as any,
+        },
+      ];
+      const nextMessages = updater!(previousMessages);
+
+      expect(nextMessages[0]).toMatchObject({
+        type: 'assistant',
+        content: 'Alpha zeta',
+        isStreaming: false,
+      });
+      expect((nextMessages[0].raw as any)?.message?.content?.[0]?.text).toBe('Alpha zeta');
+    });
   });
 });

@@ -3,10 +3,12 @@ package com.github.claudecodegui.provider.claude;
 import com.github.claudecodegui.bridge.EnvironmentConfigurator;
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.bridge.ProcessManager;
+import com.github.claudecodegui.handler.ClaudeCliPathHandler;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.diagnostic.Logger;
 
 import java.io.BufferedReader;
@@ -205,6 +207,7 @@ class ClaudeMcpQueryService {
             pb.redirectErrorStream(true);
             envConfigurator.updateProcessEnvironment(pb, node);
             pb.environment().put("CLAUDE_USE_STDIN", "true");
+            injectClaudeCliOverride(pb.environment());
 
             process = pb.start();
             processManager.registerProcess(channelId, process);
@@ -269,6 +272,20 @@ class ClaudeMcpQueryService {
             this.markerJson = markerJson;
             this.fullOutput = fullOutput;
             this.elapsedMs = elapsedMs;
+        }
+    }
+
+    /**
+     * 把自定义 Claude CLI 路径注入到 MCP 查询子进程环境。
+     *
+     * @param env 目标环境变量集合
+     * @return 无返回值
+     */
+    private void injectClaudeCliOverride(java.util.Map<String, String> env) {
+        String claudeCliPath = PropertiesComponent.getInstance()
+                .getValue(ClaudeCliPathHandler.CLAUDE_CLI_PATH_PROPERTY_KEY);
+        if (claudeCliPath != null && !claudeCliPath.trim().isEmpty()) {
+            env.put("CLAUDE_CODE_PATH", claudeCliPath.trim());
         }
     }
 }

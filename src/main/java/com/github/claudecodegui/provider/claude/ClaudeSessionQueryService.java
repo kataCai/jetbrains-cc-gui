@@ -2,6 +2,9 @@ package com.github.claudecodegui.provider.claude;
 
 import com.github.claudecodegui.bridge.EnvironmentConfigurator;
 import com.github.claudecodegui.bridge.NodeDetector;
+import com.github.claudecodegui.bridge.ProcessManager;
+import com.github.claudecodegui.util.ClaudeCliPathResolver;
+import com.github.claudecodegui.util.ManagedProcessRunner;
 import com.github.claudecodegui.util.UserMessageSanitizer;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -9,22 +12,20 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.function.Supplier;
 
 /**
- * Reads persisted Claude session history via the Node bridge.
+ * 负责通过 Node bridge 读取 Claude 持久化会话历史。
+ * 该服务本身不维护会话状态，但会直接拉起查询进程，因此必须把子进程接入共享 ProcessManager，
+ * 以保证历史恢复、最新消息查询等链路在失败或超时时不会留下孤儿进程。
  */
 class ClaudeSessionQueryService {
 
@@ -39,6 +40,7 @@ class ClaudeSessionQueryService {
     private final Gson gson;
     private final NodeDetector nodeDetector;
     private final Supplier<File> sdkDirSupplier;
+    private final ProcessManager processManager;
     private final EnvironmentConfigurator envConfigurator;
     private final ClaudeJsonOutputExtractor outputExtractor;
 
@@ -47,6 +49,7 @@ class ClaudeSessionQueryService {
             Gson gson,
             NodeDetector nodeDetector,
             Supplier<File> sdkDirSupplier,
+            ProcessManager processManager,
             EnvironmentConfigurator envConfigurator,
             ClaudeJsonOutputExtractor outputExtractor
     ) {
@@ -54,10 +57,18 @@ class ClaudeSessionQueryService {
         this.gson = gson;
         this.nodeDetector = nodeDetector;
         this.sdkDirSupplier = sdkDirSupplier;
+        this.processManager = processManager;
         this.envConfigurator = envConfigurator;
         this.outputExtractor = outputExtractor;
     }
 
+    /**
+     * 获取指定 Claude session 的完整消息列表，并在返回前对图片引用占位文本做兼容性转换。
+     *
+     * @param sessionId Claude session 标识
+     * @param cwd 会话工作目录
+     * @return 归一化后的前端消息列表
+     */
     List<JsonObject> getSessionMessages(String sessionId, String cwd) {
         try {
             JsonObject jsonResult = runSessionQuery("getSession", sessionId, cwd, "getSessionMessages");
@@ -84,6 +95,13 @@ class ClaudeSessionQueryService {
         }
     }
 
+    /**
+     * 获取指定 Claude session 中最后一条用户消息，并复用统一的历史消息归一化逻辑。
+     *
+     * @param sessionId Claude session 标识
+     * @param cwd 会话工作目录
+     * @return 最后一条用户消息；若不存在则返回 null
+     */
     JsonObject getLatestUserMessage(String sessionId, String cwd) {
         try {
             JsonObject jsonResult = runSessionQuery("getLatestUserMessage", sessionId, cwd, "getLatestUserMessage");
@@ -106,6 +124,18 @@ class ClaudeSessionQueryService {
         }
     }
 
+    /**
+     * 执行一次会话查询子进程，并抽取最后一段 JSON 作为查询结果。
+     * 该方法会对 sessionId 做白名单校验，并在 finally 中平衡 register/unregister，
+     * 确保历史恢复链路异常退出时不会遗留 Node 进程。
+     *
+     * @param commandName channel-manager 子命令
+     * @param sessionId Claude session 标识
+     * @param cwd 会话工作目录
+     * @param logPrefix 日志前缀
+     * @return 反序列化后的查询结果 JSON
+     * @throws Exception 当进程执行、超时或 JSON 解析前置步骤失败时抛出
+     */
     private JsonObject runSessionQuery(String commandName, String sessionId, String cwd, String logPrefix) throws Exception {
         if (sessionId == null || !VALID_SESSION_ID.matcher(sessionId).matches()) {
             throw new IllegalArgumentException("Invalid sessionId: " + sessionId);
@@ -129,25 +159,23 @@ class ClaudeSessionQueryService {
         pb.directory(workDir);
         pb.redirectErrorStream(true);
         envConfigurator.updateProcessEnvironment(pb, node);
+        injectClaudeCliOverride(pb.environment());
 
-        Process process = pb.start();
-
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-            }
+        ManagedProcessRunner.RunResult result = ManagedProcessRunner.run(
+                pb,
+                processManager,
+                "claude-session-query",
+                null,
+                PROCESS_TIMEOUT_SECONDS,
+                5,
+                null
+        );
+        if (result.getExitCode() != 0) {
+            throw new RuntimeException("Node.js process exited with code "
+                    + result.getExitCode() + ": " + result.getOutput());
         }
 
-        boolean finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        if (!finished) {
-            process.destroyForcibly();
-            throw new RuntimeException("Node.js process timed out after " + PROCESS_TIMEOUT_SECONDS + " seconds");
-        }
-
-        String outputStr = output.toString().trim();
+        String outputStr = result.getOutput().trim();
         log.debug("[" + logPrefix + "] Raw output length: " + outputStr.length());
         if (log.isDebugEnabled()) {
             log.debug("[" + logPrefix + "] Raw output (first 300 chars): "
@@ -235,6 +263,18 @@ class ClaudeSessionQueryService {
         JsonObject normalizedMessage = originalMessage.deepCopy();
         normalizedMessage.getAsJsonObject("message").add("content", rebuiltBlocks);
         return normalizedMessage;
+    }
+
+    /**
+     * 把自定义 Claude CLI 路径注入到历史查询子进程环境。
+     *
+     * @param env 目标环境变量集合
+     */
+    private void injectClaudeCliOverride(java.util.Map<String, String> env) {
+        String claudeCliPath = ClaudeCliPathResolver.getConfiguredPathOrNull();
+        if (claudeCliPath != null) {
+            env.put("CLAUDE_CODE_PATH", claudeCliPath);
+        }
     }
 
     private static boolean isTextBlock(JsonObject block) {

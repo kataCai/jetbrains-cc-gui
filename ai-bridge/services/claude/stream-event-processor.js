@@ -1,6 +1,6 @@
 import { emitAccumulatedUsage, mergeUsage } from '../../utils/usage-utils.js';
 import { truncateErrorContent, truncateToolResultBlock } from './message-output-filter.js';
-import { normalizeStreamDelta, rememberStreamSnapshot } from './stream-delta-normalizer.js';
+import { normalizeStreamDelta, resolveSnapshotDelta } from './stream-delta-normalizer.js';
 import { shouldOutputAssistantMessage } from './streaming-output-policy.js';
 
 export function emitUsageTag(msg) {
@@ -65,6 +65,41 @@ export function processStreamEvent(msg, turnState) {
   }
 }
 
+/**
+ * 处理 assistant 完整快照中的 text/thinking block。
+ * 这里故意让 snapshot 路径与 stream_event 共享同一个 normalizer，
+ * 这样 corrective rewrite 不会因为长度比较而重复补发。
+ *
+ * @param {'text'|'thinking'} kind block 类型
+ * @param {string} currentText 当前 block 的 snapshot 内容
+ * @param {object} turnState 当前 turn 状态
+ * @param {number} blockIndex block 索引
+ * @returns {void}
+ */
+function emitSnapshotBlock(kind, currentText, turnState, blockIndex) {
+  if (!turnState.streamingEnabled) {
+    if (kind === 'text') {
+      console.log('[CONTENT]', truncateErrorContent(currentText));
+    } else {
+      console.log('[THINKING]', currentText);
+    }
+    return;
+  }
+
+  const delta = resolveSnapshotDelta(turnState, kind, blockIndex, currentText);
+  if (!delta) {
+    return;
+  }
+
+  if (kind === 'text') {
+    process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
+    turnState.lastAssistantContent += delta;
+  } else {
+    process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
+    turnState.lastThinkingContent += delta;
+  }
+}
+
 export function processMessageContent(msg, turnState) {
   if (msg.type !== 'assistant') return;
   const content = msg.message?.content;
@@ -73,45 +108,13 @@ export function processMessageContent(msg, turnState) {
     for (let i = 0; i < content.length; i += 1) {
       const block = content[i];
       if (block.type === 'text') {
-        const currentText = block.text || '';
-        rememberStreamSnapshot(turnState, 'text', i, currentText);
-        // snapshot 比 stream_event 更完整时仍补发尾部 delta，避免最终内容丢字。
-        if (turnState.streamingEnabled && currentText.length > turnState.lastAssistantContent.length) {
-          const delta = currentText.substring(turnState.lastAssistantContent.length);
-          if (delta) {
-            process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
-          }
-          turnState.lastAssistantContent = currentText;
-        } else if (!turnState.streamingEnabled) {
-          console.log('[CONTENT]', truncateErrorContent(currentText));
-        }
+        emitSnapshotBlock('text', block.text || '', turnState, i);
       } else if (block.type === 'thinking') {
-        const thinkingText = block.thinking || block.text || '';
-        rememberStreamSnapshot(turnState, 'thinking', i, thinkingText);
-        // thinking snapshot 同样允许补发尾部，重复片段由长度与 normalizer 状态共同约束。
-        if (turnState.streamingEnabled && thinkingText.length > turnState.lastThinkingContent.length) {
-          const delta = thinkingText.substring(turnState.lastThinkingContent.length);
-          if (delta) {
-            process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
-          }
-          turnState.lastThinkingContent = thinkingText;
-        } else if (!turnState.streamingEnabled) {
-          console.log('[THINKING]', thinkingText);
-        }
+        emitSnapshotBlock('thinking', block.thinking || block.text || '', turnState, i);
       }
     }
   } else if (typeof content === 'string') {
-    rememberStreamSnapshot(turnState, 'text', 0, content);
-    // 字符串 content 走同一套尾部补偿策略。
-    if (turnState.streamingEnabled && content.length > turnState.lastAssistantContent.length) {
-      const delta = content.substring(turnState.lastAssistantContent.length);
-      if (delta) {
-        process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
-      }
-      turnState.lastAssistantContent = content;
-    } else if (!turnState.streamingEnabled) {
-      console.log('[CONTENT]', truncateErrorContent(content));
-    }
+    emitSnapshotBlock('text', content, turnState, 0);
   }
 }
 

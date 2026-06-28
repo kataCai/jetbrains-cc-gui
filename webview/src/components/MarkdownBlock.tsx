@@ -6,8 +6,10 @@ import { openBrowser, openClass, openFile } from '../utils/bridge';
 import { useMarkdownFileLinkTooltip } from '../hooks/useMarkdownFileLinkTooltip';
 import {
   decorateExistingAnchors,
+  isMarkdownFileNavigationHref,
   linkifyHtml,
   linkifyPlainTextSegment,
+  normalizeFileNavigationTarget,
 } from '../utils/linkify';
 import {
   getLinkifyCapabilities,
@@ -40,9 +42,19 @@ import { setActiveImageTarget } from '../utils/activeImageTarget';
 import { ImagePreviewDialog } from './ImagePreviewDialog';
 
 const SAFE_HREF_PROTOCOL_REGEX = /^(?:https?|mailto):/i;
+const FILE_URI_SCHEME_REGEX = /^file:/i;
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
 const URI_SCHEME_REGEX = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 let hrefSanitizerHookInstalled = false;
+
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) < 0x20) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isAllowedHrefValue(value: string): boolean {
   const trimmed = value.trim();
@@ -50,7 +62,17 @@ function isAllowedHrefValue(value: string): boolean {
     return false;
   }
 
+  // 拦截控制字符混淆协议，例如 java<TAB>script:。
+  // 浏览器会在导航时忽略这些控制字符，导致前端校验与真实执行协议不一致。
+  if (containsControlCharacter(trimmed)) {
+    return false;
+  }
+
   if (WINDOWS_DRIVE_PATH_REGEX.test(trimmed)) {
+    return true;
+  }
+
+  if (FILE_URI_SCHEME_REGEX.test(trimmed)) {
     return true;
   }
 
@@ -71,9 +93,12 @@ function ensureSafeHrefSanitizerHook(): void {
       return;
     }
 
-    if (!isAllowedHrefValue(data.attrValue)) {
-      data.keepAttr = false;
+    if (isAllowedHrefValue(data.attrValue)) {
+      data.forceKeepAttr = true;
+      return;
     }
+
+    data.keepAttr = false;
   });
 
   hrefSanitizerHookInstalled = true;
@@ -839,7 +864,8 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
     event.preventDefault();
   // Prefer the raw attribute we generated ourselves so JCEF/DOM href normalization
   // does not turn Unicode file paths into percent-encoded navigation payloads.
-  const href = anchor.getAttribute('data-raw-href') ?? anchor.getAttribute('href');
+    const rawHref = anchor.getAttribute('data-raw-href') ?? anchor.getAttribute('href');
+    const href = rawHref?.trim();
     if (!href) {
       return;
     }
@@ -847,7 +873,7 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
     const linkType = anchor.getAttribute('data-linkify');
 
     if (linkType === 'file') {
-      openFile(href);
+      openFile(normalizeFileNavigationTarget(href) ?? href);
       return;
     }
 
@@ -858,8 +884,8 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
 
     if (linkType === 'url' || /^(https?:|mailto:)/.test(href)) {
       openBrowser(href);
-    } else {
-      openFile(href);
+    } else if (isMarkdownFileNavigationHref(href)) {
+      openFile(normalizeFileNavigationTarget(href) ?? href);
     }
   };
 
@@ -899,4 +925,3 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
 };
 
 export default memo(MarkdownBlock);
-

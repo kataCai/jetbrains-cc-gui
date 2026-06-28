@@ -36,6 +36,8 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setNodeVersion: vi.fn(),
     setMinNodeVersion: vi.fn(),
     setSavingNodePath: vi.fn(),
+    setClaudeCliPath: vi.fn(),
+    setSavingClaudeCliPath: vi.fn(),
     setWorkingDirectory: vi.fn(),
     setSavingWorkingDirectory: vi.fn(),
     setCommitPrompt: vi.fn(),
@@ -101,6 +103,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(deps.loadAgents).toHaveBeenCalledTimes(1);
     expect(window.sendToJava).not.toHaveBeenCalledWith('get_current_claude_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_node_path:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_claude_cli_path:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_working_directory:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_editor_font_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_ui_font_config:');
@@ -330,6 +333,20 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
       fontBase64: 'AAECA',
       fontFormat: 'truetype',
     }));
+  });
+
+  /**
+   * 验证 Claude CLI 路径回调会更新输入框状态并关闭保存中标记。
+   * 该断言覆盖路径校验失败时“保留用户输入”的交互前提。
+   */
+  it('updates Claude CLI path state and clears saving flag when backend responds', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.updateClaudeCliPath?.(JSON.stringify({ path: '/opt/claude/bin/claude' }));
+
+    expect(deps.setClaudeCliPath).toHaveBeenCalledWith('/opt/claude/bin/claude');
+    expect(deps.setSavingClaudeCliPath).toHaveBeenCalledWith(false);
   });
 
   /**

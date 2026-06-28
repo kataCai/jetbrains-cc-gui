@@ -175,6 +175,11 @@
         "invalidFileName": "Path must end with node.exe on Windows, or node on macOS/Linux",
         "cannotExecute": "File exists but cannot be executed, please check file permissions"
       },
+      "claudeCliPath": {
+        "label": "Claude CLI Path",
+        "placeholder": "Optional: absolute path to the Claude Code executable",
+        "hint": "Overrides the Claude Code executable used by Claude request, history, rewind and prompt-enhancer flows. Leave empty to keep automatic discovery."
+      },
       "workingDirectory": {
         "label": "Working Directory",
         "placeholder": "e.g. project1 or leave empty to use project root",

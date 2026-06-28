@@ -2,12 +2,9 @@ package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.util.ManagedProcessRunner;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Handles Node.js subprocess calls for favorites and session titles services.
@@ -161,33 +158,29 @@ public class NodeJsServiceCaller {
     }
 
     /**
-     * Execute a Node.js script via ProcessBuilder, read its output, enforce a timeout,
-     * and return the last line of stdout (expected to be JSON).
+     * 执行收藏夹或会话标题相关的 Node.js 子进程，并返回 stdout 最后一行 JSON。
+     * 这里显式复用统一的进程执行器，避免 stdout 长时间不关闭时主线程卡死在 readLine，
+     * 从而让 30 秒超时保护真正可触达。
+     *
+     * @param pb 已完成环境变量和命令拼装的 ProcessBuilder
+     * @return stdout 最后一行；若无输出则返回空对象 JSON
+     * @throws Exception 当子进程超时、退出码非 0 或执行链路失败时抛出
      */
     private String executeNodeScript(ProcessBuilder pb) throws Exception {
-        Process process = pb.start();
-
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-            }
+        ManagedProcessRunner.RunResult result = ManagedProcessRunner.run(
+                pb,
+                context.getClaudeSDKBridge().getProcessManager(),
+                "nodejs-service-call",
+                null,
+                PROCESS_TIMEOUT_SECONDS,
+                5,
+                null
+        );
+        if (result.getExitCode() != 0) {
+            throw new Exception("Node.js process exited with code "
+                    + result.getExitCode() + ": " + result.getOutput());
         }
-
-        boolean finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        if (!finished) {
-            process.destroyForcibly();
-            throw new Exception("Node.js process timed out after " + PROCESS_TIMEOUT_SECONDS + " seconds");
-        }
-
-        int exitCode = process.exitValue();
-        if (exitCode != 0) {
-            throw new Exception("Node.js process exited with code " + exitCode + ": " + output);
-        }
-
-        String[] lines = output.toString().split("\n");
+        String[] lines = result.getOutput().split("\n");
         return lines.length > 0 ? lines[lines.length - 1] : "{}";
     }
 }

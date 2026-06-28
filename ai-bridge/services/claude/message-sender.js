@@ -30,9 +30,10 @@ import {
 import { createPreToolUseHook } from './permission-mode.js';
 import { loadMcpServersConfigAsRecord } from './mcp-status/config-loader.js';
 import { setActiveQueryResult } from './message-session-registry.js';
-import { normalizeStreamDelta, rememberStreamSnapshot } from './stream-delta-normalizer.js';
+import { normalizeStreamDelta, resolveSnapshotDelta } from './stream-delta-normalizer.js';
 import { shouldOutputAssistantMessage } from './streaming-output-policy.js';
 import { generateSessionTitle } from '../session-title-service.js';
+import { getClaudeCliPathOverride } from '../../utils/claude-cli-path.js';
 
 // ========== Internal helpers for deduplication ==========
 
@@ -63,6 +64,7 @@ function resolveThinkingConfig(settings) {
  * Build query options object shared by both send functions.
  */
 function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines, mcpServers }) {
+  const claudeCliOverride = getClaudeCliPathOverride();
   return {
     cwd: workingDirectory,
     permissionMode,
@@ -79,6 +81,7 @@ function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, max
     hooks: { PreToolUse: [{ hooks: [preToolUseHook] }] },
     settingSources: ['user', 'project', 'local'],
     ...(mcpServers && { mcpServers }),
+    ...(claudeCliOverride && { pathToClaudeCodeExecutable: claudeCliOverride }),
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
@@ -242,11 +245,14 @@ function processStreamMessage(msg, state, logPrefix) {
 
 /** Emit text content delta with streaming fallback support. */
 function emitTextDelta(currentText, state, blockIndex = 0) {
-  rememberStreamSnapshot(state, 'text', blockIndex, currentText);
-  if (state.streamingEnabled && !state.hasStreamEvents && currentText.length > state.lastAssistantContent.length) {
-    const delta = currentText.substring(state.lastAssistantContent.length);
-    if (delta) process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
-    state.lastAssistantContent = currentText;
+  if (state.streamingEnabled && !state.hasStreamEvents) {
+    // 中文注释：没有独立 stream_event 时，完整 assistant snapshot 需要走与 stream_event
+    // 相同的 normalizer，避免 corrective rewrite 被简单长度比较误判为新增后缀。
+    const delta = resolveSnapshotDelta(state, 'text', blockIndex, currentText);
+    if (delta) {
+      process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
+      state.lastAssistantContent += delta;
+    }
   } else if (state.streamingEnabled && state.hasStreamEvents) {
     if (currentText.length > state.lastAssistantContent.length) state.lastAssistantContent = currentText;
   } else if (!state.streamingEnabled) {
@@ -256,11 +262,13 @@ function emitTextDelta(currentText, state, blockIndex = 0) {
 
 /** Emit thinking content delta with streaming fallback support. */
 function emitThinkingDelta(thinkingText, state, blockIndex = 0) {
-  rememberStreamSnapshot(state, 'thinking', blockIndex, thinkingText);
-  if (state.streamingEnabled && !state.hasStreamEvents && thinkingText.length > state.lastThinkingContent.length) {
-    const delta = thinkingText.substring(state.lastThinkingContent.length);
-    if (delta) process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
-    state.lastThinkingContent = thinkingText;
+  if (state.streamingEnabled && !state.hasStreamEvents) {
+    // 中文注释：thinking snapshot 与 text 保持同一规则，避免多 block 场景下重复输出。
+    const delta = resolveSnapshotDelta(state, 'thinking', blockIndex, thinkingText);
+    if (delta) {
+      process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
+      state.lastThinkingContent += delta;
+    }
   } else if (state.streamingEnabled && state.hasStreamEvents) {
     if (thinkingText.length > state.lastThinkingContent.length) state.lastThinkingContent = thinkingText;
   } else if (!state.streamingEnabled) {

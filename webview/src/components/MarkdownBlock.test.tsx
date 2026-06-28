@@ -117,23 +117,30 @@ describe('MarkdownBlock linkify integration', () => {
   });
 
   /**
-   * 验证 file: 协议不会被保留下来，也不会误分发给 openFile。
-   * 断言意图：只允许白名单协议与本地路径语法，避免 file URI 绕过桥接规则。
+   * 验证 file: 协议会作为受控文件导航保留下来，并在点击时分发给 openFile。
+   * 前置条件：同一段 markdown 同时包含普通 https 链接与 file URI 链接。
+   * 断言意图：吸收上游对 file URI 的支持，同时确保浏览器打开逻辑不会误处理本地文件导航。
    */
-  it('strips file protocol links and does not route them to openFile', () => {
+  it('keeps file protocol links as file navigation and does not route them to openBrowser', () => {
     render(
       <MarkdownBlock
         content={'[click](https://example.com/docs) and [local](file:///tmp/demo.txt)'}
       />,
     );
 
-    expect(screen.queryByRole('link', { name: 'local' })).toBeNull();
+    const localLink = screen.getByRole('link', { name: 'local' });
+    expect(localLink.getAttribute('data-linkify')).toBe('file');
+    expect(localLink.getAttribute('href')).toBe('file:///tmp/demo.txt');
 
     const httpsLink = screen.getByRole('link', { name: 'click' });
     expect(httpsLink.getAttribute('href')).toBe('https://example.com/docs');
 
+    fireEvent.click(localLink);
     fireEvent.click(httpsLink);
+
+    expect(bridgeMocks.openFile).toHaveBeenCalledWith('/tmp/demo.txt');
     expect(bridgeMocks.openBrowser).toHaveBeenCalledWith('https://example.com/docs');
+    expect(bridgeMocks.openBrowser).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -520,5 +527,30 @@ describe('MarkdownBlock linkify integration', () => {
     const finalCodes = document.querySelectorAll('code');
     expect(finalCodes[0].textContent).toBe('Array<T>');
     expect(finalCodes[1].textContent).toBe('Map<string, number>');
+  });
+
+  it('strips control-char-obfuscated javascript hrefs during sanitization', () => {
+    render(<MarkdownBlock content={'[bad](java\tscript:alert(1)) and [good](https://example.com/docs)'} />);
+
+    expect(screen.queryByRole('link', { name: 'bad' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'good' }).getAttribute('href')).toBe('https://example.com/docs');
+  });
+
+  it('routes markdown file uri links to openFile with normalized local paths', () => {
+    render(<MarkdownBlock content={'[local](file:///tmp/foo%20bar.ts)'} />);
+
+    const fileLink = screen.getByRole('link', { name: 'local' });
+    fireEvent.click(fileLink);
+
+    expect(bridgeMocks.openFile).toHaveBeenCalledWith('/tmp/foo bar.ts');
+  });
+
+  it('routes markdown relative links with encoded spaces to openFile using decoded paths', () => {
+    render(<MarkdownBlock content={'[doc](./notes/foo%20bar.md)'} />);
+
+    const fileLink = screen.getByRole('link', { name: 'doc' });
+    fireEvent.click(fileLink);
+
+    expect(bridgeMocks.openFile).toHaveBeenCalledWith('./notes/foo bar.md');
   });
 });

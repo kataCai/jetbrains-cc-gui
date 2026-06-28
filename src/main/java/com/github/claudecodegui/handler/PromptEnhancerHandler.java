@@ -8,6 +8,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.SelectionModel;
@@ -17,14 +18,11 @@ import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.TextEditor;
 import com.intellij.openapi.vfs.VirtualFile;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -44,6 +42,10 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
 
     // Number of context lines to capture before and after the cursor
     private static final int CURSOR_CONTEXT_LINES = 10;
+    // PromptEnhancer 是短生命周期工具调用，60 秒足够覆盖正常场景，同时避免 Node 挂死后长期滞留。
+    private static final int ENHANCE_TIMEOUT_SECONDS = 60;
+    // 子进程退出后额外等待 stdout reader 收尾的时间，避免正常输出尾段丢失。
+    private static final int READER_DRAIN_SECONDS = 5;
 
     private static final String[] SUPPORTED_TYPES = {
         "enhance_prompt"
@@ -411,6 +413,11 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
 
             // Set environment variables
             envConfigurator.updateProcessEnvironment(pb, nodeExecutable);
+            String claudeCliPath = PropertiesComponent.getInstance()
+                    .getValue(ClaudeCliPathHandler.CLAUDE_CLI_PATH_PROPERTY_KEY);
+            if (claudeCliPath != null && !claudeCliPath.trim().isEmpty()) {
+                pb.environment().put("CLAUDE_CODE_PATH", claudeCliPath.trim());
+            }
 
             Process process = pb.start();
             LOG.info("[PromptEnhancer] Node.js process started");
@@ -430,30 +437,25 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
                 stdinInput.add("promptEnhancerConfig", promptEnhancerConfig);
             }
 
-            try (OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
-                writer.write(gson.toJson(stdinInput));
-                writer.flush();
-            }
-
             // Read the response
             StringBuilder response = new StringBuilder();
             StringBuilder allOutput = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    allOutput.append(line).append("\n");
-                    // Print all output for debugging
-                    LOG.info("[PromptEnhancer] Node.js: " + line);
-                    if (line.startsWith("[ENHANCED]")) {
-                        // Decode the special marker, restore newlines
-                        String enhancedText = line.substring("[ENHANCED]".length()).trim();
-                        enhancedText = enhancedText.replace("{{NEWLINE}}", "\n");
-                        response.append(enhancedText);
+            int exitCode = PromptEnhancerProcessRunner.runWithProcessManager(
+                    pb,
+                    context.getClaudeSDKBridge().getProcessManager(),
+                    gson.toJson(stdinInput),
+                    ENHANCE_TIMEOUT_SECONDS,
+                    READER_DRAIN_SECONDS,
+                    line -> {
+                        allOutput.append(line).append("\n");
+                        LOG.info("[PromptEnhancer] Node.js: " + line);
+                        if (line.startsWith("[ENHANCED]")) {
+                            String enhancedText = line.substring("[ENHANCED]".length()).trim();
+                            enhancedText = enhancedText.replace("{{NEWLINE}}", "\n");
+                            response.append(enhancedText);
+                        }
                     }
-                }
-            }
-
-            int exitCode = process.waitFor();
+            );
             LOG.info("[PromptEnhancer] Node.js process exit code: " + exitCode);
 
             if (response.length() == 0 && allOutput.length() > 0) {
@@ -461,7 +463,9 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
             }
 
             return response.toString();
-
+        } catch (TimeoutException e) {
+            LOG.error("[PromptEnhancer] AI service call timed out: " + e.getMessage(), e);
+            return null;
         } catch (Exception e) {
             LOG.error("[PromptEnhancer] AI service call failed: " + e.getMessage(), e);
             return null;
