@@ -20,6 +20,7 @@ function createOptions(provider: 'claude' | 'codex' = 'claude') {
     setCodexPermissionMode: vi.fn(),
     setSelectedClaudeModel: vi.fn(),
     setSelectedCodexModel: vi.fn(),
+    setSelectedCodexSelectionKey: vi.fn(),
     setActiveCodexProviderId: vi.fn(),
     setDefaultCodexModelFromConfig: vi.fn(),
     setCodexBaseUrl: vi.fn(),
@@ -33,6 +34,7 @@ function createOptions(provider: 'claude' | 'codex' = 'claude') {
     setAutoOpenFileEnabled: vi.fn(),
     setPermissionDialogTimeoutSeconds: vi.fn(),
     currentProviderRef: { current: provider },
+    activeCodexProviderIdRef: { current: '' },
     shouldAdoptCodexDefaultModelRef: { current: true },
     shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
     syncActiveProviderModelMapping: vi.fn(),
@@ -87,7 +89,12 @@ describe('registerUsageModeCallbacks', () => {
     expect(codexUpdater('default')).toBe('acceptEdits');
   });
   it('updates codex selected model from backend codex model state callback', () => {
+    /**
+     * 验证后端同步 Codex 默认模型时，除了更新 raw modelId，
+     * 还会按当前 active provider 生成聊天区使用的复合选中 key。
+     */
     const options = createOptions('codex');
+    options.activeCodexProviderIdRef.current = 'managed-openai';
     registerUsageModeCallbacks(options);
 
     window.updateCodexModelState?.(JSON.stringify({
@@ -99,6 +106,7 @@ describe('registerUsageModeCallbacks', () => {
     expect(options.setCodexBaseUrl).toHaveBeenCalledWith(null);
     expect(options.setCodexUsesCustomBaseUrl).toHaveBeenCalledWith(false);
     expect(options.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.5');
+    expect(options.setSelectedCodexSelectionKey).toHaveBeenCalledWith('managed-openai::gpt-5.5');
     expect(options.setReasoningEffort).toHaveBeenCalledWith('high');
   });
 
@@ -115,6 +123,10 @@ describe('registerUsageModeCallbacks', () => {
   });
 
   it('stores cli default model without overriding a user-selected codex session model', () => {
+    /**
+     * 验证标签页已形成显式选择后，CLI 默认模型只更新展示用途的默认值，
+     * 不应再覆盖当前会话中的 raw modelId 或复合选中 key。
+     */
     const options = createOptions('codex');
     options.shouldAdoptCodexDefaultModelRef.current = false;
     registerUsageModeCallbacks(options);
@@ -125,6 +137,7 @@ describe('registerUsageModeCallbacks', () => {
 
     expect(options.setDefaultCodexModelFromConfig).toHaveBeenCalledWith('gpt-5.5');
     expect(options.setSelectedCodexModel).not.toHaveBeenCalled();
+    expect(options.setSelectedCodexSelectionKey).not.toHaveBeenCalled();
   });
 
   it('stores cli default reasoning without overriding a user-selected codex session reasoning', () => {
@@ -154,6 +167,10 @@ describe('registerUsageModeCallbacks', () => {
   });
 
   it('restores tab-local codex runtime state before generic bootstrap defaults', () => {
+    /**
+     * 验证恢复标签页快照时，会同步恢复 providerId、raw modelId 与复合选中 key，
+     * 避免聊天区重新退化为仅按 modelId 判断勾选态。
+     */
     const options = createOptions('claude');
     registerUsageModeCallbacks(options);
 
@@ -167,6 +184,7 @@ describe('registerUsageModeCallbacks', () => {
 
     expect(options.setCurrentProvider).toHaveBeenCalledWith('codex');
     expect(options.setSelectedCodexModel).toHaveBeenCalledWith('MiniMax-M2.5');
+    expect(options.setSelectedCodexSelectionKey).toHaveBeenCalledWith('minimax::MiniMax-M2.5');
     expect(options.setActiveCodexProviderId).toHaveBeenCalledWith('minimax');
     expect(options.setReasoningEffort).toHaveBeenCalledWith('high');
 
@@ -178,6 +196,10 @@ describe('registerUsageModeCallbacks', () => {
   });
 
   it('applies fresh new tab defaults and protects remembered model and reasoning from later cli overwrite', () => {
+    /**
+     * 验证新建标签页默认值链路会为 Codex 同步建立复合选中 key，
+     * 并在 remembered_model / remembered_reasoning 场景下关闭后续 CLI 覆盖。
+     */
     const options = createOptions('claude');
     registerUsageModeCallbacks(options);
 
@@ -193,6 +215,7 @@ describe('registerUsageModeCallbacks', () => {
 
     expect(options.setCurrentProvider).toHaveBeenCalledWith('codex');
     expect(options.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.4');
+    expect(options.setSelectedCodexSelectionKey).toHaveBeenCalledWith('managed-openai::gpt-5.4');
     expect(options.setActiveCodexProviderId).toHaveBeenCalledWith('managed-openai');
     expect(options.setReasoningEffort).toHaveBeenCalledWith('low');
     expect(options.shouldAdoptCodexDefaultModelRef.current).toBe(false);
