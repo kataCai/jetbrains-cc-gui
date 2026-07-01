@@ -700,6 +700,10 @@ export interface ChatInputBoxProps {
   autoOpenFileEnabled?: boolean;
   /** Toggle auto open file enabled */
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  /** Whether right click can open DevTools */
+  rightClickOpenDevToolsEnabled?: boolean;
+  /** Toggle right click DevTools access */
+  onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   /** Whether long context (1M) is enabled */
   longContextEnabled?: boolean;
   /** Toggle long context callback */
@@ -825,6 +829,8 @@ export interface AttachmentListProps {
   onRemove?: (id: string) => void;
   /** Preview image callback */
   onPreview?: (attachment: Attachment) => void;
+  /** Whether right click can open DevTools */
+  rightClickOpenDevToolsEnabled?: boolean;
 }
 
 /**

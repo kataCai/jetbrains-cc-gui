@@ -90,6 +90,8 @@ export interface BehaviorTabProps {
   onStreamingEnabledChange?: (enabled: boolean) => void;
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  rightClickOpenDevToolsEnabled?: boolean;
+  onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   diffExpandedByDefault?: boolean;
   onDiffExpandedByDefaultChange?: (enabled: boolean) => void;
   commitGenerationEnabled?: boolean;
@@ -142,6 +144,8 @@ const BehaviorTab = ({
   onStreamingEnabledChange = () => {},
   autoOpenFileEnabled = true,
   onAutoOpenFileEnabledChange = () => {},
+  rightClickOpenDevToolsEnabled = false,
+  onRightClickOpenDevToolsEnabledChange = () => {},
   diffExpandedByDefault = false,
   onDiffExpandedByDefaultChange = () => {},
   commitGenerationEnabled = true,
@@ -298,6 +302,31 @@ const BehaviorTab = ({
         <small className={styles.formHint}>
           <span className="codicon codicon-info" />
           <span>{t('settings.basic.autoOpenFile.hint')}</span>
+        </small>
+      </div>
+
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-debug" />
+          <span className={styles.fieldLabel}>{t('settings.basic.rightClickOpenDevTools.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={rightClickOpenDevToolsEnabled}
+            onChange={(e) => onRightClickOpenDevToolsEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {rightClickOpenDevToolsEnabled
+              ? t('settings.basic.rightClickOpenDevTools.enabled')
+              : t('settings.basic.rightClickOpenDevTools.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.rightClickOpenDevTools.hint')}</span>
         </small>
       </div>
 

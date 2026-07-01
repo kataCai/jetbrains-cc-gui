@@ -62,6 +62,8 @@ function renderBehaviorTab(overrides: Partial<ComponentProps<typeof BehaviorTab>
     onSendShortcutChange: vi.fn(),
     autoOpenFileEnabled: false,
     onAutoOpenFileEnabledChange: vi.fn(),
+    rightClickOpenDevToolsEnabled: false,
+    onRightClickOpenDevToolsEnabledChange: vi.fn(),
     commitGenerationEnabled: true,
     onCommitGenerationEnabledChange: vi.fn(),
     aiTitleGenerationEnabled: true,
@@ -193,5 +195,24 @@ describe('BehaviorTab permission dialog timeout', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(onPermissionDialogTimeoutChange).toHaveBeenCalledWith(3600);
+  });
+});
+
+describe('BehaviorTab right click devtools toggle', () => {
+  it('renders the right click devtools toggle and forwards the changed value', () => {
+    // 验证新增的“右键打开调试面板”开关在行为页可见，
+    // 并且切换时会把最新布尔值继续透传给上层回调。
+    const onRightClickOpenDevToolsEnabledChange = vi.fn();
+    renderBehaviorTab({
+      rightClickOpenDevToolsEnabled: false,
+      onRightClickOpenDevToolsEnabledChange,
+    });
+
+    const toggle = screen.getByRole('checkbox', {
+      name: /settings\.basic\.rightClickOpenDevTools\.(enabled|disabled)/i,
+    });
+    fireEvent.click(toggle);
+
+    expect(onRightClickOpenDevToolsEnabledChange).toHaveBeenCalledWith(true);
   });
 });

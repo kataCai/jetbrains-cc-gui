@@ -115,6 +115,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_commit_ai_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_prompt_enhancer_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_sound_notification_config:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_right_click_open_devtools_enabled:');
   });
 
   /**
@@ -299,6 +300,28 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
 
     expect(deps.setPromptEnhancerConfig).toHaveBeenCalledWith(promptPayload);
     expect(deps.setCommitAiConfig).toHaveBeenCalledWith(commitPayload);
+  });
+
+  /**
+   * 验证后端推送“右键打开调试面板”配置时，设置页会把值回写到对应状态槽位。
+   * 断言意图：保证新增全局布尔配置沿用现有 window.updateXxx 协议，
+   * 并且不会污染其他行为类设置状态。
+   */
+  it('writes right click devtools toggle updates into the dedicated settings state', () => {
+    const deps = createDeps();
+    const setRightClickOpenDevToolsEnabled = vi.fn();
+    renderHook(() => useSettingsWindowCallbacks({
+      ...deps,
+      setRightClickOpenDevToolsEnabled,
+    } as SettingsWindowCallbacksDeps & {
+      setRightClickOpenDevToolsEnabled: (enabled: boolean) => void;
+    }));
+
+    window.updateRightClickOpenDevToolsEnabled?.(JSON.stringify({
+      rightClickOpenDevToolsEnabled: true,
+    }));
+
+    expect(setRightClickOpenDevToolsEnabled).toHaveBeenCalledWith(true);
   });
 
   /**

@@ -53,6 +53,9 @@ interface SettingsViewProps {
   // Auto open file configuration (passed from App.tsx for state sync)
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  // Right click devtools configuration (passed from App.tsx for state sync)
+  rightClickOpenDevToolsEnabled?: boolean;
+  onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   // Permission dialog timeout configuration (passed from App.tsx for state sync)
   permissionDialogTimeoutSeconds?: number;
   onPermissionDialogTimeoutChange?: (seconds: number) => void;
@@ -68,6 +71,8 @@ const SettingsView = ({
   onSendShortcutChange: onSendShortcutChangeProp,
   autoOpenFileEnabled: autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp,
+  rightClickOpenDevToolsEnabled: rightClickOpenDevToolsEnabledProp,
+  onRightClickOpenDevToolsEnabledChange: onRightClickOpenDevToolsEnabledChangeProp,
   permissionDialogTimeoutSeconds: permissionDialogTimeoutSecondsProp,
   onPermissionDialogTimeoutChange: onPermissionDialogTimeoutChangeProp,
 }: SettingsViewProps) => {
@@ -142,6 +147,8 @@ const SettingsView = ({
     setLocalSendShortcut,
     sendShortcut,
     autoOpenFileEnabled,
+    rightClickOpenDevToolsEnabled,
+    setLocalRightClickOpenDevToolsEnabled,
     promptEnhancerConfig,
     setPromptEnhancerConfig,
     commitPrompt,
@@ -164,6 +171,7 @@ const SettingsView = ({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
     handleTaskReminderEnabledChange,
     handleTaskReminderStateToggle,
     handleTaskReminderOnlyWhenIdeUnfocusedChange,
@@ -210,6 +218,8 @@ const SettingsView = ({
     onSendShortcutChangeProp,
     autoOpenFileEnabledProp,
     onAutoOpenFileEnabledChangeProp,
+    rightClickOpenDevToolsEnabledProp,
+    onRightClickOpenDevToolsEnabledChangeProp,
     permissionDialogTimeoutSecondsProp,
     onPermissionDialogTimeoutChangeProp,
   });
@@ -375,6 +385,7 @@ const SettingsView = ({
     setRemoteCollabConfig,
     setRemoteCollabDebugSnapshot,
     setRemoteCollabProviderOperationResult,
+    setRightClickOpenDevToolsEnabled: setLocalRightClickOpenDevToolsEnabled,
     setCommitGenerationEnabled,
     setAiTitleGenerationEnabled,
     setStatusBarWidgetEnabled,
@@ -559,6 +570,8 @@ const SettingsView = ({
               onSendShortcutChange={handleSendShortcutChange}
               autoOpenFileEnabled={autoOpenFileEnabled}
               onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+              rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
+              onRightClickOpenDevToolsEnabledChange={handleRightClickOpenDevToolsEnabledChange}
               chatBgColor={chatBgColor}
               onChatBgColorChange={setChatBgColor}
               userMsgColor={userMsgColor}

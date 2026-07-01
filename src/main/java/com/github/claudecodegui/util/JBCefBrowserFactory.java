@@ -39,26 +39,39 @@ public final class JBCefBrowserFactory {
      * @return a JBCefBrowser instance
      */
     public static JBCefBrowser create() {
+        return create(false);
+    }
+
+    /**
+     * 创建 JBCefBrowser，并按右键调试开关决定是否在原生菜单中暴露 DevTools 入口。
+     * 该入口主要服务生产环境下的聊天 WebView 调试，因此调用方需要显式传入配置值，
+     * 避免工厂层直接感知全局设置服务，降低静态工具类与业务配置的耦合。
+     *
+     * @param rightClickOpenDevToolsEnabled 是否允许在右键菜单中显示 DevTools 入口
+     * @return 配置完成的浏览器实例
+     */
+    public static JBCefBrowser create(boolean rightClickOpenDevToolsEnabled) {
         boolean isOffScreenRendering = determineOsrMode();
         boolean isDevMode = PlatformUtils.isPluginDevMode();
         LOG.info("Creating JBCefBrowser with OSR=" + isOffScreenRendering
                 + " (platform=" + getPlatformName() + ", ideaVersion=" + getIdeaMajorVersion()
-                + ", devMode=" + isDevMode + ")");
+                + ", devMode=" + isDevMode
+                + ", rightClickOpenDevToolsEnabled=" + rightClickOpenDevToolsEnabled + ")");
 
         try {
             JBCefBrowserBuilder builder = JBCefBrowser.createBuilder()
                     .setOffScreenRendering(isOffScreenRendering)
-                    .setEnableOpenDevToolsMenuItem(isDevMode);
+                    .setEnableOpenDevToolsMenuItem(isDevMode || rightClickOpenDevToolsEnabled);
                     // .setCreateImmediately(true) // Causes new tabs to permanently stall on "Checking SDK status..." - commented out; using default lazy-load mode instead
             configureKeyboardWorkaround(builder);
             JBCefBrowser browser = builder.build();
-            configureContextMenu(browser, isDevMode);
+            configureContextMenu(browser, rightClickOpenDevToolsEnabled, isDevMode);
             LOG.info("JBCefBrowser created successfully using builder");
             return browser;
         } catch (Exception e) {
             LOG.warn("JBCefBrowser builder failed, falling back to default constructor (missing OSR and dev-tools config)", e);
             JBCefBrowser browser = new JBCefBrowser();
-            configureContextMenu(browser, isDevMode);
+            configureContextMenu(browser, rightClickOpenDevToolsEnabled, isDevMode);
             configureKeyboardWorkaround(browser);
             return browser;
         }
@@ -71,19 +84,32 @@ public final class JBCefBrowserFactory {
      * @return a JBCefBrowser instance
      */
     public static JBCefBrowser create(String url) {
+        return create(url, false);
+    }
+
+    /**
+     * 创建并加载指定 URL 的浏览器实例，同时按右键调试开关配置原生菜单。
+     *
+     * @param url 初始加载 URL
+     * @param rightClickOpenDevToolsEnabled 是否允许在右键菜单中显示 DevTools 入口
+     * @return 配置完成的浏览器实例
+     */
+    public static JBCefBrowser create(String url, boolean rightClickOpenDevToolsEnabled) {
         boolean isOffScreenRendering = determineOsrMode();
         boolean isDevMode = PlatformUtils.isPluginDevMode();
-        LOG.info("Creating JBCefBrowser with URL and OSR=" + isOffScreenRendering + ", devMode=" + isDevMode);
+        LOG.info("Creating JBCefBrowser with URL and OSR=" + isOffScreenRendering
+                + ", devMode=" + isDevMode
+                + ", rightClickOpenDevToolsEnabled=" + rightClickOpenDevToolsEnabled);
 
         try {
             JBCefBrowserBuilder builder = JBCefBrowser.createBuilder()
                     .setOffScreenRendering(isOffScreenRendering)
-                    .setEnableOpenDevToolsMenuItem(isDevMode)
+                    .setEnableOpenDevToolsMenuItem(isDevMode || rightClickOpenDevToolsEnabled)
                     .setCreateImmediately(true)
                     .setUrl(url);
             configureKeyboardWorkaround(builder);
             JBCefBrowser browser = builder.build();
-            configureContextMenu(browser, isDevMode);
+            configureContextMenu(browser, rightClickOpenDevToolsEnabled, isDevMode);
             LOG.info("JBCefBrowser created successfully with URL");
             return browser;
         } catch (Exception e) {
@@ -92,7 +118,7 @@ public final class JBCefBrowserFactory {
             if (url != null && !url.isEmpty()) {
                 browser.loadURL(url);
             }
-            configureContextMenu(browser, isDevMode);
+            configureContextMenu(browser, rightClickOpenDevToolsEnabled, isDevMode);
             configureKeyboardWorkaround(browser);
             return browser;
         }
@@ -174,9 +200,49 @@ public final class JBCefBrowserFactory {
      *
      * @param browser the JBCefBrowser instance
      */
-    private static void configureContextMenu(JBCefBrowser browser, boolean isDevMode) {
-        browser.setProperty(JBCefBrowserBase.Properties.NO_CONTEXT_MENU, !isDevMode);
-        LOG.info("Context menu " + (isDevMode ? "enabled" : "disabled") + " (devMode=" + isDevMode + ")");
+    private static void configureContextMenu(
+            JBCefBrowser browser,
+            boolean rightClickOpenDevToolsEnabled,
+            boolean isDevMode
+    ) {
+        boolean disableContextMenu = shouldDisableContextMenu(rightClickOpenDevToolsEnabled, isDevMode);
+        browser.setProperty(JBCefBrowserBase.Properties.NO_CONTEXT_MENU, disableContextMenu);
+        LOG.info("Context menu " + (disableContextMenu ? "disabled" : "enabled")
+                + " (devMode=" + isDevMode
+                + ", rightClickOpenDevToolsEnabled=" + rightClickOpenDevToolsEnabled + ")");
+    }
+
+    /**
+     * 计算是否需要禁用 JCEF 原生右键菜单。
+     * 当前语义以“生产环境允许保留原生菜单、开发模式仅在显式打开调试入口时保留”为准，
+     * 这样既兼容现有测试约束，也能确保用户打开配置开关后一定能看到 DevTools 菜单项。
+     *
+     * @param rightClickOpenDevToolsEnabled 是否允许右键调试入口
+     * @param isDevMode 当前是否处于插件开发模式
+     * @return true 表示禁用原生右键菜单；false 表示保留
+     */
+    static boolean shouldDisableContextMenu(boolean rightClickOpenDevToolsEnabled, boolean isDevMode) {
+        // 修复回归：生产环境默认仍需关闭原生右键菜单，避免整套浏览器菜单直接暴露给普通用户；
+        // 只有开发模式或显式打开该开关时，才允许保留原生菜单以展示 DevTools 入口。
+        return !isDevMode && !rightClickOpenDevToolsEnabled;
+    }
+
+    /**
+     * 按当前开关值立即刷新已存在 Browser 的原生右键菜单能力。
+     * 该方法用于运行态设置切换场景，避免用户修改“右键打开调试面板”后
+     * 还必须销毁并重建 WebView 才能看到菜单行为变化。
+     *
+     * @param browser 待刷新的浏览器实例
+     * @param rightClickOpenDevToolsEnabled 是否允许在右键菜单中显示 DevTools 入口
+     */
+    public static void refreshContextMenu(
+            JBCefBrowser browser,
+            boolean rightClickOpenDevToolsEnabled
+    ) {
+        if (browser == null) {
+            return;
+        }
+        configureContextMenu(browser, rightClickOpenDevToolsEnabled, PlatformUtils.isPluginDevMode());
     }
 
     /**

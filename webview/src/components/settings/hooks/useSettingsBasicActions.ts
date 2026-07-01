@@ -29,6 +29,8 @@ export interface UseSettingsBasicActionsProps {
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabledProp?: boolean;
   onAutoOpenFileEnabledChangeProp?: (enabled: boolean) => void;
+  rightClickOpenDevToolsEnabledProp?: boolean;
+  onRightClickOpenDevToolsEnabledChangeProp?: (enabled: boolean) => void;
   permissionDialogTimeoutSecondsProp?: number;
   onPermissionDialogTimeoutChangeProp?: (seconds: number) => void;
 }
@@ -57,6 +59,8 @@ export interface UseSettingsBasicActionsReturn {
   localSendShortcut: 'enter' | 'cmdEnter';
   autoOpenFileEnabled: boolean;
   localAutoOpenFileEnabled: boolean;
+  rightClickOpenDevToolsEnabled: boolean;
+  localRightClickOpenDevToolsEnabled: boolean;
   commitPrompt: string;
   savingCommitPrompt: boolean;
   taskReminderConfig: TaskReminderConfig;
@@ -81,6 +85,7 @@ export interface UseSettingsBasicActionsReturn {
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
   handleAutoOpenFileEnabledChange: (enabled: boolean) => void;
+  handleRightClickOpenDevToolsEnabledChange: (enabled: boolean) => void;
   handleTaskReminderEnabledChange: (channel: TaskReminderChannel, enabled: boolean) => void;
   handleTaskReminderStateToggle: (
     channel: TaskReminderChannel,
@@ -139,6 +144,7 @@ export interface UseSettingsBasicActionsReturn {
   /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
   /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
   /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalRightClickOpenDevToolsEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitPrompt: (prompt: string) => void;
   /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
   setTaskReminderConfig: (
@@ -180,6 +186,8 @@ export function useSettingsBasicActions({
   onSendShortcutChangeProp,
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
+  rightClickOpenDevToolsEnabledProp,
+  onRightClickOpenDevToolsEnabledChangeProp,
   permissionDialogTimeoutSecondsProp,
   onPermissionDialogTimeoutChangeProp,
 }: UseSettingsBasicActionsProps): UseSettingsBasicActionsReturn {
@@ -215,6 +223,9 @@ export function useSettingsBasicActions({
 
   const [localAutoOpenFileEnabled, setLocalAutoOpenFileEnabled] = useState<boolean>(false);
   const autoOpenFileEnabled = autoOpenFileEnabledProp ?? localAutoOpenFileEnabled;
+
+  const [localRightClickOpenDevToolsEnabled, setLocalRightClickOpenDevToolsEnabled] = useState<boolean>(false);
+  const rightClickOpenDevToolsEnabled = rightClickOpenDevToolsEnabledProp ?? localRightClickOpenDevToolsEnabled;
 
   const [commitPrompt, setCommitPrompt] = useState('');
   const [savingCommitPrompt, setSavingCommitPrompt] = useState(false);
@@ -353,6 +364,22 @@ export function useSettingsBasicActions({
     setLocalAutoOpenFileEnabled(enabled);
     sendToJava(`set_auto_open_file_enabled:${JSON.stringify({ autoOpenFileEnabled: enabled })}`);
   }, [onAutoOpenFileEnabledChangeProp]);
+
+  /**
+   * 切换“右键打开调试面板”设置。
+   * 如果外层已经提供受控值，则仅向上层透传；否则在本地状态与后端
+   * 持久化之间保持同步，避免设置页和聊天页使用不同的默认值。
+   *
+   * @param enabled 是否启用右键打开调试面板
+   */
+  const handleRightClickOpenDevToolsEnabledChange = useCallback((enabled: boolean) => {
+    if (onRightClickOpenDevToolsEnabledChangeProp) {
+      onRightClickOpenDevToolsEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalRightClickOpenDevToolsEnabled(enabled);
+    sendToJava(`set_right_click_open_devtools_enabled:${JSON.stringify({ rightClickOpenDevToolsEnabled: enabled })}`);
+  }, [onRightClickOpenDevToolsEnabledChangeProp]);
 
   const handleTaskReminderEnabledChange = useCallback((channel: TaskReminderChannel, enabled: boolean) => {
     updateAndPersistTaskReminder((prev) => ({
@@ -625,6 +652,9 @@ export function useSettingsBasicActions({
     sendShortcut,
     localAutoOpenFileEnabled,
     setLocalAutoOpenFileEnabled,
+    rightClickOpenDevToolsEnabled,
+    localRightClickOpenDevToolsEnabled,
+    setLocalRightClickOpenDevToolsEnabled,
     autoOpenFileEnabled,
     commitPrompt,
     setCommitPrompt,
@@ -646,6 +676,7 @@ export function useSettingsBasicActions({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
     handleTaskReminderEnabledChange,
     handleTaskReminderStateToggle,
     handleTaskReminderOnlyWhenIdeUnfocusedChange,

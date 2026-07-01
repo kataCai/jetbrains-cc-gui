@@ -276,6 +276,11 @@ interface Window {
   updateAutoOpenFileEnabled?: (json: string) => void;
 
   /**
+   * Update right click devtools enabled setting
+   */
+  updateRightClickOpenDevToolsEnabled?: (json: string) => void;
+
+  /**
    * Update commit AI prompt configuration
    */
   updateCommitPrompt?: (json: string) => void;
@@ -876,6 +881,11 @@ interface Window {
    * Pending auto open file enabled status before React initialization
    */
   __pendingAutoOpenFileEnabled?: string;
+
+  /**
+   * Pending right click devtools enabled status before React initialization
+   */
+  __pendingRightClickOpenDevToolsEnabled?: string;
 
   /**
    * Pending permission dialog timeout before React initialization

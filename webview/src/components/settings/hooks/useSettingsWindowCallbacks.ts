@@ -73,6 +73,7 @@ export interface SettingsWindowCallbacksDeps {
   setTaskReminderConfig?: (
     config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
   ) => void;
+  setRightClickOpenDevToolsEnabled?: (enabled: boolean) => void;
   setRemoteCollabConfig?: (
     config: RemoteCollabConfig | ((prev: RemoteCollabConfig) => RemoteCollabConfig)
   ) => void;
@@ -349,6 +350,20 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
+    /**
+     * 回写“右键打开调试面板”开关。
+     * 该开关同时影响设置页和聊天区右键菜单，因此必须在 React 注册后
+     * 恢复到同一份状态槽位，避免不同页面出现不同默认值。
+     */
+    window.updateRightClickOpenDevToolsEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setRightClickOpenDevToolsEnabled?.(data.rightClickOpenDevToolsEnabled ?? false);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse right click devtools config:', error);
+      }
+    };
+
     window.updateCommitGenerationEnabled = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -534,6 +549,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_commit_ai_config:');
     sendToJava('get_prompt_enhancer_config:');
     sendToJava('get_sound_notification_config:');
+    sendToJava('get_right_click_open_devtools_enabled:');
     sendToJava('get_commit_generation_enabled:');
     sendToJava('get_ai_title_generation_enabled:');
     sendToJava('get_status_bar_widget_enabled:');
@@ -571,6 +587,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateCommitPrompt = undefined;
       window.updateCommitAiConfig = undefined;
       window.updatePromptEnhancerConfig = undefined;
+      window.updateRightClickOpenDevToolsEnabled = undefined;
       window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;
       window.updateRemoteCollabConfig = undefined;

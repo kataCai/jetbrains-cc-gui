@@ -37,6 +37,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setStreamingEnabledSetting,
     setSendShortcut,
     setAutoOpenFileEnabled,
+    setRightClickOpenDevToolsEnabled,
     setPermissionDialogTimeoutSeconds,
     currentProviderRef,
     activeCodexProviderIdRef,
@@ -327,6 +328,21 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setAutoOpenFileEnabled(data.autoOpenFileEnabled ?? false);
     } catch (error) {
       console.error('[Frontend] Failed to parse auto open file enabled:', error);
+    }
+  };
+
+  /**
+   * 回写“右键打开调试面板”全局开关。
+   * 该值会同时驱动设置页和聊天页的右键菜单入口，因此必须与其他
+   * 基础行为开关保持同一类回写协议，保证首次挂载时状态一致。
+   */
+  window.updateRightClickOpenDevToolsEnabled = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      // 该回调只在设置页挂载时需要，聊天页不一定提供这个 setter，因此必须做可选调用。
+      setRightClickOpenDevToolsEnabled?.(data.rightClickOpenDevToolsEnabled ?? false);
+    } catch (error) {
+      console.error('[Frontend] Failed to parse right click devtools enabled:', error);
     }
   };
 

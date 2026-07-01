@@ -301,6 +301,8 @@ const App = () => {
     setStreamingEnabledSetting,
     setSendShortcut,
     setAutoOpenFileEnabled,
+    rightClickOpenDevToolsEnabled,
+    setRightClickOpenDevToolsEnabled,
     setSdkStatus,
     setSdkStatusLoaded,
     setSelectedAgent,
@@ -317,6 +319,7 @@ const App = () => {
     handleStreamingEnabledChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
     handleLongContextChange,
   } = useModelProviderState({
     addToast,
@@ -451,6 +454,7 @@ const App = () => {
     setStreamingEnabledSetting,
     setSendShortcut,
     setAutoOpenFileEnabled,
+    setRightClickOpenDevToolsEnabled,
     setSdkStatus,
     setSdkStatusLoaded,
     setIsRewinding,
@@ -718,6 +722,8 @@ const App = () => {
           onSendShortcutChange={handleSendShortcutChange}
           autoOpenFileEnabled={autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
+          onRightClickOpenDevToolsEnabledChange={handleRightClickOpenDevToolsEnabledChange}
           permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
           onPermissionDialogTimeoutChange={setPermissionDialogTimeoutSeconds}
         />
@@ -765,6 +771,7 @@ const App = () => {
           streamingEnabledSetting={streamingEnabledSetting}
           sendShortcut={sendShortcut}
           autoOpenFileEnabled={autoOpenFileEnabled}
+          rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
           longContextEnabled={longContextEnabled}
           usagePercentage={usagePercentage}
           usageUsedTokens={usageUsedTokens}
@@ -776,6 +783,7 @@ const App = () => {
           onToggleThinking={handleToggleThinking}
           onStreamingEnabledChange={handleStreamingEnabledChange}
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          onRightClickOpenDevToolsEnabledChange={handleRightClickOpenDevToolsEnabledChange}
           onLongContextChange={handleLongContextChange}
           messageQueue={messageQueue}
           onRemoveFromQueue={dequeueMessage}

@@ -16,7 +16,7 @@ public class WindowEventHandler extends BaseMessageHandler {
     private static final Logger LOG = Logger.getInstance(WindowEventHandler.class);
     private static final String[] SUPPORTED_TYPES = {
         "heartbeat", "tab_loading_changed", "tab_status_changed",
-        "create_new_session", "frontend_ready", "refresh_slash_commands"
+        "create_new_session", "frontend_ready", "refresh_slash_commands", "open_devtools"
     };
 
     /**
@@ -29,6 +29,7 @@ public class WindowEventHandler extends BaseMessageHandler {
         void onCreateNewSession();
         void onFrontendReady();
         void onRefreshSlashCommands();
+        void onOpenDevTools();
     }
 
     private final Callback callback;
@@ -58,6 +59,9 @@ public class WindowEventHandler extends BaseMessageHandler {
                 return true;
             case "refresh_slash_commands":
                 callback.onRefreshSlashCommands();
+                return true;
+            case "open_devtools":
+                callback.onOpenDevTools();
                 return true;
             default:
                 return false;
