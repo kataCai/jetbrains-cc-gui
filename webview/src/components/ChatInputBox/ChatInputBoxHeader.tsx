@@ -32,6 +32,7 @@ export function ChatInputBoxHeader({
   onDismissOpenSourceBanner,
   autoOpenFileEnabled,
   onRequestEnableFileContext,
+  rightClickOpenDevToolsEnabled,
 }: {
   sdkInstalled: boolean;
   sdkStatusLoading: boolean;
@@ -60,6 +61,7 @@ export function ChatInputBoxHeader({
   onDismissOpenSourceBanner?: () => void;
   autoOpenFileEnabled?: boolean;
   onRequestEnableFileContext?: () => void;
+  rightClickOpenDevToolsEnabled?: boolean;
 }) {
   return (
     <>
@@ -117,7 +119,11 @@ export function ChatInputBoxHeader({
 
       {/* Attachment list */}
       {attachments.length > 0 && (
-        <AttachmentList attachments={attachments} onRemove={onRemoveAttachment} />
+        <AttachmentList
+          attachments={attachments}
+          onRemove={onRemoveAttachment}
+          rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
+        />
       )}
 
       {/* Context bar (Top Control Bar) */}
@@ -143,4 +149,3 @@ export function ChatInputBoxHeader({
     </>
   );
 }
-

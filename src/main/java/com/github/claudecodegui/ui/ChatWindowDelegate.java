@@ -332,6 +332,7 @@ public class ChatWindowDelegate {
             @Override public void onRefreshSlashCommands() {
                 host.getSessionLifecycleManager().fetchSlashCommandsOnStartup();
             }
+            @Override public void onOpenDevTools() { openCurrentWebviewDevTools(); }
         }));
 
         PermissionHandler permissionHandler = new PermissionHandler(
@@ -537,6 +538,33 @@ public class ChatWindowDelegate {
         if (streamCoalescer != null) {
             streamCoalescer.flush(null);
         }
+    }
+
+    /**
+     * 打开当前聊天 WebView 绑定的 JCEF 调试面板。
+     * 这里复用 JBCef 自带的 `openDevtools()` 能力，避免再维护额外的调试窗口创建逻辑；
+     * 同时在调用前补齐 browser/disposed 判空，防止窗口关闭竞争态下抛出异常。
+     */
+    private void openCurrentWebviewDevTools() {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (host.isDisposed()) {
+                LOG.warn("[ChatWindowDelegate] Skip opening DevTools because host is disposed");
+                return;
+            }
+
+            JBCefBrowser browser = host.getBrowser();
+            if (browser == null || browser.getCefBrowser() == null) {
+                LOG.warn("[ChatWindowDelegate] Skip opening DevTools because browser is unavailable");
+                return;
+            }
+
+            try {
+                browser.openDevtools();
+                LOG.info("[ChatWindowDelegate] Opened embedded DevTools for current webview");
+            } catch (Exception e) {
+                LOG.error("[ChatWindowDelegate] Failed to open embedded DevTools", e);
+            }
+        });
     }
 
     /**

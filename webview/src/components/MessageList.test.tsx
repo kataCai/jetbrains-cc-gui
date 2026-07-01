@@ -4,6 +4,9 @@ import { createRef } from 'react';
 import type { ClaudeMessage, ClaudeContentBlock, ToolResultBlock } from '../types';
 import { MessageList } from './MessageList';
 
+const contextMenuMock = vi.fn();
+const sendToJavaMock = vi.fn();
+
 // Mock MessageItem to keep this suite focused on list-level paging behaviour.
 vi.mock('./MessageItem', () => ({
   MessageItem: ({ messageKey, message }: { messageKey: string; message: ClaudeMessage }) => (
@@ -18,20 +21,30 @@ vi.mock('./WaitingIndicator', () => ({
 }));
 
 vi.mock('./ContextMenu', () => ({
-  ContextMenu: () => null,
+  ContextMenu: ({ items }: { items: Array<{ label?: string }> }) => {
+    contextMenuMock(items);
+    return null;
+  },
 }));
 
 vi.mock('../hooks/useContextMenu.js', () => ({
   useContextMenu: () => ({
-    visible: false,
+    visible: true,
     x: 0,
     y: 0,
+    hasSelection: true,
+    imageTarget: null,
     savedRange: null,
-    selectedText: '',
+    selectedText: 'selected text',
     open: vi.fn(),
     close: vi.fn(),
   }),
   copySelection: vi.fn(),
+  copyImageSelection: vi.fn(),
+}));
+
+vi.mock('../utils/bridge.js', () => ({
+  sendToJava: (...args: unknown[]) => sendToJavaMock(...args),
 }));
 
 const t = ((key: string, opts?: Record<string, unknown>) => {
@@ -202,5 +215,30 @@ describe('MessageList container behaviour', () => {
       />
     );
     expect(screen.getByTestId('waiting-indicator')).toBeTruthy();
+  });
+
+  it('adds the open devtools menu item when right click devtools is enabled', () => {
+    // 验证消息区的 React 自定义右键菜单会按全局开关补充“打开调试面板”入口，
+    // 避免仅改 JCEF 原生菜单导致消息区仍然没有该入口。
+    contextMenuMock.mockClear();
+    render(
+      <MessageList
+        messages={makeMessages(1)}
+        streamingActive={false}
+        isThinking={false}
+        loading={false}
+        loadingStartTime={null}
+        t={((key: string) => key) as never}
+        getMessageText={noopGetText}
+        getContentBlocks={noopGetBlocks}
+        findToolResult={noopFindToolResult}
+        extractMarkdownContent={noopExtractMd}
+        messagesEndRef={createRef<HTMLDivElement>()}
+        rightClickOpenDevToolsEnabled={true}
+      />
+    );
+
+    const latestItems = contextMenuMock.mock.calls.at(-1)?.[0] as Array<{ label?: string }>;
+    expect(latestItems.some((item) => item.label === 'contextMenu.openDevTools')).toBe(true);
   });
 });

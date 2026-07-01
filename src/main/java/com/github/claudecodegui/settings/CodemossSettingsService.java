@@ -617,6 +617,37 @@ public class CodemossSettingsService {
         PermissionDialogTimeoutSettings.setPermissionDialogTimeoutSeconds(this, seconds);
     }
 
+    /**
+     * 获取“是否允许通过右键菜单打开调试面板”的全局开关。
+     * 该配置属于 IDE / 插件级偏好，而不是项目级偏好，因此直接保存在根配置节点。
+     * 当配置缺失或值非法时，统一按关闭处理，避免在普通用户环境里默认暴露调试入口。
+     *
+     * @return true 表示允许在右键菜单中显示调试面板入口；false 表示隐藏
+     * @throws IOException 读取配置文件失败时抛出
+     */
+    public boolean getRightClickOpenDevToolsEnabled() throws IOException {
+        JsonObject config = readConfig();
+        if (config.has("rightClickOpenDevToolsEnabled") && !config.get("rightClickOpenDevToolsEnabled").isJsonNull()) {
+            return config.get("rightClickOpenDevToolsEnabled").getAsBoolean();
+        }
+        return false;
+    }
+
+    /**
+     * 保存“是否允许通过右键菜单打开调试面板”的全局开关。
+     * 这里仅负责持久化用户偏好；前端自定义菜单与 JCEF 原生菜单都会消费同一份布尔值，
+     * 以保证设置页、聊天页和浏览器右键菜单的表现一致。
+     *
+     * @param enabled true 表示显示右键调试入口；false 表示隐藏
+     * @throws IOException 写入配置文件失败时抛出
+     */
+    public void setRightClickOpenDevToolsEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty("rightClickOpenDevToolsEnabled", enabled);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set right click open DevTools enabled: " + enabled);
+    }
+
     // ==================== Streaming Config Management ====================
 
     /**

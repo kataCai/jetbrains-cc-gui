@@ -132,6 +132,7 @@
     "paste": "粘贴",
     "newline": "插入换行",
     "copyImage": "复制图片"
+  ,    "openDevTools": "\u6253\u5f00\u8c03\u8bd5\u9762\u677f"
   },
   "settings": {
     "title": "设置",
@@ -226,6 +227,12 @@
         "enabled": "已开启",
         "disabled": "已关闭",
         "hint": "开启后，在项目树选择文件时会自动将文件路径告诉 AI（注意：只传递文件路径，不传文件内容）。关闭后需要手动操作。"
+      },
+      "rightClickOpenDevTools": {
+        "label": "\u53f3\u952e\u6253\u5f00\u8c03\u8bd5\u9762\u677f",
+        "enabled": "\u5df2\u5f00\u542f",
+        "disabled": "\u5df2\u5173\u95ed",
+        "hint": "\u5f00\u542f\u540e\uff0c\u804a\u5929\u533a\u57df\u7684\u53f3\u952e\u83dc\u5355\u4f1a\u51fa\u73b0\u6253\u5f00\u5f53\u524d WebView \u8c03\u8bd5\u9762\u677f\u7684\u5165\u53e3\u3002"
       },
       "promptEnhancer": {
         "label": "增强提示词",

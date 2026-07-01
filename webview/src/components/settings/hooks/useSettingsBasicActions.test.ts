@@ -84,6 +84,24 @@ describe('useSettingsBasicActions merged settings behavior', () => {
   });
 
   /**
+   * 验证“右键打开调试面板”开关会通过独立 bridge 消息写回后端。
+   * 前置条件：使用默认 hook 状态并触发新增布尔开关的变更。
+   * 断言意图：确保设置页新增开关不会误复用其他配置 key，
+   * 而是稳定写回本次需求约定的独立协议。
+   */
+  it('sends right click devtools toggle updates through the dedicated bridge message', () => {
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.handleRightClickOpenDevToolsEnabledChange(true);
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_right_click_open_devtools_enabled:{"rightClickOpenDevToolsEnabled":true}'
+    );
+  });
+
+  /**
    * 验证切换 Commit AI provider 只影响 commitAiConfig，不污染 promptEnhancerConfig。
    * 断言意图：覆盖本轮并轨吸收的 AI feature 配置分离语义。
    */

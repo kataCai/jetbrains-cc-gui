@@ -59,6 +59,8 @@ interface BasicConfigSectionProps {
   onStreamingEnabledChange?: (enabled: boolean) => void;
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  rightClickOpenDevToolsEnabled?: boolean;
+  onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   sendShortcut?: 'enter' | 'cmdEnter';
   onSendShortcutChange?: (shortcut: 'enter' | 'cmdEnter') => void;
   chatBgColor?: string;
@@ -155,6 +157,8 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onStreamingEnabledChange={props.onStreamingEnabledChange}
           autoOpenFileEnabled={props.autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={props.onAutoOpenFileEnabledChange}
+          rightClickOpenDevToolsEnabled={props.rightClickOpenDevToolsEnabled}
+          onRightClickOpenDevToolsEnabledChange={props.onRightClickOpenDevToolsEnabledChange}
           diffExpandedByDefault={props.diffExpandedByDefault}
           onDiffExpandedByDefaultChange={props.onDiffExpandedByDefaultChange}
           commitGenerationEnabled={props.commitGenerationEnabled}

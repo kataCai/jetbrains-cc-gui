@@ -132,7 +132,8 @@
     "cut": "Cut",
     "paste": "Paste",
     "newline": "Insert Newline",
-    "copyImage": "Copy image"
+    "copyImage": "Copy image",
+    "openDevTools": "Open DevTools"
   },
   "settings": {
     "title": "Settings",
@@ -227,6 +228,12 @@
         "enabled": "Enabled",
         "disabled": "Disabled",
         "hint": "When enabled, selecting a file in the project tree will automatically send its file path to AI (note: only the file path is sent, not the file content). When disabled, manual action is required."
+      },
+      "rightClickOpenDevTools": {
+        "label": "Right-click Open DevTools",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, the chat area's right-click menu will include an entry to open the current WebView DevTools."
       },
       "promptEnhancer": {
         "label": "Prompt Enhancer",

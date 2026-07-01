@@ -9,6 +9,7 @@ import com.github.claudecodegui.provider.claude.ClaudeHistoryReader;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
 import com.github.claudecodegui.provider.codex.CodexHistoryImageCacheService;
 import com.github.claudecodegui.util.FontConfigService;
+import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.github.claudecodegui.util.ThemeConfigService;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
@@ -356,6 +357,55 @@ public class ProjectConfigHandler {
         response.addProperty("maxSizeMb", CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB);
         response.addProperty("resolvedDir", codexHistoryImageCacheService.getDefaultCacheDirectory().toAbsolutePath().normalize().toString());
         return response;
+    }
+
+    /**
+     * 向前端回写“右键打开调试面板”全局开关。
+     * 该配置不依赖项目路径，因此直接从全局设置读取并返回统一 JSON 结构，
+     * 保证设置页首次打开和运行态补同步时都能复用同一条 bridge 协议。
+     */
+    public void handleGetRightClickOpenDevToolsEnabled() {
+        respondWithJson("window.updateRightClickOpenDevToolsEnabled",
+            () -> jsonOf("rightClickOpenDevToolsEnabled", settingsService.getRightClickOpenDevToolsEnabled()),
+            jsonOf("rightClickOpenDevToolsEnabled", false),
+            "Failed to get right click open DevTools enabled");
+    }
+
+    /**
+     * 保存“右键打开调试面板”全局开关，并将生效值立即回写给前端。
+     * 缺失字段时统一按 false 处理，避免 malformed payload 让调试入口被意外打开。
+     *
+     * @param content 前端传入的 JSON 字符串
+     */
+    public void handleSetRightClickOpenDevToolsEnabled(String content) {
+        try {
+            JsonObject response = setRightClickOpenDevToolsEnabledAndCreateResponse(content);
+            LOG.info("[ProjectConfigHandler] Set right click open DevTools enabled: "
+                    + response.get("rightClickOpenDevToolsEnabled").getAsBoolean());
+            pushJson("window.updateRightClickOpenDevToolsEnabled", response);
+        } catch (Exception e) {
+            LOG.error("[ProjectConfigHandler] Failed to set right click open DevTools enabled; errorClass="
+                    + e.getClass().getSimpleName(), e);
+            showError("Failed to save right click open DevTools setting. See IDE log for details.");
+        }
+    }
+
+    /**
+     * 解析前端提交的“右键打开调试面板”开关，并返回标准响应体。
+     * 该方法抽成 package-private，便于单元测试直接验证默认值和回写语义，
+     * 同时保证 handler 与测试共用同一套字段缺失兜底逻辑。
+     *
+     * @param content 前端传入的 JSON 字符串
+     * @return 包含生效布尔值的响应对象
+     * @throws Exception 配置读写失败时抛出
+     */
+    JsonObject setRightClickOpenDevToolsEnabledAndCreateResponse(String content) throws Exception {
+        JsonObject json = gson.fromJson(content, JsonObject.class);
+        boolean enabled = readBoolean(json, "rightClickOpenDevToolsEnabled", false);
+        settingsService.setRightClickOpenDevToolsEnabled(enabled);
+        // 运行态立即刷新当前 Browser 的原生右键菜单能力，避免必须重开窗口才生效。
+        JBCefBrowserFactory.refreshContextMenu(context.getBrowser(), enabled);
+        return jsonOf("rightClickOpenDevToolsEnabled", settingsService.getRightClickOpenDevToolsEnabled());
     }
 
     public void handleGetPermissionDialogTimeout() {

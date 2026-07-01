@@ -86,6 +86,7 @@ export interface ChatScreenProps {
   streamingEnabledSetting: ProviderState['streamingEnabledSetting'];
   sendShortcut: ProviderState['sendShortcut'];
   autoOpenFileEnabled: ProviderState['autoOpenFileEnabled'];
+  rightClickOpenDevToolsEnabled: ProviderState['rightClickOpenDevToolsEnabled'];
   longContextEnabled: ProviderState['longContextEnabled'];
   usagePercentage: ProviderState['usagePercentage'];
   usageUsedTokens: ProviderState['usageUsedTokens'];
@@ -99,6 +100,7 @@ export interface ChatScreenProps {
   onToggleThinking: ProviderState['handleToggleThinking'];
   onStreamingEnabledChange: ProviderState['handleStreamingEnabledChange'];
   onAutoOpenFileEnabledChange: ProviderState['handleAutoOpenFileEnabledChange'];
+  onRightClickOpenDevToolsEnabledChange: ProviderState['handleRightClickOpenDevToolsEnabledChange'];
   onLongContextChange: ProviderState['handleLongContextChange'];
   onOpenCodexProviderSettings?: () => void;
   onOpenCodexProviderModelManagement?: () => void;
@@ -132,10 +134,11 @@ export const ChatScreen = ({
   sdkStatusLoaded, currentSdkInstalled,
   activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
   reasoningEffort, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
+  rightClickOpenDevToolsEnabled,
   longContextEnabled, usagePercentage, usageUsedTokens, usageMaxTokens,
   onModeSelect, onModelSelect, onAgentSelect, onReasoningChange, onToggleThinking,
   onStreamingEnabledChange,
-  onAutoOpenFileEnabledChange, onLongContextChange,
+  onAutoOpenFileEnabledChange, onRightClickOpenDevToolsEnabledChange, onLongContextChange,
   onOpenCodexProviderSettings,
   onOpenCodexProviderModelManagement,
   onOpenCodexModelAliasSettings,
@@ -208,6 +211,7 @@ export const ChatScreen = ({
                     setCurrentView('settings');
                   }}
                   currentProvider={currentProvider}
+                  rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
                 />
               </ToolResultRawContext.Provider>
             </SubagentHistoryContext.Provider>
@@ -305,6 +309,8 @@ export const ChatScreen = ({
           onRemoveFromQueue={onRemoveFromQueue}
           autoOpenFileEnabled={autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={onAutoOpenFileEnabledChange}
+          rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
+          onRightClickOpenDevToolsEnabledChange={onRightClickOpenDevToolsEnabledChange}
           longContextEnabled={longContextEnabled}
           onLongContextChange={onLongContextChange}
         />

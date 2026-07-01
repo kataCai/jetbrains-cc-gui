@@ -42,6 +42,7 @@ import { perfTimer } from '../../utils/debug.js';
 import { DEBOUNCE_TIMING } from '../../constants/performance.js';
 import { ContextMenu } from '../ContextMenu';
 import { useContextMenu, copySelection, pasteAtCursor, insertNewline } from '../../hooks/useContextMenu.js';
+import { sendToJava } from '../../utils/bridge';
 import './styles.css';
 
 /**
@@ -110,6 +111,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onRemoveFromQueue,
       autoOpenFileEnabled,
       onAutoOpenFileEnabledChange,
+      rightClickOpenDevToolsEnabled = false,
       longContextEnabled = true,
       onLongContextChange,
     }: ChatInputBoxProps,
@@ -603,6 +605,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           onDismissOpenSourceBanner={handleDismissOpenSourceBanner}
           autoOpenFileEnabled={autoOpenFileEnabled}
           onRequestEnableFileContext={handleRequestEnableFileContext}
+          rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
         />
 
         {/* Input area */}
@@ -675,6 +678,14 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
                 { label: t('contextMenu.paste', 'Paste'), action: () => { if (editableRef.current) { pasteAtCursor(ctxMenu.savedRange, editableRef.current, handleInput); } } },
                 { separator: true },
                 { label: t('contextMenu.newline', 'Insert Newline'), action: () => { if (editableRef.current) { insertNewline(ctxMenu.savedRange, editableRef.current); handleInput(); } } },
+                ...(rightClickOpenDevToolsEnabled
+                  ? [{
+                      separator: true as const,
+                    }, {
+                      label: t('contextMenu.openDevTools'),
+                      action: () => sendToJava('open_devtools', ''),
+                    } as const]
+                  : []),
               ]}
             />
           )}

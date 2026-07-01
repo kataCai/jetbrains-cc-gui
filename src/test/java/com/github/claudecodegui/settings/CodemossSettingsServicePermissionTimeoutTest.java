@@ -57,6 +57,21 @@ public class CodemossSettingsServicePermissionTimeoutTest {
         assertEquals(30, config.get("permissionDialogTimeoutSeconds").getAsInt());
     }
 
+    @Test
+    public void defaultsAndPersistsRightClickOpenDevtoolsToggle() throws Exception {
+        Path tempHome = Files.createTempDirectory("right-click-devtools-home");
+        useTemporaryHomeDirectory(tempHome);
+
+        CodemossSettingsService service = new CodemossSettingsService();
+        assertEquals(false, service.getRightClickOpenDevToolsEnabled());
+
+        service.setRightClickOpenDevToolsEnabled(true);
+        assertEquals(true, service.getRightClickOpenDevToolsEnabled());
+
+        JsonObject config = service.readConfig();
+        assertEquals(true, config.get("rightClickOpenDevToolsEnabled").getAsBoolean());
+    }
+
     private void useTemporaryHomeDirectory(Path tempHome) throws Exception {
         if (originalHomeDir == null) {
             originalHomeDir = getCachedHomeDirectory();
