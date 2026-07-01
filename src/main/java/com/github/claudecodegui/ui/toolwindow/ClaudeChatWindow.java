@@ -89,7 +89,6 @@ public class ClaudeChatWindow {
     private volatile boolean initialized = false;
     private volatile boolean frontendReady = false;
     private volatile boolean slashCommandsFetched = false;
-    private final AtomicBoolean restoredHistoryLoadStarted = new AtomicBoolean(false);
     private final AtomicBoolean freshNewTabDefaultsApplied = new AtomicBoolean(false);
     private final Object projectStateFlushLock = new Object();
     private final AtomicInteger projectStateFlushRequestCount = new AtomicInteger(0);
@@ -485,48 +484,17 @@ public class ClaudeChatWindow {
                 + ", sessionId=" + savedState.sessionId + ", cwd=" + savedState.cwd + ")");
     }
 
+    /**
+     * 恢复持久化的标签页会话绑定状态。
+     * 当前历史恢复已经统一收敛到“前端 ready 后由 SessionLifecycleManager 执行”的主链路，
+     * 因此这里不再根据 `loadImmediately` 直接触发旧的 `session.loadFromServer()` 抢跑入口，
+     * 避免启动恢复与手动重绑阶段再次出现通用恢复和增强恢复并行执行。
+     *
+     * @param savedState 持久化标签页状态
+     * @param loadImmediately 旧语义中的“是否立即恢复历史”，现仅保留参数兼容，不再驱动旧恢复链路
+     */
     public void restorePersistedTabSessionState(TabStateService.TabSessionState savedState, boolean loadImmediately) {
         restorePersistedTabSessionState(savedState);
-        if (TabSessionRestorePolicy.shouldLoadImmediately(savedState, loadImmediately)) {
-            loadRestoredHistoryIfNeeded(savedState);
-        }
-    }
-
-    public void loadRestoredHistoryIfNeeded() {
-        if (session == null) {
-            return;
-        }
-
-        TabStateService.TabSessionState currentState = new TabStateService.TabSessionState();
-        currentState.sessionId = session.getSessionId();
-        loadRestoredHistoryIfNeeded(currentState);
-    }
-
-    private void loadRestoredHistoryIfNeeded(TabStateService.TabSessionState savedState) {
-        if (!TabSessionRestorePolicy.shouldLoadHistory(savedState) || session == null) {
-            return;
-        }
-        if (!restoredHistoryLoadStarted.compareAndSet(false, true)) {
-            return;
-        }
-
-        session.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
-            if (!disposed) {
-                tabSessionRestoreState.markRestoreFinished(session.getSessionId());
-                callJavaScript("historyLoadComplete");
-            }
-        })).exceptionally(ex -> {
-            LOG.warn("[TabRestore] Failed to load persisted tab history: " + ex.getMessage(), ex);
-            ApplicationManager.getApplication().invokeLater(() -> {
-                if (!disposed) {
-                    tabSessionRestoreState.markRestoreFailed();
-                    callJavaScript("historyLoadComplete");
-                    callJavaScript("addErrorMessage",
-                            JsUtils.escapeJs("Failed to restore session history: " + ex.getMessage()));
-                }
-            });
-            return null;
-        });
     }
 
     public void addCodeSnippetFromExternal(String selectionInfo) {
@@ -678,6 +646,13 @@ public class ClaudeChatWindow {
         });
     }
 
+    /**
+     * 处理 WebView 通过桥接上报的 JavaScript 消息。
+     * 这里除了业务事件外，还负责承接前端 console 日志；为了排查 rich paste 与历史恢复链路，
+     * 需要把 `console.info` 显式提升到 IDEA 的 `INFO` 级别，避免关键诊断日志只停留在 debug 通道。
+     *
+     * @param message 前端桥接上来的原始消息
+     */
     void handleJavaScriptMessage(String message) {
         if (message.startsWith("{\"type\":\"console.")) {
             try {
@@ -693,7 +668,7 @@ public class ClaudeChatWindow {
 
                 if ("console.error".equals(logType)) {
                     LOG.warn(logMessage.toString());
-                } else if ("console.warn".equals(logType)) {
+                } else if ("console.warn".equals(logType) || "console.info".equals(logType)) {
                     LOG.info(logMessage.toString());
                 } else {
                     LOG.debug(logMessage.toString());

@@ -49,6 +49,11 @@ export interface SettingsWindowCallbacksDeps {
   setSavingClaudeCliPath: (saving: boolean) => void;
   setWorkingDirectory: (dir: string) => void;
   setSavingWorkingDirectory: (saving: boolean) => void;
+  setCodexHistoryImageCacheDir: (dir: string) => void;
+  setCodexHistoryImageCacheResolvedDir: (dir: string) => void;
+  setCodexHistoryImageCacheRetentionDays: (days: number) => void;
+  setCodexHistoryImageCacheMaxSizeMb: (size: number) => void;
+  setSavingCodexHistoryImageCache: (saving: boolean) => void;
   setCommitPrompt: (prompt: string) => void;
   setSavingCommitPrompt: (saving: boolean) => void;
   setProjectCommitPrompt?: (prompt: string) => void;
@@ -185,6 +190,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
+      d().setSavingCodexHistoryImageCache(false);
       d().setSavingCommitPrompt(false);
     };
 
@@ -241,11 +247,35 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
+    window.updateCodexHistoryImageCacheConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setCodexHistoryImageCacheDir(data.customDir || '');
+        d().setCodexHistoryImageCacheResolvedDir(data.resolvedDir || '');
+        d().setCodexHistoryImageCacheRetentionDays(Number(data.retentionDays) || 30);
+        d().setCodexHistoryImageCacheMaxSizeMb(Number(data.maxSizeMb) || 1024);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex history image cache config:', error);
+      } finally {
+        d().setSavingCodexHistoryImageCache(false);
+      }
+    };
+
+    window.onCodexHistoryImageCacheDirBrowsed = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setCodexHistoryImageCacheDir(data.path || '');
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex history image cache directory browse result:', error);
+      }
+    };
+
     window.showSuccess = (message: string) => {
       d().showAlert('success', t('toast.operationSuccess'), message);
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
+      d().setSavingCodexHistoryImageCache(false);
     };
 
     window.showSuccessI18n = (i18nKey: string) => {
@@ -524,6 +554,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_node_path:');
     sendToJava('get_claude_cli_path:');
     sendToJava('get_working_directory:');
+    sendToJava('get_codex_history_image_cache_config:');
     sendToJava('get_editor_font_config:');
     sendToJava('get_ui_font_config:');
     sendToJava('get_streaming_enabled:');
@@ -556,6 +587,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateNodePath = undefined;
       window.updateClaudeCliPath = undefined;
       window.updateWorkingDirectory = undefined;
+      window.updateCodexHistoryImageCacheConfig = undefined;
+      window.onCodexHistoryImageCacheDirBrowsed = undefined;
       window.showSuccess = undefined;
       window.showSuccessI18n = undefined;
       window.onEditorFontConfigReceived = undefined;

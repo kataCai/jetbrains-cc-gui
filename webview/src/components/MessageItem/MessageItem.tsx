@@ -299,7 +299,8 @@ export const MessageItem = memo(function MessageItem({
     }
     return '';
   }, [message, extractMarkdownContent]);
-  const hasCopyableContent = markdownContent.trim().length > 0 || blocks.some((block) => block.type === 'image');
+  const hasCopyableContent = markdownContent.trim().length > 0
+    || blocks.some((block) => block.type === 'image' || block.type === 'image_missing');
 
   const handleCopyMessage = useCallback(async () => {
     // Prevent copying if message is empty or already in "copied" state

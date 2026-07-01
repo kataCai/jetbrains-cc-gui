@@ -131,6 +131,16 @@ const SettingsView = ({
     setWorkingDirectory,
     savingWorkingDirectory,
     setSavingWorkingDirectory,
+    codexHistoryImageCacheDir,
+    setCodexHistoryImageCacheDir,
+    codexHistoryImageCacheResolvedDir,
+    setCodexHistoryImageCacheResolvedDir,
+    codexHistoryImageCacheRetentionDays,
+    setCodexHistoryImageCacheRetentionDays,
+    codexHistoryImageCacheMaxSizeMb,
+    setCodexHistoryImageCacheMaxSizeMb,
+    savingCodexHistoryImageCache,
+    setSavingCodexHistoryImageCache,
     editorFontConfig,
     setEditorFontConfig,
     uiFontConfig,
@@ -157,6 +167,9 @@ const SettingsView = ({
     handleSaveNodePath,
     handleSaveClaudeCliPath,
     handleSaveWorkingDirectory,
+    handleSaveCodexHistoryImageCacheConfig,
+    handleBrowseCodexHistoryImageCacheDir,
+    handleResetCodexHistoryImageCacheDir,
     handleUiFontSelectionChange,
     handleSaveUiFontCustomPath,
     handleBrowseUiFontFile,
@@ -334,6 +347,11 @@ const SettingsView = ({
     setSavingClaudeCliPath,
     setWorkingDirectory,
     setSavingWorkingDirectory,
+    setCodexHistoryImageCacheDir,
+    setCodexHistoryImageCacheResolvedDir,
+    setCodexHistoryImageCacheRetentionDays,
+    setCodexHistoryImageCacheMaxSizeMb,
+    setSavingCodexHistoryImageCache,
     setCommitPrompt,
     setSavingCommitPrompt,
     setCommitAiConfig,
@@ -548,6 +566,17 @@ const SettingsView = ({
               onWorkingDirectoryChange={setWorkingDirectory}
               onSaveWorkingDirectory={handleSaveWorkingDirectory}
               savingWorkingDirectory={savingWorkingDirectory}
+              codexHistoryImageCacheDir={codexHistoryImageCacheDir}
+              codexHistoryImageCacheResolvedDir={codexHistoryImageCacheResolvedDir}
+              codexHistoryImageCacheRetentionDays={codexHistoryImageCacheRetentionDays}
+              codexHistoryImageCacheMaxSizeMb={codexHistoryImageCacheMaxSizeMb}
+              onCodexHistoryImageCacheDirChange={setCodexHistoryImageCacheDir}
+              onCodexHistoryImageCacheRetentionDaysChange={setCodexHistoryImageCacheRetentionDays}
+              onCodexHistoryImageCacheMaxSizeMbChange={setCodexHistoryImageCacheMaxSizeMb}
+              onBrowseCodexHistoryImageCacheDir={handleBrowseCodexHistoryImageCacheDir}
+              onResetCodexHistoryImageCacheDir={handleResetCodexHistoryImageCacheDir}
+              onSaveCodexHistoryImageCacheConfig={handleSaveCodexHistoryImageCacheConfig}
+              savingCodexHistoryImageCache={savingCodexHistoryImageCache}
               editorFontConfig={editorFontConfig}
               uiFontConfig={uiFontConfig}
               onUiFontSelectionChange={handleUiFontSelectionChange}

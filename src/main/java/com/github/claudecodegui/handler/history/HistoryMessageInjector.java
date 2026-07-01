@@ -18,10 +18,12 @@ import com.intellij.openapi.diagnostic.Logger;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.zip.CRC32;
 
 /**
  * Service for loading session messages and injecting them into the frontend.
@@ -88,23 +90,20 @@ public class HistoryMessageInjector {
                 + ", transitionToken=" + transitionToken
                 + ", currentProvider=" + currentProvider);
 
-        if (SessionRuntimeFamily.CODEX.equals(resolvedRuntimeFamily)) {
-            // Codex session: read session info and restore session state
+        if (sessionLoadCallback != null) {
+            sessionLoadCallback.onLoadSession(
+                    resolvedSessionId,
+                    projectPath,
+                    provider,
+                    resolvedRuntimeFamily,
+                    restoreSource,
+                    transitionToken
+            );
+        } else if (SessionRuntimeFamily.CODEX.equals(resolvedRuntimeFamily)) {
+            // 兼容没有注册 SessionLifecycleManager 回调的旧调用场景，避免 Codex 历史完全不可用。
             loadCodexSession(resolvedSessionId);
         } else {
-            // Claude session: use existing callback mechanism
-            if (sessionLoadCallback != null) {
-                sessionLoadCallback.onLoadSession(
-                        resolvedSessionId,
-                        projectPath,
-                        provider,
-                        resolvedRuntimeFamily,
-                        restoreSource,
-                        transitionToken
-                );
-            } else {
-                LOG.warn("[HistoryHandler] WARNING: No session load callback set");
-            }
+            LOG.warn("[HistoryHandler] WARNING: No session load callback set");
         }
     }
 
@@ -171,6 +170,17 @@ public class HistoryMessageInjector {
      * @return String[2]: [0]=actualThreadId, [1]=cwd
      */
     private String[] extractSessionMeta(JsonArray messages) {
+        return extractCodexSessionMeta(messages);
+    }
+
+    /**
+     * 提取 Codex 历史消息中的会话元信息。
+     * 这里统一返回真实 threadId 与 cwd，供历史恢复链路复用，避免多处各自解析导致规则漂移。
+     *
+     * @param messages Codex 原始历史消息数组
+     * @return 长度为 2 的数组：[0] 为实际 threadId，[1] 为 cwd；缺失时对应元素为 null
+     */
+    public static String[] extractCodexSessionMeta(JsonArray messages) {
         String cwd = null;
         String actualThreadId = null;
 
@@ -209,6 +219,27 @@ public class HistoryMessageInjector {
         return frontendMessages;
     }
 
+    /**
+     * 为历史恢复后的前端消息快照构造稳定签名。
+     * 该签名只关心“界面最终可见语义”，尤其会显式纳入图片块、失效图片占位块与文本块的关键信息，
+     * 供前端判断同一 restore key 下的 `updateMessages` 是否只是重复注入同一份历史快照。
+     *
+     * @param frontendMessages 最终准备注入前端的消息列表
+     * @return 稳定的历史快照签名
+     */
+    public static String buildFrontendSnapshotSignature(List<JsonObject> frontendMessages) {
+        CRC32 checksum = new CRC32();
+        updateSnapshotChecksum(checksum, "count:" + (frontendMessages != null ? frontendMessages.size() : 0));
+        if (frontendMessages == null) {
+            return "0-" + Long.toHexString(checksum.getValue());
+        }
+
+        for (JsonObject message : frontendMessages) {
+            appendFrontendMessageSignature(checksum, message);
+        }
+        return frontendMessages.size() + "-" + Long.toHexString(checksum.getValue());
+    }
+
     private static void addCodexFrontendMessage(List<JsonObject> frontendMessages, JsonObject incoming) {
         if (frontendMessages.isEmpty()) {
             frontendMessages.add(incoming);
@@ -243,6 +274,11 @@ public class HistoryMessageInjector {
     }
 
     private static JsonObject preferRicherUserMessage(JsonObject previous, JsonObject incoming) {
+        int previousScore = getUserMessageSemanticScore(previous);
+        int incomingScore = getUserMessageSemanticScore(incoming);
+        if (incomingScore != previousScore) {
+            return incomingScore > previousScore ? incoming : previous;
+        }
         return getRawContentBlockCount(incoming) > getRawContentBlockCount(previous) ? incoming : previous;
     }
 
@@ -267,6 +303,104 @@ public class HistoryMessageInjector {
         return object.get(propertyName).getAsString();
     }
 
+    /**
+     * 把单条前端消息的稳定语义追加到快照校验和。
+     *
+     * @param checksum 当前累计校验和
+     * @param message 单条前端消息
+     */
+    private static void appendFrontendMessageSignature(CRC32 checksum, JsonObject message) {
+        if (message == null) {
+            updateSnapshotChecksum(checksum, "message:null");
+            return;
+        }
+
+        updateSnapshotChecksum(checksum, "type:" + getStringProperty(message, "type"));
+        updateSnapshotChecksum(checksum, "timestamp:" + getStringProperty(message, "timestamp"));
+        updateSnapshotChecksum(checksum, "content:" + getStringProperty(message, "content"));
+
+        JsonObject raw = message.has("raw") && message.get("raw").isJsonObject()
+                ? message.getAsJsonObject("raw")
+                : null;
+        JsonArray rawBlocks = extractFrontendRawBlocks(raw);
+        updateSnapshotChecksum(checksum, "rawBlockCount:" + rawBlocks.size());
+        for (JsonElement blockElement : rawBlocks) {
+            appendFrontendRawBlockSignature(checksum, blockElement);
+        }
+    }
+
+    /**
+     * 提取前端消息中的 raw block 数组。
+     * 兼容 `raw.message.content` 与 `raw.content` 两种结构，避免签名逻辑与具体来源过度耦合。
+     *
+     * @param raw 前端消息 raw 对象
+     * @return 可遍历的 raw block 数组；没有内容时返回空数组
+     */
+    private static JsonArray extractFrontendRawBlocks(JsonObject raw) {
+        if (raw == null) {
+            return new JsonArray();
+        }
+        if (raw.has("message") && raw.get("message").isJsonObject()) {
+            JsonObject innerMessage = raw.getAsJsonObject("message");
+            if (innerMessage.has("content") && innerMessage.get("content").isJsonArray()) {
+                return innerMessage.getAsJsonArray("content");
+            }
+        }
+        if (raw.has("content") && raw.get("content").isJsonArray()) {
+            return raw.getAsJsonArray("content");
+        }
+        return new JsonArray();
+    }
+
+    /**
+     * 把单个 raw block 的关键语义追加到快照校验和。
+     * 对图片类 block 会显式纳入 `src/mediaType/alt` 或失效占位原因，确保图片恢复结果变化时签名同步变化。
+     *
+     * @param checksum 当前累计校验和
+     * @param blockElement 单个 raw block
+     */
+    private static void appendFrontendRawBlockSignature(CRC32 checksum, JsonElement blockElement) {
+        if (blockElement == null || !blockElement.isJsonObject()) {
+            updateSnapshotChecksum(checksum, "block:" + String.valueOf(blockElement));
+            return;
+        }
+
+        JsonObject block = blockElement.getAsJsonObject();
+        String type = getStringProperty(block, "type");
+        updateSnapshotChecksum(checksum, "blockType:" + type);
+        if ("text".equals(type)) {
+            updateSnapshotChecksum(checksum, "text:" + getStringProperty(block, "text"));
+            return;
+        }
+        if ("image".equals(type)) {
+            updateSnapshotChecksum(checksum, "imageSrc:" + getStringProperty(block, "src"));
+            updateSnapshotChecksum(checksum, "imageMediaType:" + getStringProperty(block, "mediaType"));
+            updateSnapshotChecksum(checksum, "imageAlt:" + getStringProperty(block, "alt"));
+            return;
+        }
+        if ("image_missing".equals(type)) {
+            updateSnapshotChecksum(checksum, "missingFileName:" + getStringProperty(block, "fileName"));
+            updateSnapshotChecksum(checksum, "missingMediaType:" + getStringProperty(block, "mediaType"));
+            updateSnapshotChecksum(checksum, "missingPath:" + getStringProperty(block, "originalPath"));
+            updateSnapshotChecksum(checksum, "missingReason:" + getStringProperty(block, "reason"));
+            return;
+        }
+        updateSnapshotChecksum(checksum, block.toString());
+    }
+
+    /**
+     * 以 UTF-8 字节流方式累加快照校验和。
+     * 这里统一把 `null` 转成显式字面量，避免不同空值分支生成不一致签名。
+     *
+     * @param checksum 当前累计校验和
+     * @param value 待累加字符串
+     */
+    private static void updateSnapshotChecksum(CRC32 checksum, String value) {
+        byte[] bytes = String.valueOf(value).getBytes(StandardCharsets.UTF_8);
+        checksum.update(bytes, 0, bytes.length);
+        checksum.update('\n');
+    }
+
     private static int getRawContentBlockCount(JsonObject message) {
         if (message == null || !message.has("raw") || !message.get("raw").isJsonObject()) {
             return 0;
@@ -286,10 +420,36 @@ public class HistoryMessageInjector {
     }
 
     /**
+     * 计算用户消息的语义丰富度。
+     * 对 Codex 双记录场景，显式声明过 `local_images` 的 event_msg 应优先于只剩占位文案的副本。
+     *
+     * @param message 候选用户消息
+     * @return 语义丰富度分数，越高越应该被保留
+     */
+    private static int getUserMessageSemanticScore(JsonObject message) {
+        if (message == null || !message.has("raw") || !message.get("raw").isJsonObject()) {
+            return 0;
+        }
+        JsonObject raw = message.getAsJsonObject("raw");
+        int score = getRawContentBlockCount(message);
+        if (raw.has("__hasDeclaredLocalImages") && !raw.get("__hasDeclaredLocalImages").isJsonNull()
+                && raw.get("__hasDeclaredLocalImages").getAsBoolean()) {
+            score += 1000;
+        }
+        if (raw.has("__declaredLocalImageCount") && !raw.get("__declaredLocalImageCount").isJsonNull()) {
+            score += raw.get("__declaredLocalImageCount").getAsInt() * 100;
+        }
+        if (raw.has("__missingLocalImageCount") && !raw.get("__missingLocalImageCount").isJsonNull()) {
+            score += raw.get("__missingLocalImageCount").getAsInt() * 10;
+        }
+        return score;
+    }
+
+    /**
      * 将 Codex 历史消息恢复到后端 SessionState，保证历史加载后继续发送时，
      * 后端内存态与前端显示态使用同一份消息基线。
      */
-    static void restoreCodexMessagesToSessionState(SessionState state, JsonArray messages) {
+    public static void restoreCodexMessagesToSessionState(SessionState state, JsonArray messages) {
         state.clearMessages();
         List<JsonObject> frontendMessages = convertCodexMessagesToFrontendBatch(messages);
         for (JsonObject frontendMsg : frontendMessages) {
@@ -417,6 +577,9 @@ public class HistoryMessageInjector {
         JsonArray contentBlocks = buildUserMessageContentBlocks(payload, content);
         rawObj.add("content", contentBlocks);
         rawObj.addProperty("role", "user");
+        rawObj.addProperty("__hasDeclaredLocalImages", hasLocalImages);
+        rawObj.addProperty("__declaredLocalImageCount", getDeclaredLocalImageCount(payload));
+        rawObj.addProperty("__missingLocalImageCount", countMissingLocalImages(contentBlocks));
         frontendMsg.add("raw", rawObj);
 
         if (timestamp != null) {
@@ -443,6 +606,10 @@ public class HistoryMessageInjector {
         return payload.has("local_images")
             && payload.get("local_images").isJsonArray()
             && payload.getAsJsonArray("local_images").size() > 0;
+    }
+
+    private static int getDeclaredLocalImageCount(JsonObject payload) {
+        return hasLocalImages(payload) ? payload.getAsJsonArray("local_images").size() : 0;
     }
 
     private static void appendLocalImageBlocks(JsonObject payload, JsonArray contentBlocks) {
@@ -472,7 +639,7 @@ public class HistoryMessageInjector {
             Path path = Path.of(imagePath);
             if (!Files.isRegularFile(path)) {
                 LOG.debug("[HistoryMessageInjector] Skip missing local image: " + imagePath);
-                return null;
+                return createMissingLocalImageBlock(path, "cache_missing");
             }
 
             String mediaType = Files.probeContentType(path);
@@ -492,8 +659,40 @@ public class HistoryMessageInjector {
             return imageBlock;
         } catch (Exception e) {
             LOG.warn("[HistoryMessageInjector] Failed to restore local image from Codex history: " + imagePath, e);
-            return null;
+            return createMissingLocalImageBlock(Path.of(imagePath), "cache_unreadable");
         }
+    }
+
+    /**
+     * 构造图片缓存失效占位块。
+     * 即使真实图片字节已经不可恢复，也要保留图片的文件名、原路径和失效原因，供界面与复制链路兜底。
+     *
+     * @param path 原始图片路径
+     * @param reason 失效原因
+     * @return 结构化的图片失效占位块
+     */
+    private static JsonObject createMissingLocalImageBlock(Path path, String reason) {
+        JsonObject imageBlock = new JsonObject();
+        imageBlock.addProperty("type", "image_missing");
+        imageBlock.addProperty("fileName", path.getFileName() != null ? path.getFileName().toString() : "image");
+        imageBlock.addProperty("mediaType", guessImageMediaType(path));
+        imageBlock.addProperty("originalPath", path.toAbsolutePath().normalize().toString());
+        imageBlock.addProperty("reason", reason);
+        return imageBlock;
+    }
+
+    private static int countMissingLocalImages(JsonArray contentBlocks) {
+        int missingCount = 0;
+        for (JsonElement blockElement : contentBlocks) {
+            if (!blockElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject block = blockElement.getAsJsonObject();
+            if (block.has("type") && "image_missing".equals(block.get("type").getAsString())) {
+                missingCount++;
+            }
+        }
+        return missingCount;
     }
 
     private static String guessImageMediaType(Path path) {
@@ -516,7 +715,7 @@ public class HistoryMessageInjector {
         if (fileName.endsWith(".svg")) {
             return "image/svg+xml";
         }
-        return null;
+        return "image/png";
     }
 
     /**

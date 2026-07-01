@@ -318,4 +318,31 @@ describe('MessageItem copy button visibility', () => {
     expect(screen.queryByTestId('message-completion-footer')).toBeNull();
     expect(screen.getByText('本次耗时')).toBeTruthy();
   });
+  /**
+   * 验证当消息只包含 `image_missing` 占位块时，复制按钮仍然保留。
+   * 该场景对应历史图片缓存已失效但仍需把降级提示重新回贴到输入框，
+   * 因此不能因为没有真实图片块或正文文本就隐藏复制入口。
+   */
+  it('keeps the copy button for messages that only contain missing history images', () => {
+    const message: ClaudeMessage = {
+      type: 'user',
+      timestamp: '2026-06-29T00:00:00.000Z',
+      raw: {
+        content: [
+          {
+            type: 'image_missing',
+            fileName: 'lost.png',
+            mediaType: 'image/png',
+            originalPath: 'C:/cache/lost.png',
+            reason: 'cache_missing',
+          },
+        ],
+      } as any,
+    };
+
+    renderMessageItem(message);
+
+    expect(screen.getByTestId('content-block-image_missing')).toBeTruthy();
+    expect(screen.getByRole('button', { name: t('markdown.copyMessage') })).toBeTruthy();
+  });
 });

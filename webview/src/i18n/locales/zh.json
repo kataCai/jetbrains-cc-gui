@@ -3,6 +3,8 @@
     "ready": "就绪",
     "loading": "加载中",
     "save": "保存",
+    "browse": "浏览",
+    "reset": "恢复默认",
     "cancel": "取消",
     "confirm": "确定",
     "delete": "删除",
@@ -184,6 +186,13 @@
         "label": "工作目录",
         "placeholder": "例如 project1 或留空使用项目根目录",
         "hint": "指定 Claude 工作的目录。可以使用相对路径（相对于项目根目录）或绝对路径。留空则使用项目根目录。"
+      },
+      "codexHistoryImageCache": {
+        "label": "Codex 历史图片缓存",
+        "dirPlaceholder": "可选：自定义 Codex 历史图片缓存目录",
+        "retentionDays": "保留天数",
+        "maxSizeMb": "容量上限（MB）",
+        "hint": "用于 Codex 历史图片回放，以及从会话历史复制图文后回贴到聊天输入框。当前默认生效目录："
       },
       "fontSize": {
         "label": "字体大小",

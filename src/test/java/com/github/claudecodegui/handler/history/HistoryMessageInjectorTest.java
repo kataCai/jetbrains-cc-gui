@@ -1,15 +1,21 @@
 package com.github.claudecodegui.handler.history;
 
+import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.intellij.openapi.project.Project;
 import org.junit.Test;
 
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public class HistoryMessageInjectorTest {
@@ -120,6 +126,46 @@ public class HistoryMessageInjectorTest {
         }
     }
 
+    /**
+     * 验证当历史图片缓存文件已经被清理时，历史恢复不会退化为原始协议文本。
+     * 断言意图：
+     * 1. 用户消息仍然保留 image_missing 结构化占位；
+     * 2. raw 元数据会记录声明过的图片数量与缺失数量，供后续去重与复制链路使用。
+     */
+    @Test
+    public void convertCodexMessagesCreatesImageMissingBlockWhenCacheFileWasRemoved() {
+        JsonArray messages = new JsonArray();
+        messages.add(eventUserMessage("2026-05-11T09:04:20.861Z", "hello", "C:/missing/history-image.png"));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+
+        assertEquals(1, result.size());
+        JsonObject raw = result.get(0).getAsJsonObject("raw");
+        JsonArray contentBlocks = raw.getAsJsonArray("content");
+        assertEquals("image_missing", contentBlocks.get(0).getAsJsonObject().get("type").getAsString());
+        assertEquals("history-image.png", contentBlocks.get(0).getAsJsonObject().get("fileName").getAsString());
+        assertEquals(1, raw.get("__declaredLocalImageCount").getAsInt());
+        assertEquals(1, raw.get("__missingLocalImageCount").getAsInt());
+    }
+
+    /**
+     * 验证 Codex 双记录场景里，即使缓存图片已失效，也优先保留声明过 local_images 的 event_msg。
+     * 这样会话历史不会被 `<image ...>` 占位文案反向覆盖，复制回聊天输入框时仍能保留兜底语义。
+     */
+    @Test
+    public void convertCodexMessagesPrefersDeclaredImageMessageOverPlaceholderDuplicate() {
+        JsonArray messages = new JsonArray();
+        messages.add(responseItemUserMessage("2026-05-11T09:05:20.861Z", "<image name=[Image #1]>\n</image>\nhello"));
+        messages.add(eventUserMessage("2026-05-11T09:05:20.861Z", "hello", "C:/missing/history-image.png"));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+
+        assertEquals(1, result.size());
+        JsonArray contentBlocks = result.get(0).getAsJsonObject("raw").getAsJsonArray("content");
+        assertEquals("image_missing", contentBlocks.get(0).getAsJsonObject().get("type").getAsString());
+        assertEquals("hello", contentBlocks.get(1).getAsJsonObject().get("text").getAsString());
+    }
+
     @Test
     public void convertCodexMessagesStripsAppendedProjectModulesContext() {
         JsonArray messages = new JsonArray();
@@ -175,5 +221,89 @@ public class HistoryMessageInjectorTest {
         localImages.add(localImagePath);
         line.getAsJsonObject("payload").add("local_images", localImages);
         return line;
+    }
+
+    /**
+     * 验证当已注册 SessionLifecycleManager 回调时，Codex 历史加载会统一交给主链处理，
+     * 而不是继续由 HistoryMessageInjector 自行注入前端。
+     */
+    @Test
+    public void handleLoadSessionDelegatesCodexHistoryToSessionLoadCallbackWhenAvailable() {
+        Project project = createProject();
+        HandlerContext context = new HandlerContext(
+                project,
+                null,
+                null,
+                new CodemossSettingsService(),
+                new HandlerContext.JsCallback() {
+                    @Override
+                    public void callJavaScript(String functionName, String... args) {
+                    }
+
+                    @Override
+                    public String escapeJs(String str) {
+                        return str;
+                    }
+                }
+        );
+        HistoryMessageInjector injector = new HistoryMessageInjector(context);
+        AtomicReference<String> callbackSessionId = new AtomicReference<>();
+        AtomicReference<String> callbackRuntimeFamily = new AtomicReference<>();
+
+        injector.handleLoadSession(
+                "{\"sessionId\":\"codex-session-001\",\"provider\":\"codex\",\"runtimeFamily\":\"codex\",\"restoreSource\":\"history_switch\",\"transitionToken\":\"token-001\"}",
+                "claude",
+                (sessionId, projectPath, provider, runtimeFamily, restoreSource, transitionToken) -> {
+                    callbackSessionId.set(sessionId);
+                    callbackRuntimeFamily.set(runtimeFamily);
+                }
+        );
+
+        assertEquals("codex-session-001", callbackSessionId.get());
+        assertEquals("codex", callbackRuntimeFamily.get());
+    }
+
+    /**
+     * 验证增强恢复主链提取 Codex 历史元信息时，会优先返回真实 threadId 与 cwd。
+     */
+    @Test
+    public void extractCodexSessionMetaReturnsActualThreadIdAndCwd() {
+        JsonArray messages = new JsonArray();
+        JsonObject sessionMeta = new JsonObject();
+        sessionMeta.addProperty("type", "session_meta");
+        JsonObject payload = new JsonObject();
+        payload.addProperty("id", "thread-actual-001");
+        payload.addProperty("cwd", "E:/workspace/demo");
+        sessionMeta.add("payload", payload);
+        messages.add(sessionMeta);
+
+        String[] meta = HistoryMessageInjector.extractCodexSessionMeta(messages);
+
+        assertNotNull(meta);
+        assertEquals("thread-actual-001", meta[0]);
+        assertEquals("E:/workspace/demo", meta[1]);
+    }
+
+    private static Project createProject() {
+        return (Project) Proxy.newProxyInstance(
+                Project.class.getClassLoader(),
+                new Class<?>[]{Project.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getBasePath" -> System.getProperty("java.io.tmpdir");
+                    case "isDisposed" -> false;
+                    case "getName" -> "history-message-injector-test";
+                    default -> method.getReturnType().isPrimitive() ? defaultPrimitiveValue(method.getReturnType()) : null;
+                }
+        );
+    }
+
+    private static Object defaultPrimitiveValue(Class<?> primitiveType) {
+        if (primitiveType == boolean.class) {
+            return false;
+        }
+        if (primitiveType == char.class) {
+            return '\0';
+        }
+        return 0;
     }
 }

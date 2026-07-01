@@ -29,6 +29,7 @@ public class ClipboardHandler extends BaseMessageHandler {
     private static final Gson GSON = new Gson();
     private static final String[] SUPPORTED_TYPES = {
             "read_clipboard",
+            "read_clipboard_rich",
             "write_clipboard",
             "write_clipboard_image",
             "write_clipboard_rich"
@@ -150,6 +151,10 @@ public class ClipboardHandler extends BaseMessageHandler {
                 handleReadClipboard();
                 yield true;
             }
+            case "read_clipboard_rich" -> {
+                handleReadClipboardRich();
+                yield true;
+            }
             case "write_clipboard" -> {
                 handleWriteClipboard(content);
                 yield true;
@@ -187,6 +192,45 @@ public class ClipboardHandler extends BaseMessageHandler {
             } catch (Exception e) {
                 LOG.warn("Failed to read clipboard", e);
                 callJavaScript("window.onClipboardRead", "");
+            }
+        }, ModalityState.any());
+    }
+
+    /**
+     * 读取系统剪贴板中的富内容，并统一派发到前端 `java-paste-rich-content` 恢复链路。
+     * 关键约束：
+     * 1. 优先消费插件自己写入的 `RICH_JSON_FLAVOR`，确保多图与 `orderedBlocks` 不丢失；
+     * 2. 若系统剪贴板只有原生文本/HTML/单图，也统一包装成富负载，避免右键 Paste 退回纯文本协议；
+     * 3. 当剪贴板无可恢复内容或读取失败时，只记录日志，不再依赖旧的 `window.onClipboardRead` 回调。
+     */
+    private void handleReadClipboardRich() {
+        long now = System.currentTimeMillis();
+        if (now - lastReadTime < MIN_READ_INTERVAL_MS) {
+            LOG.debug("Rich clipboard read rate-limited");
+            return;
+        }
+        lastReadTime = now;
+
+        ApplicationManager.getApplication().invokeLater(() -> {
+            try {
+                Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+                LOG.info("[RichPaste][BridgeRead] Context menu requested rich clipboard, flavors="
+                        + Arrays.toString(clipboard.getAvailableDataFlavors()));
+
+                ClipboardRichPayload payload = readClipboardRichPayload(clipboard);
+                if (payload == null) {
+                    LOG.info("[RichPaste][BridgeRead] Skip rich clipboard paste because no supported flavor was available");
+                    return;
+                }
+
+                LOG.info("[RichPaste][BridgeRead] Dispatch rich clipboard payload: textLength="
+                        + (payload.text != null ? payload.text.length() : 0)
+                        + ", htmlLength=" + (payload.html != null ? payload.html.length() : 0)
+                        + ", imageCount=" + (payload.images != null ? payload.images.length : (payload.image != null ? 1 : 0))
+                        + ", orderedBlockCount=" + (payload.orderedBlocks != null ? payload.orderedBlocks.length : 0));
+                executeJavaScript(buildRichPasteDispatchScript(payload));
+            } catch (Exception e) {
+                LOG.warn("Failed to read rich clipboard", e);
             }
         }, ModalityState.any());
     }
@@ -237,6 +281,12 @@ public class ClipboardHandler extends BaseMessageHandler {
         if (payload == null) {
             return;
         }
+
+        LOG.info("[RichCopy][BridgeWrite] Parsed rich clipboard payload: textLength="
+                + (payload.text != null ? payload.text.length() : 0)
+                + ", htmlLength=" + (payload.html != null ? payload.html.length() : 0)
+                + ", imageCount=" + (payload.images != null ? payload.images.length : (payload.image != null ? 1 : 0))
+                + ", orderedBlockCount=" + (payload.orderedBlocks != null ? payload.orderedBlocks.length : 0));
 
         if (!validateRichPayload(payload)) {
             return;
@@ -404,12 +454,183 @@ public class ClipboardHandler extends BaseMessageHandler {
                 || (payload.orderedBlocks != null && payload.orderedBlocks.length > 0);
         String richJson = hasStructuredRichContent ? GSON.toJson(payload) : null;
         if (html == null && image == null && text != null && richJson == null) {
+            LOG.info("[RichCopy][BridgeWrite] createTransferable fallback to StringSelection");
             return new StringSelection(text);
         }
         if (text == null && html == null && image == null && richJson == null) {
             return null;
         }
+        LOG.info("[RichCopy][BridgeWrite] createTransferable rich flavors: hasText=" + (text != null)
+                + ", hasHtml=" + (html != null)
+                + ", hasImageFlavor=" + (image != null)
+                + ", hasRichJson=" + (richJson != null));
         return new RichClipboardTransferable(text, html, image, richJson);
+    }
+
+    /**
+     * 从系统剪贴板读取统一的富负载。
+     * 优先顺序：
+     * 1. 插件自定义 richJson；
+     * 2. 原生文本/HTML/图片 flavor；
+     * 3. 若没有任一可恢复内容，则返回 null。
+     *
+     * @param clipboard 系统剪贴板
+     * @return 可交给前端统一恢复的富剪贴板负载；无内容时返回 null
+     */
+    private ClipboardRichPayload readClipboardRichPayload(Clipboard clipboard) throws Exception {
+        if (clipboard.isDataFlavorAvailable(RICH_JSON_FLAVOR)) {
+            Object richData = clipboard.getData(RICH_JSON_FLAVOR);
+            if (richData instanceof String richJson) {
+                ClipboardRichPayload payload = parseClipboardRichPayload(richJson);
+                if (payload != null) {
+                    return payload;
+                }
+            }
+        }
+
+        ClipboardRichPayload payload = new ClipboardRichPayload();
+        if (clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) {
+            Object textData = clipboard.getData(DataFlavor.stringFlavor);
+            if (textData instanceof String text && !text.isEmpty()) {
+                payload.text = text;
+            }
+        }
+
+        if (clipboard.isDataFlavorAvailable(HTML_FLAVOR)) {
+            Object htmlData = clipboard.getData(HTML_FLAVOR);
+            if (htmlData instanceof String html && !html.isEmpty()) {
+                payload.html = html;
+            }
+        }
+
+        if (clipboard.isDataFlavorAvailable(DataFlavor.imageFlavor)) {
+            Object imageData = clipboard.getData(DataFlavor.imageFlavor);
+            if (imageData instanceof Image image) {
+                ClipboardImagePayload imagePayload = encodeClipboardImagePayload(image);
+                if (imagePayload != null) {
+                    payload.image = imagePayload;
+                    payload.images = new ClipboardImagePayload[]{imagePayload};
+                }
+            }
+        }
+
+        if ((payload.text == null || payload.text.isBlank())
+                && (payload.html == null || payload.html.isBlank())
+                && payload.image == null
+                && (payload.images == null || payload.images.length == 0)) {
+            return null;
+        }
+
+        payload.orderedBlocks = buildFallbackOrderedBlocks(payload);
+        return payload;
+    }
+
+    /**
+     * 把系统原生图片编码为统一的 PNG base64 负载。
+     * 右键 Paste 的富恢复协议只需要可回贴的稳定图片字节，不依赖原始平台特定编码。
+     *
+     * @param image 剪贴板中的原生图片
+     * @return 统一的图片负载；编码失败时返回 null
+     */
+    private ClipboardImagePayload encodeClipboardImagePayload(Image image) {
+        if (image == null) {
+            return null;
+        }
+
+        BufferedImage bufferedImage;
+        if (image instanceof BufferedImage readyImage) {
+            bufferedImage = readyImage;
+        } else {
+            try {
+                MediaTracker tracker = new MediaTracker(new Canvas());
+                tracker.addImage(image, 0);
+                tracker.waitForID(0);
+                if (tracker.isErrorID(0)) {
+                    return null;
+                }
+
+                int width = image.getWidth(null);
+                int height = image.getHeight(null);
+                if (width <= 0 || height <= 0) {
+                    return null;
+                }
+
+                bufferedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                Graphics2D graphics = bufferedImage.createGraphics();
+                try {
+                    graphics.drawImage(image, 0, 0, null);
+                } finally {
+                    graphics.dispose();
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+
+        try (java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            javax.imageio.ImageIO.write(bufferedImage, "png", output);
+            ClipboardImagePayload payload = new ClipboardImagePayload();
+            payload.data = Base64.getEncoder().encodeToString(output.toByteArray());
+            payload.mediaType = "image/png";
+            payload.fileName = "clipboard-image.png";
+            return payload;
+        } catch (Exception exception) {
+            LOG.warn("Failed to encode clipboard image payload", exception);
+            return null;
+        }
+    }
+
+    /**
+     * 为原生系统剪贴板构造最小可用的顺序块。
+     * 当系统只暴露单图 flavor 时，无法可靠恢复原始图文交错顺序，
+     * 这里保底保留“文本在前、图片在后”的稳定恢复协议，避免再次退回到文本专用链路。
+     *
+     * @param payload 剪贴板负载
+     * @return 兜底顺序块数组；若负载为空则返回 null
+     */
+    private ClipboardRichBlock[] buildFallbackOrderedBlocks(ClipboardRichPayload payload) {
+        if (payload == null) {
+            return null;
+        }
+
+        int imageCount = payload.images != null ? payload.images.length : (payload.image != null ? 1 : 0);
+        boolean hasText = payload.text != null && !payload.text.isBlank();
+        if (!hasText && imageCount <= 0) {
+            return null;
+        }
+
+        int blockCount = (hasText ? 1 : 0) + imageCount;
+        ClipboardRichBlock[] blocks = new ClipboardRichBlock[blockCount];
+        int index = 0;
+        if (hasText) {
+            ClipboardRichBlock textBlock = new ClipboardRichBlock();
+            textBlock.type = "text";
+            textBlock.text = payload.text;
+            blocks[index++] = textBlock;
+        }
+        for (int imageIndex = 0; imageIndex < imageCount; imageIndex++) {
+            ClipboardRichBlock imageBlock = new ClipboardRichBlock();
+            imageBlock.type = "image";
+            imageBlock.imageIndex = imageIndex;
+            blocks[index++] = imageBlock;
+        }
+        return blocks;
+    }
+
+    /**
+     * 构造前端统一富粘贴事件脚本。
+     * 右键 Paste 与 IDE 粘贴动作都应尽量走同一 `java-paste-rich-content` 事件，
+     * 由输入框侧复用统一的图文恢复逻辑，而不是继续分叉到文本专用桥接。
+     *
+     * @param payload 富剪贴板负载
+     * @return 可直接注入 WebView 的脚本文本
+     */
+    private String buildRichPasteDispatchScript(ClipboardRichPayload payload) {
+        String jsonPayload = GSON.toJson(payload != null ? payload : new ClipboardRichPayload());
+        return "(function(){window.dispatchEvent(new CustomEvent('java-paste-rich-content',{detail:"
+                + jsonPayload
+                + "}));})()";
     }
 
     private static DataFlavor createHtmlFlavor() {

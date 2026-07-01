@@ -135,4 +135,26 @@ describe('useSettingsBasicActions merged settings behavior', () => {
       'set_commit_ai_config:{"provider":"codex","models":{"claude":"claude-sonnet-4-6","codex":"gpt-5.4"}}'
     );
   });
+
+  /**
+   * 验证 Codex 历史图片缓存配置会以单条命令整体写回后端。
+   * 断言意图：目录、保留天数和容量上限必须作为一个原子配置提交，避免设置页出现部分保存成功的中间态。
+   */
+  it('sends codex history image cache config as one payload', () => {
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.setCodexHistoryImageCacheDir('/tmp/codex-history-images');
+      result.current.setCodexHistoryImageCacheRetentionDays(45);
+      result.current.setCodexHistoryImageCacheMaxSizeMb(2048);
+    });
+
+    act(() => {
+      result.current.handleSaveCodexHistoryImageCacheConfig();
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_codex_history_image_cache_config:{"customDir":"/tmp/codex-history-images","retentionDays":45,"maxSizeMb":2048}'
+    );
+  });
 });

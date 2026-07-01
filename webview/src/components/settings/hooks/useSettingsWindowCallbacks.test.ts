@@ -40,6 +40,11 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setSavingClaudeCliPath: vi.fn(),
     setWorkingDirectory: vi.fn(),
     setSavingWorkingDirectory: vi.fn(),
+    setCodexHistoryImageCacheDir: vi.fn(),
+    setCodexHistoryImageCacheResolvedDir: vi.fn(),
+    setCodexHistoryImageCacheRetentionDays: vi.fn(),
+    setCodexHistoryImageCacheMaxSizeMb: vi.fn(),
+    setSavingCodexHistoryImageCache: vi.fn(),
     setCommitPrompt: vi.fn(),
     setSavingCommitPrompt: vi.fn(),
     setCommitAiConfig: vi.fn(),
@@ -105,6 +110,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_node_path:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_claude_cli_path:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_working_directory:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_codex_history_image_cache_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_editor_font_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_ui_font_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_streaming_enabled:');
@@ -347,6 +353,28 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
 
     expect(deps.setClaudeCliPath).toHaveBeenCalledWith('/opt/claude/bin/claude');
     expect(deps.setSavingClaudeCliPath).toHaveBeenCalledWith(false);
+  });
+
+  /**
+   * 验证后端推送的 Codex 历史图片缓存配置会正确写入设置页状态。
+   * 这保证设置页打开时既能显示用户自定义目录，也能展示默认生效目录与治理参数。
+   */
+  it('updates Codex history image cache config state from backend callback', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.updateCodexHistoryImageCacheConfig?.(JSON.stringify({
+      customDir: '/tmp/codex-history-images',
+      resolvedDir: '/tmp/codex-history-images',
+      retentionDays: 45,
+      maxSizeMb: 2048,
+    }));
+
+    expect(deps.setCodexHistoryImageCacheDir).toHaveBeenCalledWith('/tmp/codex-history-images');
+    expect(deps.setCodexHistoryImageCacheResolvedDir).toHaveBeenCalledWith('/tmp/codex-history-images');
+    expect(deps.setCodexHistoryImageCacheRetentionDays).toHaveBeenCalledWith(45);
+    expect(deps.setCodexHistoryImageCacheMaxSizeMb).toHaveBeenCalledWith(2048);
+    expect(deps.setSavingCodexHistoryImageCache).toHaveBeenCalledWith(false);
   });
 
   /**

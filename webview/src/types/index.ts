@@ -34,6 +34,7 @@ export type ClaudeContentBlock =
   | { type: 'thinking'; thinking?: string; text?: string }
   | { type: 'tool_use'; id?: string; name?: string; input?: ToolInput }
   | { type: 'image'; src?: string; mediaType?: string; alt?: string }
+  | { type: 'image_missing'; fileName?: string; mediaType?: string; originalPath?: string; reason?: string }
   | { type: 'attachment'; fileName?: string; mediaType?: string }
   | { type: 'task_notification'; icon: string; summary: string; status: string }
   | { type: 'compact_notification'; headerText: string; items: CompactNotificationItem[] }

@@ -29,6 +29,13 @@ function getImageStyle(isUser: boolean): React.CSSProperties {
   };
 }
 
+function getMissingImageCardStyle(isUser: boolean): React.CSSProperties {
+  return {
+    maxWidth: isUser ? '200px' : '320px',
+    minHeight: isUser ? '120px' : '140px',
+  };
+}
+
 function getFileIcon(mediaType?: string): string {
   if (!mediaType) return 'codicon-file';
   if (mediaType.startsWith('text/')) return 'codicon-file-text';
@@ -188,6 +195,26 @@ export function ContentBlockRenderer({
         </div>
         <ImagePreviewDialog image={previewImage} onClose={() => setPreviewImage(null)} />
       </>
+    );
+  }
+
+  if (block.type === 'image_missing') {
+    return (
+      <div
+        className={`message-image-block message-image-missing ${messageType === 'user' ? 'user-image' : ''}`}
+        style={getMissingImageCardStyle(messageType === 'user')}
+        title={block.originalPath || block.fileName || 'image'}
+      >
+        <div className="message-image-missing-icon">
+          <span className="codicon codicon-warning" />
+        </div>
+        <div className="message-image-missing-title">
+          {block.fileName || 'image'}
+        </div>
+        <div className="message-image-missing-text">
+          {t('chat.historyImageMissing')}
+        </div>
+      </div>
     );
   }
 

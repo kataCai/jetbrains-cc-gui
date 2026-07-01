@@ -50,6 +50,9 @@ public class SettingsHandler extends BaseMessageHandler {
         "get_usage_statistics",
         "get_working_directory",
         "set_working_directory",
+        "get_codex_history_image_cache_config",
+        "set_codex_history_image_cache_config",
+        "browse_codex_history_image_cache_dir",
         "get_editor_font_config",
         "get_ui_font_config",
         "set_ui_font_config",
@@ -209,6 +212,15 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "set_working_directory":
                 projectConfigHandler.handleSetWorkingDirectory(content);
+                return true;
+            case "get_codex_history_image_cache_config":
+                projectConfigHandler.handleGetCodexHistoryImageCacheConfig();
+                return true;
+            case "set_codex_history_image_cache_config":
+                projectConfigHandler.handleSetCodexHistoryImageCacheConfig(content);
+                return true;
+            case "browse_codex_history_image_cache_dir":
+                projectConfigHandler.handleBrowseCodexHistoryImageCacheDir();
                 return true;
             case "get_editor_font_config":
                 projectConfigHandler.handleGetEditorFontConfig();

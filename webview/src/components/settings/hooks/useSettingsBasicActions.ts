@@ -42,6 +42,11 @@ export interface UseSettingsBasicActionsReturn {
   savingClaudeCliPath: boolean;
   workingDirectory: string;
   savingWorkingDirectory: boolean;
+  codexHistoryImageCacheDir: string;
+  codexHistoryImageCacheResolvedDir: string;
+  codexHistoryImageCacheRetentionDays: number;
+  codexHistoryImageCacheMaxSizeMb: number;
+  savingCodexHistoryImageCache: boolean;
   editorFontConfig:
     | {
         fontFamily: string;
@@ -74,6 +79,9 @@ export interface UseSettingsBasicActionsReturn {
   handleSaveNodePath: () => void;
   handleSaveClaudeCliPath: () => void;
   handleSaveWorkingDirectory: () => void;
+  handleSaveCodexHistoryImageCacheConfig: () => void;
+  handleBrowseCodexHistoryImageCacheDir: () => void;
+  handleResetCodexHistoryImageCacheDir: () => void;
   handleUiFontSelectionChange: (selection: string) => void;
   handleSaveUiFontCustomPath: (path: string) => void;
   handleBrowseUiFontFile: () => void;
@@ -125,6 +133,11 @@ export interface UseSettingsBasicActionsReturn {
   setSavingClaudeCliPath: (saving: boolean) => void;
   setWorkingDirectory: (dir: string) => void;
   setSavingWorkingDirectory: (saving: boolean) => void;
+  setCodexHistoryImageCacheDir: (dir: string) => void;
+  setCodexHistoryImageCacheResolvedDir: (dir: string) => void;
+  setCodexHistoryImageCacheRetentionDays: (days: number) => void;
+  setCodexHistoryImageCacheMaxSizeMb: (size: number) => void;
+  setSavingCodexHistoryImageCache: (saving: boolean) => void;
   setEditorFontConfig: (
     config:
       | {
@@ -192,6 +205,11 @@ export function useSettingsBasicActions({
 
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [savingWorkingDirectory, setSavingWorkingDirectory] = useState(false);
+  const [codexHistoryImageCacheDir, setCodexHistoryImageCacheDir] = useState('');
+  const [codexHistoryImageCacheResolvedDir, setCodexHistoryImageCacheResolvedDir] = useState('');
+  const [codexHistoryImageCacheRetentionDays, setCodexHistoryImageCacheRetentionDays] = useState(30);
+  const [codexHistoryImageCacheMaxSizeMb, setCodexHistoryImageCacheMaxSizeMb] = useState(1024);
+  const [savingCodexHistoryImageCache, setSavingCodexHistoryImageCache] = useState(false);
 
   const [editorFontConfig, setEditorFontConfig] = useState<
     | {
@@ -296,6 +314,38 @@ export function useSettingsBasicActions({
     setSavingWorkingDirectory(true);
     sendToJava(`set_working_directory:${JSON.stringify({ customWorkingDir: (workingDirectory || '').trim() })}`);
   }, [workingDirectory]);
+
+  /**
+   * 保存 Codex 历史图片缓存配置。
+   * 这里把目录、保留天数和容量上限作为同一组配置一次性提交，避免用户分别保存后出现中间态。
+   */
+  const handleSaveCodexHistoryImageCacheConfig = useCallback(() => {
+    setSavingCodexHistoryImageCache(true);
+    sendToJava(`set_codex_history_image_cache_config:${JSON.stringify({
+      customDir: (codexHistoryImageCacheDir || '').trim(),
+      retentionDays: Math.max(1, Math.trunc(codexHistoryImageCacheRetentionDays || 0)),
+      maxSizeMb: Math.max(64, Math.trunc(codexHistoryImageCacheMaxSizeMb || 0)),
+    })}`);
+  }, [
+    codexHistoryImageCacheDir,
+    codexHistoryImageCacheMaxSizeMb,
+    codexHistoryImageCacheRetentionDays,
+  ]);
+
+  /**
+   * 打开目录选择器，仅回填输入框，不直接持久化。
+   */
+  const handleBrowseCodexHistoryImageCacheDir = useCallback(() => {
+    sendToJava('browse_codex_history_image_cache_dir:');
+  }, []);
+
+  /**
+   * 恢复到默认缓存目录。
+   * 真正写配置仍通过统一的保存按钮完成，避免“浏览自动保存、恢复默认自动保存”的交互不一致。
+   */
+  const handleResetCodexHistoryImageCacheDir = useCallback(() => {
+    setCodexHistoryImageCacheDir('');
+  }, []);
 
   const handleUiFontSelectionChange = useCallback((selection: string) => {
     if (selection === 'followEditor') {
@@ -611,6 +661,16 @@ export function useSettingsBasicActions({
     setWorkingDirectory,
     savingWorkingDirectory,
     setSavingWorkingDirectory,
+    codexHistoryImageCacheDir,
+    setCodexHistoryImageCacheDir,
+    codexHistoryImageCacheResolvedDir,
+    setCodexHistoryImageCacheResolvedDir,
+    codexHistoryImageCacheRetentionDays,
+    setCodexHistoryImageCacheRetentionDays,
+    codexHistoryImageCacheMaxSizeMb,
+    setCodexHistoryImageCacheMaxSizeMb,
+    savingCodexHistoryImageCache,
+    setSavingCodexHistoryImageCache,
     editorFontConfig,
     setEditorFontConfig,
     uiFontConfig,
@@ -639,6 +699,9 @@ export function useSettingsBasicActions({
     handleSaveNodePath,
     handleSaveClaudeCliPath,
     handleSaveWorkingDirectory,
+    handleSaveCodexHistoryImageCacheConfig,
+    handleBrowseCodexHistoryImageCacheDir,
+    handleResetCodexHistoryImageCacheDir,
     handleUiFontSelectionChange,
     handleSaveUiFontCustomPath,
     handleBrowseUiFontFile,

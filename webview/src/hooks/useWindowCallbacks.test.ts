@@ -121,6 +121,10 @@ describe('useWindowCallbacks integration', () => {
     window.__sessionTransitionToken = null;
     window.__pendingSessionTransitionToast = undefined;
     window.__deniedToolIds = new Set();
+    window.__preparedHistoryRestoreKey = null;
+    window.__preparedHistoryRestoreSignature = null;
+    window.__lastAppliedHistoryRestoreKey = null;
+    window.__lastAppliedHistoryRestoreSignature = null;
     window.sendToJava = vi.fn();
   });
 
@@ -319,6 +323,90 @@ describe('useWindowCallbacks integration', () => {
 
     // setMessages SHOULD be called
     expect(opts.setMessages).toHaveBeenCalled();
+  });
+
+  it('ignores duplicate history snapshot when restore key and snapshot signature are unchanged', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const restoredMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: 'Paste images',
+        timestamp: '2026-06-29T12:00:00.000Z',
+        raw: {
+          message: {
+            content: [
+              { type: 'image', src: 'data:image/png;base64,AAAA', mediaType: 'image/png', alt: 'diagram.png' },
+              { type: 'text', text: 'Paste images' },
+            ],
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-001');
+      window.updateMessages!(JSON.stringify(restoredMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-001');
+      window.updateMessages!(JSON.stringify(restoredMessages));
+    });
+
+    expect(opts.setMessages).not.toHaveBeenCalled();
+  });
+
+  it('accepts history snapshot again when snapshot signature changes under the same restore key', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const firstMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: 'Paste images',
+        timestamp: '2026-06-29T12:00:00.000Z',
+        raw: {
+          message: {
+            content: [
+              { type: 'image', src: 'data:image/png;base64,AAAA', mediaType: 'image/png', alt: 'diagram.png' },
+              { type: 'text', text: 'Paste images' },
+            ],
+          },
+        } as any,
+      },
+    ];
+    const secondMessages: ClaudeMessage[] = [
+      {
+        ...firstMessages[0],
+        raw: {
+          message: {
+            content: [
+              { type: 'image', src: 'data:image/png;base64,BBBB', mediaType: 'image/png', alt: 'diagram.png' },
+              { type: 'text', text: 'Paste images' },
+            ],
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-001');
+      window.updateMessages!(JSON.stringify(firstMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-002');
+      window.updateMessages!(JSON.stringify(secondMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(2);
   });
 
   it('patchMessageUuid updates the latest unresolved user message using raw text fallback', () => {

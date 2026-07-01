@@ -2,10 +2,12 @@ package com.github.claudecodegui.handler;
 
 import org.junit.Test;
 
+import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.Transferable;
 import java.awt.image.BufferedImage;
+import java.lang.reflect.Method;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -114,5 +116,31 @@ public class ClipboardHandlerTest {
         assertTrue(transferable.isDataFlavorSupported(ClipboardHandler.RICH_JSON_FLAVOR));
         assertEquals("plain text", transferable.getTransferData(DataFlavor.stringFlavor));
         assertEquals(image, transferable.getTransferData(DataFlavor.imageFlavor));
+    }
+
+    /**
+     * 验证右键 Paste 读取系统原生文本剪贴板时，也会被统一包装成 rich payload。
+     * 断言意图：
+     * 1. 不再退回旧的纯文本 read_clipboard 协议；
+     * 2. 至少会补出文本块对应的 `orderedBlocks`，供前端统一走富回贴恢复链路。
+     */
+    @Test
+    public void readClipboardRichPayloadBuildsFallbackOrderedBlocksForPlainTextClipboard() throws Exception {
+        Clipboard clipboard = new Clipboard("unit-test");
+        clipboard.setContents(new StringSelection("plain text"), null);
+
+        Method method = ClipboardHandler.class.getDeclaredMethod("readClipboardRichPayload", Clipboard.class);
+        method.setAccessible(true);
+
+        ClipboardHandler handler = new ClipboardHandler(null);
+        ClipboardHandler.ClipboardRichPayload payload =
+                (ClipboardHandler.ClipboardRichPayload) method.invoke(handler, clipboard);
+
+        assertNotNull(payload);
+        assertEquals("plain text", payload.text);
+        assertNotNull(payload.orderedBlocks);
+        assertEquals(1, payload.orderedBlocks.length);
+        assertEquals("text", payload.orderedBlocks[0].type);
+        assertEquals("plain text", payload.orderedBlocks[0].text);
     }
 }

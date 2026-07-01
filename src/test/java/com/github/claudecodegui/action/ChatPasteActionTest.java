@@ -70,6 +70,28 @@ public class ChatPasteActionTest {
     }
 
     /**
+     * 验证富剪贴板脚本只派发统一 rich paste 事件，不再依赖 window.onClipboardRead 纯文本回调。
+     * 该断言用于保护右键 Paste 与快捷键 Paste 复用同一图文恢复协议，避免实现再次退回到文本专用桥接。
+     */
+    @Test
+    public void buildRichPasteScriptDoesNotDependOnClipboardReadCallback() throws Exception {
+        Method method = ChatPasteAction.class.getDeclaredMethod(
+                "buildRichPasteScript",
+                ClipboardHandler.ClipboardRichPayload.class
+        );
+        method.setAccessible(true);
+
+        ClipboardHandler.ClipboardRichPayload payload = new ClipboardHandler.ClipboardRichPayload();
+        payload.text = "hello";
+
+        String script = (String) method.invoke(null, payload);
+
+        assertNotNull(script);
+        assertTrue(script.contains("java-paste-rich-content"));
+        assertFalse(script.contains("window.onClipboardRead"));
+    }
+
+    /**
      * 验证纯文本场景不会误派发图片事件。
      * 该断言用于保护现有纯文本粘贴路径，避免修复图文消息后引入文本粘贴回退。
      */

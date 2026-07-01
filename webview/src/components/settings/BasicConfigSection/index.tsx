@@ -35,6 +35,17 @@ interface BasicConfigSectionProps {
   onWorkingDirectoryChange?: (dir: string) => void;
   onSaveWorkingDirectory?: () => void;
   savingWorkingDirectory?: boolean;
+  codexHistoryImageCacheDir?: string;
+  codexHistoryImageCacheResolvedDir?: string;
+  codexHistoryImageCacheRetentionDays?: number;
+  codexHistoryImageCacheMaxSizeMb?: number;
+  onCodexHistoryImageCacheDirChange?: (dir: string) => void;
+  onCodexHistoryImageCacheRetentionDaysChange?: (days: number) => void;
+  onCodexHistoryImageCacheMaxSizeMbChange?: (size: number) => void;
+  onBrowseCodexHistoryImageCacheDir?: () => void;
+  onResetCodexHistoryImageCacheDir?: () => void;
+  onSaveCodexHistoryImageCacheConfig?: () => void;
+  savingCodexHistoryImageCache?: boolean;
   editorFontConfig?: {
     fontFamily: string;
     fontSize: number;
@@ -187,6 +198,17 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onWorkingDirectoryChange={props.onWorkingDirectoryChange}
           onSaveWorkingDirectory={props.onSaveWorkingDirectory}
           savingWorkingDirectory={props.savingWorkingDirectory}
+          codexHistoryImageCacheDir={props.codexHistoryImageCacheDir}
+          codexHistoryImageCacheResolvedDir={props.codexHistoryImageCacheResolvedDir}
+          codexHistoryImageCacheRetentionDays={props.codexHistoryImageCacheRetentionDays}
+          codexHistoryImageCacheMaxSizeMb={props.codexHistoryImageCacheMaxSizeMb}
+          onCodexHistoryImageCacheDirChange={props.onCodexHistoryImageCacheDirChange}
+          onCodexHistoryImageCacheRetentionDaysChange={props.onCodexHistoryImageCacheRetentionDaysChange}
+          onCodexHistoryImageCacheMaxSizeMbChange={props.onCodexHistoryImageCacheMaxSizeMbChange}
+          onBrowseCodexHistoryImageCacheDir={props.onBrowseCodexHistoryImageCacheDir}
+          onResetCodexHistoryImageCacheDir={props.onResetCodexHistoryImageCacheDir}
+          onSaveCodexHistoryImageCacheConfig={props.onSaveCodexHistoryImageCacheConfig}
+          savingCodexHistoryImageCache={props.savingCodexHistoryImageCache}
         />
       )}
     </div>

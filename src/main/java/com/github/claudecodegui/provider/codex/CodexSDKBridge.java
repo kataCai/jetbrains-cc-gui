@@ -20,7 +20,6 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +55,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
     private static final int MAX_ENV_VAR_VALUE_LENGTH = 16 * 1024;
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
     private final CodexHistoryReader historyReader;
+    private final CodexHistoryImageCacheService historyImageCacheService = new CodexHistoryImageCacheService();
     private final CodemossSettingsService settingsService = new CodemossSettingsService();
 
     private static final Set<String> PROTECTED_ENV_KEYS = new HashSet<>();
@@ -517,8 +517,6 @@ public class CodexSDKBridge extends BaseSDKBridge {
             StringBuilder assistantContent = new StringBuilder();
             AtomicReference<String> lastNodeError = new AtomicReference<>(null);
             AtomicBoolean hadSendError = new AtomicBoolean(false);
-            final List<File> tempImageFiles = new ArrayList<>();  // Track temp images for cleanup
-
             try {
                 String accessMode = CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE;
                 try {
@@ -590,7 +588,7 @@ public class CodexSDKBridge extends BaseSDKBridge {
 
                 // Process attachments for Codex (images need to be saved as temp files)
                 // Codex SDK requires local file paths, not base64 data
-                JsonArray attachmentsArray = buildCodexAttachments(attachments, tempImageFiles);
+                JsonArray attachmentsArray = buildCodexAttachments(attachments, threadId);
                 if (attachmentsArray.size() > 0) {
                     stdinInput.add("attachments", attachmentsArray);
                     LOG.info("[Codex] ✓ Prepared " + attachmentsArray.size() + " image attachment(s)");
@@ -765,14 +763,12 @@ public class CodexSDKBridge extends BaseSDKBridge {
                 } finally {
                     processManager.unregisterProcess(channelId, process);
                     processManager.waitForProcessTermination(process);
-                    cleanupTempImages(tempImageFiles);  // Cleanup temp image files
                 }
 
             } catch (Exception e) {
                 result.success = false;
                 result.error = e.getMessage();
                 callback.onError(e.getMessage());
-                cleanupTempImages(tempImageFiles);  // Cleanup temp image files on error
                 return result;
             }
         });
@@ -981,67 +977,42 @@ public class CodexSDKBridge extends BaseSDKBridge {
      * Files are marked for deletion on JVM exit and tracked for cleanup after message send.
      *
      * @param attachments List of attachments from the UI
-     * @param tempFiles List to collect temp files for cleanup after send (optional, can be null)
+     * @param sessionId 当前消息所属的 Codex 会话标识，仅用于日志辅助
      * @return JsonArray with local_image entries for Codex SDK
      */
-    private JsonArray buildCodexAttachments(List<ClaudeSession.Attachment> attachments, List<File> tempFiles) {
+    private JsonArray buildCodexAttachments(List<ClaudeSession.Attachment> attachments, String sessionId) {
         JsonArray result = new JsonArray();
 
         if (attachments == null || attachments.isEmpty()) {
             return result;
         }
-
-        // Use system temp directory (clean, no project pollution)
-        File tempDir = new File(System.getProperty("java.io.tmpdir"), "codex-images");
-
-        // Create temp directory if not exists
-        if (!tempDir.exists()) {
-            tempDir.mkdirs();
-        }
-
+        int imageOrder = 0;
         for (ClaudeSession.Attachment attachment : attachments) {
             if (attachment == null) { continue; }
 
             String type = attachment.mediaType;
-            String data = attachment.data;
 
             // Only process image types
-            if (type == null || !type.startsWith("image/") || data == null) {
+            if (type == null || !type.startsWith("image/") || attachment.data == null) {
                 LOG.debug("[Codex] Skipping non-image attachment: " + type);
                 continue;
             }
 
             try {
-                // Determine file extension from MIME type
-                String extension = getImageExtension(type);
-
-                // Generate unique filename
-                String filename = "codex-img-" + System.currentTimeMillis() + "-" +
-                                  java.util.UUID.randomUUID().toString().substring(0, 8) + extension;
-                File imageFile = new File(tempDir, filename);
-
-                // Decode base64 and write to file
-                byte[] imageBytes = java.util.Base64.getDecoder().decode(data);
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(imageFile)) {
-                    fos.write(imageBytes);
+                CodexHistoryImageCacheService.CacheWriteResult cacheResult =
+                        historyImageCacheService.cacheAttachment(attachment, sessionId, imageOrder);
+                Path imagePath = cacheResult.getPath();
+                if (!cacheResult.isHistoryReplayGuaranteed()) {
+                    LOG.warn("[Codex] Image attachment fell back to temp cache directory, "
+                            + "history replay may not be guaranteed: " + imagePath);
                 }
-
-                // Mark for deletion on JVM exit (fallback cleanup)
-                imageFile.deleteOnExit();
-
-                // Track for immediate cleanup after send
-                if (tempFiles != null) {
-                    tempFiles.add(imageFile);
-                }
-
-                LOG.info("[Codex] Saved temp image: " + imageFile.getAbsolutePath() +
-                         " (" + imageBytes.length + " bytes, will auto-delete)");
 
                 // Add to result array in Codex SDK format
                 JsonObject imageEntry = new JsonObject();
                 imageEntry.addProperty("type", "local_image");
-                imageEntry.addProperty("path", imageFile.getAbsolutePath());
+                imageEntry.addProperty("path", imagePath.toAbsolutePath().normalize().toString());
                 result.add(imageEntry);
+                imageOrder++;
 
             } catch (Exception e) {
                 LOG.warn("[Codex] Failed to process image attachment: " + e.getMessage());
@@ -1049,48 +1020,6 @@ public class CodexSDKBridge extends BaseSDKBridge {
         }
 
         return result;
-    }
-
-    /**
-     * Cleanup temporary image files after message send.
-     */
-    private void cleanupTempImages(List<File> tempFiles) {
-        if (tempFiles == null || tempFiles.isEmpty()) {
-            return;
-        }
-        for (File file : tempFiles) {
-            try {
-                if (file.exists() && file.delete()) {
-                    LOG.debug("[Codex] Cleaned up temp image: " + file.getName());
-                }
-            } catch (Exception e) {
-                LOG.debug("[Codex] Failed to cleanup temp image: " + e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * Get file extension from MIME type.
-     */
-    private String getImageExtension(String mimeType) {
-        if (mimeType == null) { return ".png"; }
-
-        switch (mimeType.toLowerCase()) {
-            case "image/jpeg":
-            case "image/jpg":
-                return ".jpg";
-            case "image/gif":
-                return ".gif";
-            case "image/webp":
-                return ".webp";
-            case "image/bmp":
-                return ".bmp";
-            case "image/svg+xml":
-                return ".svg";
-            case "image/png":
-            default:
-                return ".png";
-        }
     }
 
     private String extractAssistantText(JsonObject msg) {

@@ -136,30 +136,20 @@ export function cutSelection(
   document.execCommand('delete');
 }
 
-/** Paste clipboard text at saved range via Java bridge */
+/**
+ * 通过 Java 侧富剪贴板桥接在保存的选区位置恢复图文内容。
+ * 右键 Paste 需要与快捷键 Paste 复用同一 `java-paste-rich-content` 协议，
+ * 避免继续退回旧的 `read_clipboard` 纯文本链路，导致图片或多图顺序静默丢失。
+ *
+ * @param savedRange 右键菜单打开时保存的选区
+ * @param el 当前输入框元素
+ * @param onComplete 粘贴请求发出后的同步回调，用于维持现有输入联动
+ */
 export function pasteAtCursor(savedRange: Range | null, el: HTMLElement, onComplete?: () => void): void {
-  // Capture handler reference so timeout only clears its own registration,
-  // preventing accidental cancellation of a concurrent paste call.
-  const handler = (text: string) => {
-    clearTimeout(timeoutId);
-    if (window.onClipboardRead === handler) {
-      window.onClipboardRead = undefined;
-    }
-    if (!text || !el.isConnected) return;
-    el.focus();
-    restoreRange(savedRange);
-    document.execCommand('insertText', false, text);
-    onComplete?.();
-  };
-
-  const timeoutId = setTimeout(() => {
-    if (window.onClipboardRead === handler) {
-      window.onClipboardRead = undefined;
-    }
-  }, 3000);
-
-  window.onClipboardRead = handler;
-  sendToJava('read_clipboard', '');
+  el.focus();
+  restoreRange(savedRange);
+  onComplete?.();
+  sendToJava('read_clipboard_rich', '');
 }
 
 /**

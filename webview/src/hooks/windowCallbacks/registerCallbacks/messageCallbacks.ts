@@ -132,6 +132,43 @@ export function registerMessageCallbacks(
   let pendingUpdateRaf: number | null = null;
   let pendingUpdateSequence: number | null = null;
 
+  /**
+   * 清理当前待消费的历史恢复快照上下文。
+   * 该上下文只对下一次历史 `updateMessages` 生效，消费完成或恢复链路结束后都应立即清空，
+   * 避免后续普通消息刷新误命中历史快照幂等判断。
+   */
+  const clearPreparedHistoryRestoreSnapshot = () => {
+    window.__preparedHistoryRestoreKey = null;
+    window.__preparedHistoryRestoreSignature = null;
+  };
+
+  /**
+   * 读取并消费后端刚刚准备好的历史恢复快照上下文。
+   *
+   * @return 若当前 `updateMessages` 属于历史恢复快照，则返回 restore key 与 snapshot signature
+   */
+  const consumePreparedHistoryRestoreSnapshot = (): {
+    restoreKey: string;
+    snapshotSignature: string;
+  } | null => {
+    const restoreKey = window.__preparedHistoryRestoreKey;
+    const snapshotSignature = window.__preparedHistoryRestoreSignature;
+    clearPreparedHistoryRestoreSnapshot();
+    if (!restoreKey || !snapshotSignature) {
+      return null;
+    }
+    return { restoreKey, snapshotSignature };
+  };
+
+  window.prepareHistoryRestoreSnapshot = (restoreKey, snapshotSignature) => {
+    window.__preparedHistoryRestoreKey = restoreKey || null;
+    window.__preparedHistoryRestoreSignature = snapshotSignature || null;
+    console.info('[HistoryRestore][Frontend] prepared snapshot context', {
+      restoreKey: window.__preparedHistoryRestoreKey,
+      snapshotSignature: window.__preparedHistoryRestoreSignature,
+    });
+  };
+
   const cancelPendingUpdateMessages = () => {
     if (pendingUpdateRaf !== null) {
       cancelAnimationFrame(pendingUpdateRaf);
@@ -151,10 +188,32 @@ export function registerMessageCallbacks(
       return;
     }
 
+    const preparedHistoryRestore = !isStreamingRef.current
+      ? consumePreparedHistoryRestoreSnapshot()
+      : null;
+    if (
+      preparedHistoryRestore
+      && window.__lastAppliedHistoryRestoreKey === preparedHistoryRestore.restoreKey
+      && window.__lastAppliedHistoryRestoreSignature === preparedHistoryRestore.snapshotSignature
+    ) {
+      console.info('[HistoryRestore][Frontend] skip duplicate snapshot', preparedHistoryRestore);
+      return;
+    }
+
     try {
       const parsed = JSON.parse(json) as ClaudeMessage[];
       if (sequence != null) {
         window.__minAcceptedUpdateSequence = Math.max(minAcceptedSequence, sequence);
+      }
+      if (preparedHistoryRestore) {
+        // 仅在成功解析并准备真正应用本次快照时，才记录“最后一次已落地的历史恢复快照”。
+        window.__lastAppliedHistoryRestoreKey = preparedHistoryRestore.restoreKey;
+        window.__lastAppliedHistoryRestoreSignature = preparedHistoryRestore.snapshotSignature;
+        console.info('[HistoryRestore][Frontend] apply snapshot', {
+          restoreKey: preparedHistoryRestore.restoreKey,
+          snapshotSignature: preparedHistoryRestore.snapshotSignature,
+          messageCount: parsed.length,
+        });
       }
 
       setMessages((prev) => {
@@ -518,6 +577,7 @@ export function registerMessageCallbacks(
       window.__pendingUpdateSequence = null;
     }
     window.__deniedToolIds?.clear();
+    clearPreparedHistoryRestoreSnapshot();
     resetTransientUiState();
     closeContextUsageDialog();
     setMessages([]);

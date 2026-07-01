@@ -74,6 +74,11 @@ public class CodemossSettingsService {
     private static final String CODEX_LAST_REASONING_EFFORT_KEY = "lastReasoningEffort";
     private static final String CODEX_MODEL_SOURCE_KEY = "source";
     private static final String CODEX_MODEL_RUNNABLE_KEY = "runnable";
+    private static final String CODEX_CONFIG_KEY = "codex";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_KEY = "historyImageCache";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY = "customDir";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY = "retentionDays";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY = "maxSizeMb";
     private static final String AI_FEATURE_PROVIDER_KEY = "provider";
     private static final String AI_FEATURE_MODELS_KEY = "models";
     private static final String AI_FEATURE_EFFECTIVE_PROVIDER_KEY = "effectiveProvider";
@@ -89,6 +94,12 @@ public class CodemossSettingsService {
     private static final String DEFAULT_COMMIT_AI_CLAUDE_MODEL = "claude-sonnet-4-6";
     private static final String DEFAULT_COMMIT_AI_CODEX_MODEL = "gpt-5.5";
     private static final String USER_LANGUAGE_CONFIG_KEY = "language";
+    public static final int DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS = 30;
+    public static final int DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB = 1024;
+    public static final int MIN_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS = 1;
+    public static final int MAX_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS = 365;
+    public static final int MIN_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB = 64;
+    public static final int MAX_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB = 10 * 1024;
 
     private final Gson gson;
 
@@ -309,7 +320,8 @@ public class CodemossSettingsService {
         codex.add("providers", new JsonObject());
         codex.add(CODEX_MODEL_DISPLAY_KEY, new JsonObject());
         codex.addProperty("localConfigAuthorized", false);
-        config.add("codex", codex);
+        codex.add(CODEX_HISTORY_IMAGE_CACHE_KEY, createDefaultCodexHistoryImageCacheConfig());
+        config.add(CODEX_CONFIG_KEY, codex);
 
         config.add(TASK_REMINDER_KEY, createDefaultTaskReminderConfig());
         config.add(REMOTE_COLLAB_KEY, createDefaultRemoteCollabConfig());
@@ -541,6 +553,47 @@ public class CodemossSettingsService {
                 + ", customFontPath=" + customFontPath);
     }
 
+    // ==================== Codex History Image Cache Config Management ====================
+
+    /**
+     * 读取 Codex 历史图片缓存配置。
+     * <p>
+     * 配置存放在 `config.json -> codex.historyImageCache`，并在读取时统一补齐默认值与范围校验，
+     * 避免设置页、缓存写入服务和清理逻辑各自散落默认值。
+     *
+     * @return 归一化后的缓存配置对象
+     * @throws IOException 配置文件读取失败时抛出
+     */
+    public JsonObject getCodexHistoryImageCacheConfig() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        if (!codex.has(CODEX_HISTORY_IMAGE_CACHE_KEY) || !codex.get(CODEX_HISTORY_IMAGE_CACHE_KEY).isJsonObject()) {
+            return createDefaultCodexHistoryImageCacheConfig();
+        }
+        return normalizeCodexHistoryImageCacheConfig(codex.getAsJsonObject(CODEX_HISTORY_IMAGE_CACHE_KEY));
+    }
+
+    /**
+     * 持久化 Codex 历史图片缓存配置。
+     *
+     * @param customDir 用户自定义缓存目录；空串表示恢复默认目录
+     * @param retentionDays 缓存保留天数
+     * @param maxSizeMb 缓存容量上限，单位 MB
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void setCodexHistoryImageCacheConfig(String customDir, int retentionDays, int maxSizeMb) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        codex.add(
+                CODEX_HISTORY_IMAGE_CACHE_KEY,
+                createCodexHistoryImageCacheConfig(customDir, retentionDays, maxSizeMb)
+        );
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Updated Codex history image cache config: customDir=" + customDir
+                + ", retentionDays=" + retentionDays
+                + ", maxSizeMb=" + maxSizeMb);
+    }
+
     // ==================== Permission Dialog Timeout Config Management ====================
 
     public static final int DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS =
@@ -601,6 +654,76 @@ public class CodemossSettingsService {
         return uiFont;
     }
 
+    /**
+     * 构造默认的 Codex 历史图片缓存配置。
+     */
+    private JsonObject createDefaultCodexHistoryImageCacheConfig() {
+        return createCodexHistoryImageCacheConfig(
+                "",
+                DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS,
+                DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB
+        );
+    }
+
+    /**
+     * 归一化 Codex 历史图片缓存配置，统一裁剪非法目录与数值范围。
+     */
+    private JsonObject normalizeCodexHistoryImageCacheConfig(JsonObject rawConfig) {
+        if (rawConfig == null) {
+            return createDefaultCodexHistoryImageCacheConfig();
+        }
+        String customDir = rawConfig.has(CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY)
+                && !rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY).isJsonNull()
+                ? rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY).getAsString()
+                : "";
+        int retentionDays = rawConfig.has(CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY)
+                && !rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY).isJsonNull()
+                ? rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY).getAsInt()
+                : DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS;
+        int maxSizeMb = rawConfig.has(CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY)
+                && !rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY).isJsonNull()
+                ? rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY).getAsInt()
+                : DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB;
+        return createCodexHistoryImageCacheConfig(customDir, retentionDays, maxSizeMb);
+    }
+
+    /**
+     * 构造可落盘的 Codex 历史图片缓存配置对象。
+     */
+    private JsonObject createCodexHistoryImageCacheConfig(String customDir, int retentionDays, int maxSizeMb) {
+        JsonObject cacheConfig = new JsonObject();
+        cacheConfig.addProperty(
+                CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY,
+                normalizeString(customDir, "")
+        );
+        cacheConfig.addProperty(
+                CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY,
+                clampCodexHistoryImageCacheRetentionDays(retentionDays)
+        );
+        cacheConfig.addProperty(
+                CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY,
+                clampCodexHistoryImageCacheMaxSizeMb(maxSizeMb)
+        );
+        return cacheConfig;
+    }
+
+    private int clampCodexHistoryImageCacheRetentionDays(int retentionDays) {
+        return Math.max(
+                MIN_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS,
+                Math.min(MAX_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS, retentionDays)
+        );
+    }
+
+    private int clampCodexHistoryImageCacheMaxSizeMb(int maxSizeMb) {
+        return Math.max(
+                MIN_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB,
+                Math.min(MAX_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB, maxSizeMb)
+        );
+    }
+
+    /**
+     * 确保 codex 根配置对象存在。
+     */
     private JsonObject normalizeUiFontConfig(JsonObject rawConfig) {
         if (rawConfig == null) {
             return createDefaultUiFontConfig();

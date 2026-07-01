@@ -3,6 +3,8 @@
     "ready": "Ready",
     "loading": "Loading",
     "save": "Save",
+    "browse": "Browse",
+    "reset": "Reset",
     "cancel": "Cancel",
     "confirm": "Confirm",
     "delete": "Delete",
@@ -33,6 +35,7 @@
     "uploadedFiles": "Uploaded files: {{files}}",
     "emptyMessage": "Empty message",
     "clickToPreview": "Click to preview",
+    "historyImageMissing": "Image cache expired. Preview unavailable.",
     "userUploadedImage": "User uploaded image",
     "inputPlaceholder": "@reference files, #invoke agents, !insert prompts, Enter to send",
     "inputPlaceholderEnter": "@reference files, #invoke agents, !insert prompts, Enter to send",
@@ -184,6 +187,13 @@
         "label": "Working Directory",
         "placeholder": "e.g. project1 or leave empty to use project root",
         "hint": "Specify the directory where Claude works. Can use relative path (relative to project root) or absolute path. Leave empty to use project root."
+      },
+      "codexHistoryImageCache": {
+        "label": "Codex History Image Cache",
+        "dirPlaceholder": "Optional: custom directory for Codex history image cache",
+        "retentionDays": "Retention Days",
+        "maxSizeMb": "Max Size (MB)",
+        "hint": "Used to replay historical Codex images and restore image attachments when copying history back to the chat input. Effective default directory:"
       },
       "fontSize": {
         "label": "Font Size",

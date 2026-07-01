@@ -4,7 +4,7 @@ vi.mock('../utils/bridge.js', () => ({
 
 import { act, renderHook } from '@testing-library/react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { cutSelection, useContextMenu } from './useContextMenu.js';
+import { cutSelection, pasteAtCursor, useContextMenu } from './useContextMenu.js';
 import { sendToJava } from '../utils/bridge.js';
 
 function mockSelection(options?: {
@@ -122,5 +122,28 @@ describe('useContextMenu', () => {
     expect(focusSpy).toHaveBeenCalled();
     expect(selection.removeAllRanges).toHaveBeenCalled();
     expect(selection.addRange).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 验证右键 Paste 会先恢复保存的选区，再通过 Java 侧 rich 剪贴板协议请求统一粘贴。
+   * 该断言用于覆盖“右键菜单只能走纯文本 read_clipboard”这一旧行为，确保后续实现不会回退到文本专用链路。
+   */
+  it('requests rich clipboard paste after restoring saved range', () => {
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    const focusSpy = vi.spyOn(editable, 'focus').mockImplementation(() => {});
+    const savedRange = document.createRange();
+    const selection = {
+      removeAllRanges: vi.fn(),
+      addRange: vi.fn(),
+    };
+    vi.spyOn(window, 'getSelection').mockReturnValue(selection as unknown as Selection);
+
+    pasteAtCursor(savedRange, editable, vi.fn());
+
+    expect(focusSpy).toHaveBeenCalled();
+    expect(selection.removeAllRanges).toHaveBeenCalledTimes(1);
+    expect(selection.addRange).toHaveBeenCalledWith(savedRange);
+    expect(sendToJava).toHaveBeenCalledWith('read_clipboard_rich', '');
   });
 });

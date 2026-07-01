@@ -7,6 +7,7 @@ import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.action.SendShortcutSync;
 import com.github.claudecodegui.provider.claude.ClaudeHistoryReader;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
+import com.github.claudecodegui.provider.codex.CodexHistoryImageCacheService;
 import com.github.claudecodegui.util.FontConfigService;
 import com.github.claudecodegui.util.ThemeConfigService;
 import com.google.gson.Gson;
@@ -19,6 +20,7 @@ import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import java.nio.file.Path;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -33,11 +35,13 @@ public class ProjectConfigHandler {
 
     private final HandlerContext context;
     private final CodemossSettingsService settingsService;
+    private final CodexHistoryImageCacheService codexHistoryImageCacheService;
     private final Gson gson = new Gson();
 
     public ProjectConfigHandler(HandlerContext context) {
         this.context = context;
         this.settingsService = context.getSettingsService();
+        this.codexHistoryImageCacheService = new CodexHistoryImageCacheService();
     }
 
     // ---- Internal helpers --------------------------------------------------
@@ -195,6 +199,77 @@ public class ProjectConfigHandler {
         }
     }
 
+    /**
+     * 读取 Codex 历史图片缓存配置，并回推给设置页。
+     * 前端除了需要用户显式配置值，还需要拿到默认解析目录用于说明展示，因此这里额外补充 resolvedDir。
+     */
+    public void handleGetCodexHistoryImageCacheConfig() {
+        respondWithJson(
+                "window.updateCodexHistoryImageCacheConfig",
+                this::buildCodexHistoryImageCacheResponse,
+                buildDefaultCodexHistoryImageCacheResponse(),
+                "Failed to get Codex history image cache config"
+        );
+    }
+
+    /**
+     * 持久化 Codex 历史图片缓存配置。
+     * 保存成功后会立刻触发一次清理，让新的 TTL / 容量上限尽快生效，但仍不回退到“发送后即删”的模式。
+     *
+     * @param content 前端提交的缓存配置 JSON
+     */
+    public void handleSetCodexHistoryImageCacheConfig(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            String customDir = readString(json, "customDir", "");
+            int retentionDays = json != null && json.has("retentionDays") && !json.get("retentionDays").isJsonNull()
+                    ? json.get("retentionDays").getAsInt()
+                    : CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS;
+            int maxSizeMb = json != null && json.has("maxSizeMb") && !json.get("maxSizeMb").isJsonNull()
+                    ? json.get("maxSizeMb").getAsInt()
+                    : CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB;
+
+            if (customDir != null && !customDir.isBlank()) {
+                java.io.File directory = new java.io.File(customDir);
+                if (directory.exists() && !directory.isDirectory()) {
+                    showError("Codex history image cache path is not a directory: " + directory.getAbsolutePath());
+                    return;
+                }
+            }
+
+            settingsService.setCodexHistoryImageCacheConfig(customDir, retentionDays, maxSizeMb);
+            codexHistoryImageCacheService.cleanupCache();
+            pushJson("window.updateCodexHistoryImageCacheConfig", buildCodexHistoryImageCacheResponse());
+            showSuccess("Codex history image cache config saved");
+        } catch (Exception e) {
+            LOG.error("[ProjectConfigHandler] Failed to save Codex history image cache config: " + e.getMessage(), e);
+            showError("Failed to save Codex history image cache config: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 打开目录选择器，让用户选择 Codex 历史图片缓存目录。
+     * 浏览动作只回填输入框，不直接写配置，保持与环境页其他路径项相同的“浏览后显式保存”交互。
+     */
+    public void handleBrowseCodexHistoryImageCacheDir() {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            try {
+                FileChooserDescriptor descriptor = new FileChooserDescriptor(false, true, false, false, false, false)
+                        .withTitle("Select Codex History Image Cache Directory")
+                        .withDescription("Choose a directory used to persist Codex history images");
+                FileChooser.chooseFile(
+                        descriptor,
+                        context.getProject(),
+                        resolveCurrentCodexHistoryImageCacheDir(),
+                        selected -> pushJson("window.onCodexHistoryImageCacheDirBrowsed", jsonOf("path", selected.getPath()))
+                );
+            } catch (Exception e) {
+                LOG.error("[ProjectConfigHandler] Failed to browse Codex history image cache directory: " + e.getMessage(), e);
+                showError("Failed to browse Codex history image cache directory: " + e.getMessage());
+            }
+        });
+    }
+
     public void handleGetStreamingEnabled() {
         respondWithJson("window.updateStreamingEnabled",
             () -> {
@@ -254,6 +329,33 @@ public class ProjectConfigHandler {
             settingsService::setAutoOpenFileEnabled,
             "window.updateAutoOpenFileEnabled",
             "Failed to save auto open file config");
+    }
+
+    /**
+     * 构造设置页消费的 Codex 历史图片缓存配置响应。
+     */
+    private JsonObject buildCodexHistoryImageCacheResponse() throws Exception {
+        JsonObject persisted = settingsService.getCodexHistoryImageCacheConfig();
+        JsonObject response = new JsonObject();
+        String customDir = readString(persisted, "customDir", "");
+        String resolvedDir = resolveEffectiveCodexHistoryImageCacheDir().toAbsolutePath().normalize().toString();
+        response.addProperty("customDir", customDir);
+        response.addProperty("retentionDays", persisted.get("retentionDays").getAsInt());
+        response.addProperty("maxSizeMb", persisted.get("maxSizeMb").getAsInt());
+        response.addProperty("resolvedDir", resolvedDir);
+        return response;
+    }
+
+    /**
+     * 构造设置页兜底配置，避免读取异常时前端状态为空。
+     */
+    private JsonObject buildDefaultCodexHistoryImageCacheResponse() {
+        JsonObject response = new JsonObject();
+        response.addProperty("customDir", "");
+        response.addProperty("retentionDays", CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS);
+        response.addProperty("maxSizeMb", CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB);
+        response.addProperty("resolvedDir", codexHistoryImageCacheService.getDefaultCacheDirectory().toAbsolutePath().normalize().toString());
+        return response;
     }
 
     public void handleGetPermissionDialogTimeout() {
@@ -553,6 +655,29 @@ public class ProjectConfigHandler {
             LOG.warn("[ProjectConfigHandler] Failed to resolve current custom font path: " + e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * 解析目录选择器的当前初始目录。
+     */
+    private VirtualFile resolveCurrentCodexHistoryImageCacheDir() {
+        try {
+            return LocalFileSystem.getInstance().findFileByPath(
+                    resolveEffectiveCodexHistoryImageCacheDir().toAbsolutePath().normalize().toString()
+            );
+        } catch (Exception ignored) {
+            return LocalFileSystem.getInstance().findFileByPath(
+                    codexHistoryImageCacheService.getDefaultCacheDirectory().toAbsolutePath().normalize().toString()
+            );
+        }
+    }
+
+    /**
+     * 解析当前配置下真正会被使用的 Codex 历史图片缓存目录。
+     * 这里显式复用缓存服务的目录回退逻辑，避免设置页与发送链路各自维护一套目录解析规则。
+     */
+    Path resolveEffectiveCodexHistoryImageCacheDir() throws Exception {
+        return codexHistoryImageCacheService.getEffectiveCacheDirectory();
     }
 
     private void saveSelectedCustomFont(VirtualFile file) {
