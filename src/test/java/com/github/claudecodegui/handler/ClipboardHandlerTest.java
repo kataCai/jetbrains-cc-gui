@@ -43,9 +43,10 @@ public class ClipboardHandlerTest {
      */
     @Test
     public void parseClipboardRichPayloadReadsNestedImage() {
-        ClipboardHandler.ClipboardRichPayload payload = ClipboardHandler.parseClipboardRichPayload(
-                "{\"text\":\"hello\",\"html\":\"<p>hello</p>\",\"image\":{\"data\":\"YWJj\",\"mediaType\":\"image/png\"},\"images\":[{\"data\":\"YWJj\",\"mediaType\":\"image/png\"},{\"data\":\"ZGVm\",\"mediaType\":\"image/png\"}],\"orderedBlocks\":[{\"type\":\"text\",\"text\":\"hello\"},{\"type\":\"image\",\"imageIndex\":1}]}"
-        );
+        String richPayloadJson = "{\"text\":\"hello\",\"html\":\"<p>hello</p>\",\"image\":{\"data\":\"YWJj\",\"mediaType\":\"image/png\"},"
+                + "\"images\":[{\"data\":\"YWJj\",\"mediaType\":\"image/png\"},{\"data\":\"ZGVm\",\"mediaType\":\"image/png\"}],"
+                + "\"orderedBlocks\":[{\"type\":\"text\",\"text\":\"hello\"},{\"type\":\"image\",\"imageIndex\":1}]}";
+        ClipboardHandler.ClipboardRichPayload payload = ClipboardHandler.parseClipboardRichPayload(richPayloadJson);
 
         assertNotNull(payload);
         assertEquals("hello", payload.text);
@@ -142,5 +143,71 @@ public class ClipboardHandlerTest {
         assertEquals(1, payload.orderedBlocks.length);
         assertEquals("text", payload.orderedBlocks[0].type);
         assertEquals("plain text", payload.orderedBlocks[0].text);
+    }
+
+    /**
+     * 验证 rich clipboard 读取会优先命中插件自定义的 `RICH_JSON_FLAVOR`。
+     * 该断言用于保护“多图键盘粘贴桥接”场景，避免后续改动再次退化到只读取原生单图 flavor。
+     */
+    @Test
+    public void readClipboardRichPayloadPrefersRichJsonFlavorOverNativeFallback() throws Exception {
+        ClipboardHandler.ClipboardRichPayload richPayload = new ClipboardHandler.ClipboardRichPayload();
+        richPayload.text = "rich text";
+        ClipboardHandler.ClipboardImagePayload first = new ClipboardHandler.ClipboardImagePayload();
+        first.data = "QUJD";
+        first.mediaType = "image/png";
+        first.fileName = "first.png";
+        ClipboardHandler.ClipboardImagePayload second = new ClipboardHandler.ClipboardImagePayload();
+        second.data = "REVG";
+        second.mediaType = "image/png";
+        second.fileName = "second.png";
+        richPayload.images = new ClipboardHandler.ClipboardImagePayload[]{first, second};
+        ClipboardHandler.ClipboardRichBlock textBlock = new ClipboardHandler.ClipboardRichBlock();
+        textBlock.type = "text";
+        textBlock.text = "rich text";
+        ClipboardHandler.ClipboardRichBlock firstImageBlock = new ClipboardHandler.ClipboardRichBlock();
+        firstImageBlock.type = "image";
+        firstImageBlock.imageIndex = 0;
+        ClipboardHandler.ClipboardRichBlock secondImageBlock = new ClipboardHandler.ClipboardRichBlock();
+        secondImageBlock.type = "image";
+        secondImageBlock.imageIndex = 1;
+        richPayload.orderedBlocks = new ClipboardHandler.ClipboardRichBlock[]{
+                textBlock,
+                firstImageBlock,
+                secondImageBlock
+        };
+
+        BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        Transferable transferable = ClipboardHandler.createTransferable(richPayload, image);
+        Clipboard clipboard = new Clipboard("unit-test");
+        clipboard.setContents(transferable, null);
+
+        Method method = ClipboardHandler.class.getDeclaredMethod("readClipboardRichPayload", Clipboard.class);
+        method.setAccessible(true);
+
+        ClipboardHandler handler = new ClipboardHandler(null);
+        ClipboardHandler.ClipboardRichPayload payload =
+                (ClipboardHandler.ClipboardRichPayload) method.invoke(handler, clipboard);
+
+        assertNotNull(payload);
+        assertEquals("rich text", payload.text);
+        assertNotNull(payload.images);
+        assertEquals(2, payload.images.length);
+        assertEquals("first.png", payload.images[0].fileName);
+        assertEquals("second.png", payload.images[1].fileName);
+        assertNotNull(payload.orderedBlocks);
+        assertEquals(3, payload.orderedBlocks.length);
+        assertEquals(Integer.valueOf(1), payload.orderedBlocks[2].imageIndex);
+    }
+
+    /**
+     * 验证富剪贴板负载对象已预留键盘 bridge paste 所需的请求/来源元信息字段。
+     * 该测试先从结构层面卡住 `requestId`、`trigger`、`source`，避免前后端协议扩展时只改一侧。
+     */
+    @Test
+    public void clipboardRichPayloadDeclaresBridgeMetadataFields() throws Exception {
+        assertNotNull(ClipboardHandler.ClipboardRichPayload.class.getDeclaredField("requestId"));
+        assertNotNull(ClipboardHandler.ClipboardRichPayload.class.getDeclaredField("trigger"));
+        assertNotNull(ClipboardHandler.ClipboardRichPayload.class.getDeclaredField("source"));
     }
 }

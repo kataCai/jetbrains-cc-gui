@@ -69,11 +69,24 @@ public class ClipboardHandler extends BaseMessageHandler {
      * text 用于纯文本目标回退，html 用于保留图文结构，image 用于兼容支持原生图片粘贴的目标应用。
      */
     public static class ClipboardRichPayload {
+        public String requestId;
+        public String trigger;
+        public String source;
         public String text;
         public String html;
         public ClipboardImagePayload image;
         public ClipboardImagePayload[] images;
         public ClipboardRichBlock[] orderedBlocks;
+    }
+
+    /**
+     * rich clipboard 读取请求元信息。
+     * 当前主要用于把键盘粘贴 requestId 透传回前端，并在日志里区分不同粘贴入口。
+     */
+    static class ReadClipboardRichRequest {
+        public String requestId;
+        public String trigger;
+        public String[] nativeItemTypes;
     }
 
     /**
@@ -152,7 +165,7 @@ public class ClipboardHandler extends BaseMessageHandler {
                 yield true;
             }
             case "read_clipboard_rich" -> {
-                handleReadClipboardRich();
+                handleReadClipboardRich(content);
                 yield true;
             }
             case "write_clipboard" -> {
@@ -203,31 +216,46 @@ public class ClipboardHandler extends BaseMessageHandler {
      * 2. 若系统剪贴板只有原生文本/HTML/单图，也统一包装成富负载，避免右键 Paste 退回纯文本协议；
      * 3. 当剪贴板无可恢复内容或读取失败时，只记录日志，不再依赖旧的 `window.onClipboardRead` 回调。
      */
-    private void handleReadClipboardRich() {
+    private void handleReadClipboardRich(String content) {
         long now = System.currentTimeMillis();
         if (now - lastReadTime < MIN_READ_INTERVAL_MS) {
             LOG.debug("Rich clipboard read rate-limited");
             return;
         }
         lastReadTime = now;
+        ReadClipboardRichRequest request = parseReadClipboardRichRequest(content);
 
         ApplicationManager.getApplication().invokeLater(() -> {
             try {
                 Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-                LOG.info("[RichPaste][BridgeRead] Context menu requested rich clipboard, flavors="
-                        + Arrays.toString(clipboard.getAvailableDataFlavors()));
+                String trigger = request != null && request.trigger != null && !request.trigger.isBlank()
+                        ? request.trigger
+                        : "context-menu";
+                LOG.info("[RichPaste][BridgeRead] " + trigger + " requested rich clipboard, flavors="
+                        + Arrays.toString(clipboard.getAvailableDataFlavors())
+                        + ", requestId=" + (request != null ? request.requestId : null)
+                        + ", nativeItemTypes=" + Arrays.toString(
+                        request != null && request.nativeItemTypes != null ? request.nativeItemTypes : new String[0]
+                ));
 
                 ClipboardRichPayload payload = readClipboardRichPayload(clipboard);
                 if (payload == null) {
                     LOG.info("[RichPaste][BridgeRead] Skip rich clipboard paste because no supported flavor was available");
                     return;
                 }
+                if (request != null) {
+                    payload.requestId = request.requestId;
+                    payload.trigger = request.trigger;
+                }
 
                 LOG.info("[RichPaste][BridgeRead] Dispatch rich clipboard payload: textLength="
                         + (payload.text != null ? payload.text.length() : 0)
                         + ", htmlLength=" + (payload.html != null ? payload.html.length() : 0)
                         + ", imageCount=" + (payload.images != null ? payload.images.length : (payload.image != null ? 1 : 0))
-                        + ", orderedBlockCount=" + (payload.orderedBlocks != null ? payload.orderedBlocks.length : 0));
+                        + ", orderedBlockCount=" + (payload.orderedBlocks != null ? payload.orderedBlocks.length : 0)
+                        + ", source=" + payload.source
+                        + ", requestId=" + payload.requestId
+                        + ", trigger=" + payload.trigger);
                 executeJavaScript(buildRichPasteDispatchScript(payload));
             } catch (Exception e) {
                 LOG.warn("Failed to read rich clipboard", e);
@@ -468,6 +496,25 @@ public class ClipboardHandler extends BaseMessageHandler {
     }
 
     /**
+     * 解析 rich clipboard 读取请求元信息。
+     * 当调用方仍沿用旧的空字符串协议时，返回空请求对象，保持向后兼容。
+     *
+     * @param content 原始桥接内容
+     * @return 解析后的读取请求元信息；格式非法时返回空请求对象
+     */
+    static ReadClipboardRichRequest parseReadClipboardRichRequest(String content) {
+        if (content == null || content.trim().isEmpty()) {
+            return new ReadClipboardRichRequest();
+        }
+        try {
+            ReadClipboardRichRequest request = GSON.fromJson(content, ReadClipboardRichRequest.class);
+            return request != null ? request : new ReadClipboardRichRequest();
+        } catch (JsonSyntaxException exception) {
+            return new ReadClipboardRichRequest();
+        }
+    }
+
+    /**
      * 从系统剪贴板读取统一的富负载。
      * 优先顺序：
      * 1. 插件自定义 richJson；
@@ -483,6 +530,8 @@ public class ClipboardHandler extends BaseMessageHandler {
             if (richData instanceof String richJson) {
                 ClipboardRichPayload payload = parseClipboardRichPayload(richJson);
                 if (payload != null) {
+                    payload.source = "rich-json";
+                    LOG.info("[RichPaste][BridgeRead] Resolved clipboard payload from RICH_JSON_FLAVOR");
                     return payload;
                 }
             }
@@ -522,6 +571,8 @@ public class ClipboardHandler extends BaseMessageHandler {
         }
 
         payload.orderedBlocks = buildFallbackOrderedBlocks(payload);
+        payload.source = "native-flavor";
+        LOG.info("[RichPaste][BridgeRead] Resolved clipboard payload from native flavors");
         return payload;
     }
 

@@ -1,6 +1,5 @@
 package com.github.claudecodegui.handler.history;
 
-import com.github.claudecodegui.settings.TabStateService;
 import org.junit.Test;
 
 import java.util.ArrayList;

@@ -1,9 +1,10 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { Attachment } from '../types.js';
 import { generateId } from '../utils/generateId.js';
 import { insertTextAtCursor } from '../utils/selectionUtils.js';
 import { emitFrontendDiagnosticLog, perfTimer } from '../../../utils/debug.js';
 import type { ClipboardImagePayload, ClipboardRichBlock } from '../../../utils/imageClipboard.js';
+import { sendToJava } from '../../../utils/bridge.js';
 
 declare global {
   interface Window {
@@ -36,14 +37,29 @@ interface UsePasteAndDropReturn {
 }
 
 interface JavaRichClipboardPayload {
+  requestId?: string;
+  trigger?: string;
+  source?: string;
   text?: string;
   image?: ClipboardImagePayload;
   images?: ClipboardImagePayload[];
   orderedBlocks?: ClipboardRichBlock[];
 }
 
+interface NativeClipboardImageItemSnapshot {
+  type: string;
+  file: File;
+}
+
+interface PendingRichPasteRequest {
+  requestId: string;
+  fallback: () => void;
+  timeoutId: number;
+}
+
 const RICH_PASTE_APPLY_LOG_PREFIX = '[RichPaste][Apply]';
 const RICH_PASTE_NATIVE_LOG_PREFIX = '[RichPaste][Native]';
+const RICH_PASTE_BRIDGE_TIMEOUT_MS = 200;
 
 /**
  * 输出富回贴恢复链路的结构摘要。
@@ -199,6 +215,27 @@ export function usePasteAndDrop({
   handleInput,
   flushInput,
 }: UsePasteAndDropOptions): UsePasteAndDropReturn {
+  const pendingRichPasteRef = useRef<PendingRichPasteRequest | null>(null);
+
+  /**
+   * 清理当前 pending 的键盘 rich paste 请求。
+   * 该步骤用于避免 bridge 响应、超时兜底和后续新的粘贴请求互相串扰。
+   *
+   * @param requestId 可选，请求 ID；传入后仅当与当前 pending 请求匹配时才会清理
+   * @return 无返回值
+   */
+  const clearPendingRichPasteRequest = useCallback((requestId?: string) => {
+    const pending = pendingRichPasteRef.current;
+    if (!pending) {
+      return;
+    }
+    if (requestId && pending.requestId !== requestId) {
+      return;
+    }
+    window.clearTimeout(pending.timeoutId);
+    pendingRichPasteRef.current = null;
+  }, []);
+
   /**
    * 将 Java 侧图片负载转换为输入框附件。
    * 保留原始文件名，缺失时再按媒体类型兜底扩展名，避免历史会话回贴后附件列表变得难以辨认。
@@ -308,21 +345,19 @@ export function usePasteAndDrop({
   }, [buildAttachmentFromClipboardPayload, editableRef, flushInput, handleInput, setInternalAttachments]);
 
   /**
-   * 处理浏览器原生 paste 事件里的图片 item。
-   * 当系统剪贴板同时存在文本和图片时，不再直接短路，而是把图片恢复成附件后继续让文本分支执行。
+   * 把浏览器原生 paste 事件中的图片文件恢复成输入框附件。
+   * 该逻辑既服务于现有 native paste 分支，也服务于 rich bridge 超时后的兜底恢复。
    *
-   * @param items Clipboard items
+   * @param imageSnapshots 预先快照的图片文件列表
    * @return Promise<void> 用于统一等待 FileReader 完成
    */
-  const restoreNativePasteImages = useCallback(async (items: DataTransferItemList | DataTransferItem[]) => {
-    const imageItems = Array.from(items).filter((item) => item.type.startsWith('image/'));
-    if (imageItems.length === 0) {
+  const restoreNativePasteImageFiles = useCallback(async (imageSnapshots: NativeClipboardImageItemSnapshot[]) => {
+    if (imageSnapshots.length === 0) {
       return;
     }
 
-    const restoredAttachments = await Promise.all(imageItems.map((item, index) => {
-      const blob = item.getAsFile();
-      if (!blob) {
+    const restoredAttachments = await Promise.all(imageSnapshots.map(({ file, type }, index) => {
+      if (!file) {
         return Promise.resolve<Attachment | null>(null);
       }
 
@@ -335,24 +370,24 @@ export function usePasteAndDrop({
             resolve(null);
             return;
           }
-          const mediaType = blob.type || item.type || 'image/png';
+          const mediaType = file.type || type || 'image/png';
           const ext = (() => {
             if (mediaType && mediaType.includes('/')) {
               return mediaType.split('/')[1];
             }
-            const name = blob.name || '';
+            const name = file.name || '';
             const m = name.match(/\.([a-zA-Z0-9]+)$/);
             return m ? m[1] : 'png';
           })();
           resolve({
             id: generateId(),
-            fileName: blob.name || `pasted-image-${Date.now()}-${index}.${ext}`,
+            fileName: file.name || `pasted-image-${Date.now()}-${index}.${ext}`,
             mediaType,
             data: base64,
           });
         };
         reader.onerror = () => resolve(null);
-        reader.readAsDataURL(blob);
+        reader.readAsDataURL(file);
       });
     }));
 
@@ -361,11 +396,74 @@ export function usePasteAndDrop({
       setInternalAttachments((prev) => [...prev, ...attachments]);
     }
     logNativePaste('restored native paste images', {
-      requestedImageItemCount: imageItems.length,
+      requestedImageItemCount: imageSnapshots.length,
       restoredAttachmentCount: attachments.length,
       fileNames: attachments.map((item) => item.fileName),
     });
   }, [setInternalAttachments]);
+
+  /**
+   * 从原生剪贴板条目中抓取图片文件快照，供 bridge 超时兜底时继续使用。
+   * 这里先同步拿到 `File` 对象，避免异步超时后再访问原始 `DataTransferItem` 出现浏览器实现差异。
+   *
+   * @param items 原生 paste 事件提供的 clipboard items
+   * @return 图片文件快照列表
+   */
+  const snapshotNativeClipboardImages = useCallback((items: DataTransferItemList | DataTransferItem[]): NativeClipboardImageItemSnapshot[] => (
+    Array.from(items)
+      .filter((item) => item.type.startsWith('image/'))
+      .map((item) => {
+        const file = item.getAsFile();
+        return file ? { type: item.type, file } : null;
+      })
+      .filter((item): item is NativeClipboardImageItemSnapshot => Boolean(item))
+  ), []);
+
+  /**
+   * 请求 Java 侧读取系统富剪贴板，并为本次键盘粘贴建立超时兜底。
+   * 若 bridge 未及时返回，则回退到当前 native 文本/单图恢复能力，确保兼容性不倒退。
+   *
+   * @param itemTypes 本次原生粘贴事件暴露的 item 类型摘要
+   * @param fallback bridge 失败或超时时的兜底恢复动作
+   * @return 本次请求的 requestId
+   */
+  const requestKeyboardRichPaste = useCallback((
+    itemTypes: string[],
+    fallback: () => void,
+  ): string => {
+    clearPendingRichPasteRequest();
+
+    const requestId = generateId();
+    const timeoutId = window.setTimeout(() => {
+      const pending = pendingRichPasteRef.current;
+      if (!pending || pending.requestId !== requestId) {
+        return;
+      }
+      pendingRichPasteRef.current = null;
+      logNativePaste('rich clipboard bridge timed out, fallback to native restore', {
+        requestId,
+        nativeItemTypes: itemTypes,
+      });
+      fallback();
+    }, RICH_PASTE_BRIDGE_TIMEOUT_MS);
+
+    pendingRichPasteRef.current = {
+      requestId,
+      fallback,
+      timeoutId,
+    };
+
+    sendToJava('read_clipboard_rich', {
+      requestId,
+      trigger: 'native-paste',
+      nativeItemTypes: itemTypes,
+    });
+    logNativePaste('requested rich clipboard bridge for native paste event', {
+      requestId,
+      nativeItemTypes: itemTypes,
+    });
+    return requestId;
+  }, [clearPendingRichPasteRequest]);
 
   /**
    * Handle paste event - detect images and plain text
@@ -394,11 +492,14 @@ export function usePasteAndDrop({
 
       if (hasImage) {
         e.preventDefault();
-        void restoreNativePasteImages(items);
-
-        if (hasText) {
-          restoreNativePasteText(text, editableRef.current, handleInput, flushInput);
-        }
+        const imageSnapshots = snapshotNativeClipboardImages(items);
+        const nativeFallback = () => {
+          if (hasText) {
+            restoreNativePasteText(text, editableRef.current, handleInput, flushInput);
+          }
+          void restoreNativePasteImageFiles(imageSnapshots);
+        };
+        requestKeyboardRichPaste(itemTypes, nativeFallback);
         return;
       }
 
@@ -462,7 +563,14 @@ export function usePasteAndDrop({
         }
       }
     },
-    [editableRef, flushInput, handleInput, restoreNativePasteImages]
+    [
+      editableRef,
+      flushInput,
+      handleInput,
+      requestKeyboardRichPaste,
+      restoreNativePasteImageFiles,
+      snapshotNativeClipboardImages,
+    ]
   );
 
   /**
@@ -629,11 +737,29 @@ export function usePasteAndDrop({
    */
   useEffect(() => {
     const onJavaPasteRichContent = (event: Event) => {
-      applyRichClipboardPayload((event as CustomEvent<JavaRichClipboardPayload>).detail ?? {});
+      const payload = (event as CustomEvent<JavaRichClipboardPayload>).detail ?? {};
+      const pending = pendingRichPasteRef.current;
+
+      if (payload.requestId) {
+        if (!pending || pending.requestId !== payload.requestId) {
+          logRichPasteApply('ignored stale rich clipboard bridge response', {
+            requestId: payload.requestId,
+            source: payload.source ?? 'unknown',
+            trigger: payload.trigger ?? 'unknown',
+          });
+          return;
+        }
+        clearPendingRichPasteRequest(payload.requestId);
+      }
+
+      applyRichClipboardPayload(payload);
     };
     window.addEventListener('java-paste-rich-content', onJavaPasteRichContent);
-    return () => window.removeEventListener('java-paste-rich-content', onJavaPasteRichContent);
-  }, [applyRichClipboardPayload]);
+    return () => {
+      clearPendingRichPasteRequest();
+      window.removeEventListener('java-paste-rich-content', onJavaPasteRichContent);
+    };
+  }, [applyRichClipboardPayload, clearPendingRichPasteRequest]);
 
   return {
     handlePaste,
