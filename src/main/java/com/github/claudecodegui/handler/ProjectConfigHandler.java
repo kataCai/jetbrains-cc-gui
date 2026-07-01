@@ -371,6 +371,59 @@ public class ProjectConfigHandler {
             "Failed to get right click open DevTools enabled");
     }
 
+    private JsonObject buildFrontendDebugConfigResponse() throws Exception {
+        JsonObject persisted = settingsService.getFrontendDebugConfigState();
+        JsonObject response = new JsonObject();
+        response.addProperty("panelEnabled", readBoolean(persisted, "panelEnabled", false));
+        response.addProperty("archiveEnabled", readBoolean(persisted, "archiveEnabled", false));
+        response.addProperty("panelConfigured", readBoolean(persisted, "panelConfigured", false));
+        response.addProperty("archiveConfigured", readBoolean(persisted, "archiveConfigured", false));
+        return response;
+    }
+
+    /**
+     * 构造前端调试配置的统一兜底响应。
+     * 这里必须显式声明两个 configured 标记为 false，保证前端在配置读取失败时
+     * 仍会回退到构建期默认值，而不是把兜底值误判成“用户已经手动关闭调试能力”。
+     *
+     * @return 包含默认布尔值与未配置标记的兜底响应
+     */
+    private JsonObject buildDefaultFrontendDebugConfigResponse() {
+        JsonObject response = new JsonObject();
+        response.addProperty("panelEnabled", false);
+        response.addProperty("archiveEnabled", false);
+        response.addProperty("panelConfigured", false);
+        response.addProperty("archiveConfigured", false);
+        return response;
+    }
+
+    public void handleGetFrontendDebugConfig() {
+        respondWithJson(
+                "window.updateFrontendDebugConfig",
+                this::buildFrontendDebugConfigResponse,
+                buildDefaultFrontendDebugConfigResponse(),
+                "Failed to get frontend debug config"
+        );
+    }
+
+    public void handleSetFrontendDebugConfig(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            boolean panelEnabled = readBoolean(json, "panelEnabled", false);
+            boolean archiveEnabled = readBoolean(json, "archiveEnabled", false);
+            settingsService.setFrontendDebugConfig(panelEnabled, archiveEnabled);
+            JsonObject response = buildFrontendDebugConfigResponse();
+            LOG.info("[ProjectConfigHandler] Set frontend debug config: panelEnabled="
+                    + response.get("panelEnabled").getAsBoolean()
+                    + ", archiveEnabled=" + response.get("archiveEnabled").getAsBoolean());
+            pushJson("window.updateFrontendDebugConfig", response);
+        } catch (Exception e) {
+            LOG.error("[ProjectConfigHandler] Failed to set frontend debug config; errorClass="
+                    + e.getClass().getSimpleName(), e);
+            showError("Failed to save frontend debug config. See IDE log for details.");
+        }
+    }
+
     /**
      * 保存“右键打开调试面板”全局开关，并将生效值立即回写给前端。
      * 缺失字段时统一按 false 处理，避免 malformed payload 让调试入口被意外打开。

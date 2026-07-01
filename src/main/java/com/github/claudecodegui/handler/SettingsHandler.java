@@ -65,6 +65,8 @@ public class SettingsHandler extends BaseMessageHandler {
         "set_send_shortcut",
         "get_auto_open_file_enabled",
         "set_auto_open_file_enabled",
+        "get_frontend_debug_config",
+        "set_frontend_debug_config",
         "get_right_click_open_devtools_enabled",
         "set_right_click_open_devtools_enabled",
         "get_permission_dialog_timeout",
@@ -259,6 +261,12 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "set_auto_open_file_enabled":
                 projectConfigHandler.handleSetAutoOpenFileEnabled(content);
+                return true;
+            case "get_frontend_debug_config":
+                projectConfigHandler.handleGetFrontendDebugConfig();
+                return true;
+            case "set_frontend_debug_config":
+                projectConfigHandler.handleSetFrontendDebugConfig(content);
                 return true;
             case "get_right_click_open_devtools_enabled":
                 projectConfigHandler.handleGetRightClickOpenDevToolsEnabled();

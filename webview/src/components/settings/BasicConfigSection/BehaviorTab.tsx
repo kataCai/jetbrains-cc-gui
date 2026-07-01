@@ -90,6 +90,10 @@ export interface BehaviorTabProps {
   onStreamingEnabledChange?: (enabled: boolean) => void;
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  frontendDebugPanelEnabled?: boolean;
+  onFrontendDebugPanelEnabledChange?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabled?: boolean;
+  onFrontendDiagnosticArchiveEnabledChange?: (enabled: boolean) => void;
   rightClickOpenDevToolsEnabled?: boolean;
   onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   diffExpandedByDefault?: boolean;
@@ -144,6 +148,10 @@ const BehaviorTab = ({
   onStreamingEnabledChange = () => {},
   autoOpenFileEnabled = true,
   onAutoOpenFileEnabledChange = () => {},
+  frontendDebugPanelEnabled = false,
+  onFrontendDebugPanelEnabledChange = () => {},
+  frontendDiagnosticArchiveEnabled = false,
+  onFrontendDiagnosticArchiveEnabledChange = () => {},
   rightClickOpenDevToolsEnabled = false,
   onRightClickOpenDevToolsEnabledChange = () => {},
   diffExpandedByDefault = false,
@@ -302,6 +310,56 @@ const BehaviorTab = ({
         <small className={styles.formHint}>
           <span className="codicon codicon-info" />
           <span>{t('settings.basic.autoOpenFile.hint')}</span>
+        </small>
+      </div>
+
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-debug" />
+          <span className={styles.fieldLabel}>{t('settings.basic.frontendDebugPanel.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={frontendDebugPanelEnabled}
+            onChange={(e) => onFrontendDebugPanelEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {frontendDebugPanelEnabled
+              ? t('settings.basic.frontendDebugPanel.enabled')
+              : t('settings.basic.frontendDebugPanel.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.frontendDebugPanel.hint')}</span>
+        </small>
+      </div>
+
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-output" />
+          <span className={styles.fieldLabel}>{t('settings.basic.frontendDiagnosticArchive.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={frontendDiagnosticArchiveEnabled}
+            onChange={(e) => onFrontendDiagnosticArchiveEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {frontendDiagnosticArchiveEnabled
+              ? t('settings.basic.frontendDiagnosticArchive.enabled')
+              : t('settings.basic.frontendDiagnosticArchive.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.frontendDiagnosticArchive.hint')}</span>
         </small>
       </div>
 

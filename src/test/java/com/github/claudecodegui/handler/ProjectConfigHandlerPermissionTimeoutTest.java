@@ -8,6 +8,7 @@ import com.intellij.ui.jcef.JBCefBrowserBase;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -72,6 +73,27 @@ public class ProjectConfigHandlerPermissionTimeoutTest {
                 browser.booleanProperties.containsKey(JBCefBrowserBase.Properties.NO_CONTEXT_MENU)
         );
         assertEquals(false, browser.booleanProperties.get(JBCefBrowserBase.Properties.NO_CONTEXT_MENU));
+    }
+
+    /**
+     * 验证前端调试配置的默认响应会明确标记两个开关“尚未显式配置”。
+     * 这样当读取配置失败或配置节点缺失时，前端才能继续回退到构建期默认值，
+     * 而不是把兜底值误判成“用户已经手动关闭了调试能力”。
+     *
+     * @throws Exception 反射调用默认响应构造方法失败时抛出
+     */
+    @Test
+    public void defaultFrontendDebugConfigResponseMarksFlagsAsUnconfigured() throws Exception {
+        ProjectConfigHandler handler = new ProjectConfigHandler(contextWith(new FakeSettingsService()));
+        Method method = ProjectConfigHandler.class.getDeclaredMethod("buildDefaultFrontendDebugConfigResponse");
+        method.setAccessible(true);
+
+        JsonObject response = (JsonObject) method.invoke(handler);
+
+        assertEquals(false, response.get("panelEnabled").getAsBoolean());
+        assertEquals(false, response.get("archiveEnabled").getAsBoolean());
+        assertEquals(false, response.get("panelConfigured").getAsBoolean());
+        assertEquals(false, response.get("archiveConfigured").getAsBoolean());
     }
 
     private HandlerContext contextWith(CodemossSettingsService settingsService) {

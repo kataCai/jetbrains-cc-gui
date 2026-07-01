@@ -11,7 +11,7 @@ import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { ClaudeMessage } from '../../../types';
 import type { ContextUsageData } from '../../../components/ContextUsageDialog';
 import { sendBridgeEvent } from '../../../utils/bridge';
-import { debugError } from '../../../utils/debug';
+import { debugError, emitFrontendDiagnosticLog } from '../../../utils/debug';
 import {
   appendOptimisticMessageIfMissing,
   ensureStreamingAssistantInList,
@@ -163,7 +163,7 @@ export function registerMessageCallbacks(
   window.prepareHistoryRestoreSnapshot = (restoreKey, snapshotSignature) => {
     window.__preparedHistoryRestoreKey = restoreKey || null;
     window.__preparedHistoryRestoreSignature = snapshotSignature || null;
-    console.info('[HistoryRestore][Frontend] prepared snapshot context', {
+    emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'prepared snapshot context', {
       restoreKey: window.__preparedHistoryRestoreKey,
       snapshotSignature: window.__preparedHistoryRestoreSignature,
     });
@@ -196,7 +196,7 @@ export function registerMessageCallbacks(
       && window.__lastAppliedHistoryRestoreKey === preparedHistoryRestore.restoreKey
       && window.__lastAppliedHistoryRestoreSignature === preparedHistoryRestore.snapshotSignature
     ) {
-      console.info('[HistoryRestore][Frontend] skip duplicate snapshot', preparedHistoryRestore);
+      emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'skip duplicate snapshot', preparedHistoryRestore);
       return;
     }
 
@@ -209,7 +209,7 @@ export function registerMessageCallbacks(
         // 仅在成功解析并准备真正应用本次快照时，才记录“最后一次已落地的历史恢复快照”。
         window.__lastAppliedHistoryRestoreKey = preparedHistoryRestore.restoreKey;
         window.__lastAppliedHistoryRestoreSignature = preparedHistoryRestore.snapshotSignature;
-        console.info('[HistoryRestore][Frontend] apply snapshot', {
+        emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'apply snapshot', {
           restoreKey: preparedHistoryRestore.restoreKey,
           snapshotSignature: preparedHistoryRestore.snapshotSignature,
           messageCount: parsed.length,

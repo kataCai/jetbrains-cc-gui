@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react';
 import type { Attachment } from '../types.js';
 import { generateId } from '../utils/generateId.js';
 import { insertTextAtCursor } from '../utils/selectionUtils.js';
-import { perfTimer } from '../../../utils/debug.js';
+import { emitFrontendDiagnosticLog, perfTimer } from '../../../utils/debug.js';
 import type { ClipboardImagePayload, ClipboardRichBlock } from '../../../utils/imageClipboard.js';
 
 declare global {
@@ -54,8 +54,7 @@ const RICH_PASTE_NATIVE_LOG_PREFIX = '[RichPaste][Native]';
  * @return 无返回值
  */
 function logRichPasteApply(message: string, details?: Record<string, unknown>): void {
-  // 这里改为 info，是为了让 JCEF console 日志在默认 IDEA 日志级别下可见，便于定位 rich paste 是否真正落地。
-  console.info(RICH_PASTE_APPLY_LOG_PREFIX, message, details ?? {});
+  emitFrontendDiagnosticLog('RichPaste.Apply', `${RICH_PASTE_APPLY_LOG_PREFIX} ${message}`, details);
 }
 
 /**
@@ -67,8 +66,7 @@ function logRichPasteApply(message: string, details?: Record<string, unknown>): 
  * @return 无返回值
  */
 function logNativePaste(message: string, details?: Record<string, unknown>): void {
-  // 原生日志同样提升到 info，避免 Ctrl+V 失败时只在前端 debug 通道里丢失关键证据。
-  console.info(RICH_PASTE_NATIVE_LOG_PREFIX, message, details ?? {});
+  emitFrontendDiagnosticLog('RichPaste.Native', `${RICH_PASTE_NATIVE_LOG_PREFIX} ${message}`, details);
 }
 
 /**

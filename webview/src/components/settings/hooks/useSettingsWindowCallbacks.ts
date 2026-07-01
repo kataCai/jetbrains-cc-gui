@@ -33,6 +33,7 @@ import {
   subscribeCodexProviderList,
   subscribeProviderList,
 } from '../../../utils/runtimeProviderCapabilities';
+import { updateFrontendDebugRuntimeConfig } from '../../../utils/debug';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -66,6 +67,8 @@ export interface SettingsWindowCallbacksDeps {
   setLocalStreamingEnabled: (enabled: boolean) => void;
   setCodexSandboxMode?: (mode: 'workspace-write' | 'danger-full-access') => void;
   setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
+  setFrontendDebugPanelEnabled?: (enabled: boolean) => void;
+  setFrontendDiagnosticArchiveEnabled?: (enabled: boolean) => void;
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
@@ -394,6 +397,24 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
+    window.updateFrontendDebugConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        const panelEnabled = data.panelEnabled === true;
+        const archiveEnabled = data.archiveEnabled === true;
+        updateFrontendDebugRuntimeConfig({
+          panelEnabled,
+          archiveEnabled,
+          panelConfigured: data.panelConfigured === true,
+          archiveConfigured: data.archiveConfigured === true,
+        });
+        d().setFrontendDebugPanelEnabled?.(panelEnabled);
+        d().setFrontendDiagnosticArchiveEnabled?.(archiveEnabled);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse frontend debug config:', error);
+      }
+    };
+
     window.updateCommitGenerationEnabled = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -580,6 +601,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_commit_ai_config:');
     sendToJava('get_prompt_enhancer_config:');
     sendToJava('get_sound_notification_config:');
+    sendToJava('get_frontend_debug_config:');
     sendToJava('get_right_click_open_devtools_enabled:');
     sendToJava('get_commit_generation_enabled:');
     sendToJava('get_ai_title_generation_enabled:');
@@ -620,6 +642,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateCommitPrompt = undefined;
       window.updateCommitAiConfig = undefined;
       window.updatePromptEnhancerConfig = undefined;
+      window.updateFrontendDebugConfig = undefined;
       window.updateRightClickOpenDevToolsEnabled = undefined;
       window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;

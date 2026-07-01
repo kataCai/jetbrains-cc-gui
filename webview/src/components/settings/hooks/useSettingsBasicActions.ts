@@ -29,6 +29,10 @@ export interface UseSettingsBasicActionsProps {
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabledProp?: boolean;
   onAutoOpenFileEnabledChangeProp?: (enabled: boolean) => void;
+  frontendDebugPanelEnabledProp?: boolean;
+  onFrontendDebugPanelEnabledChangeProp?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabledProp?: boolean;
+  onFrontendDiagnosticArchiveEnabledChangeProp?: (enabled: boolean) => void;
   rightClickOpenDevToolsEnabledProp?: boolean;
   onRightClickOpenDevToolsEnabledChangeProp?: (enabled: boolean) => void;
   permissionDialogTimeoutSecondsProp?: number;
@@ -64,6 +68,10 @@ export interface UseSettingsBasicActionsReturn {
   localSendShortcut: 'enter' | 'cmdEnter';
   autoOpenFileEnabled: boolean;
   localAutoOpenFileEnabled: boolean;
+  frontendDebugPanelEnabled: boolean;
+  localFrontendDebugPanelEnabled: boolean;
+  frontendDiagnosticArchiveEnabled: boolean;
+  localFrontendDiagnosticArchiveEnabled: boolean;
   rightClickOpenDevToolsEnabled: boolean;
   localRightClickOpenDevToolsEnabled: boolean;
   commitPrompt: string;
@@ -93,6 +101,8 @@ export interface UseSettingsBasicActionsReturn {
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
   handleAutoOpenFileEnabledChange: (enabled: boolean) => void;
+  handleFrontendDebugPanelEnabledChange: (enabled: boolean) => void;
+  handleFrontendDiagnosticArchiveEnabledChange: (enabled: boolean) => void;
   handleRightClickOpenDevToolsEnabledChange: (enabled: boolean) => void;
   handleTaskReminderEnabledChange: (channel: TaskReminderChannel, enabled: boolean) => void;
   handleTaskReminderStateToggle: (
@@ -157,6 +167,8 @@ export interface UseSettingsBasicActionsReturn {
   /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
   /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
   /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalFrontendDebugPanelEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalFrontendDiagnosticArchiveEnabled: (enabled: boolean) => void;
   /** @internal */ setLocalRightClickOpenDevToolsEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitPrompt: (prompt: string) => void;
   /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
@@ -199,6 +211,10 @@ export function useSettingsBasicActions({
   onSendShortcutChangeProp,
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
+  frontendDebugPanelEnabledProp,
+  onFrontendDebugPanelEnabledChangeProp,
+  frontendDiagnosticArchiveEnabledProp,
+  onFrontendDiagnosticArchiveEnabledChangeProp,
   rightClickOpenDevToolsEnabledProp,
   onRightClickOpenDevToolsEnabledChangeProp,
   permissionDialogTimeoutSecondsProp,
@@ -241,6 +257,13 @@ export function useSettingsBasicActions({
 
   const [localAutoOpenFileEnabled, setLocalAutoOpenFileEnabled] = useState<boolean>(false);
   const autoOpenFileEnabled = autoOpenFileEnabledProp ?? localAutoOpenFileEnabled;
+
+  const [localFrontendDebugPanelEnabled, setLocalFrontendDebugPanelEnabled] = useState<boolean>(false);
+  const frontendDebugPanelEnabled = frontendDebugPanelEnabledProp ?? localFrontendDebugPanelEnabled;
+
+  const [localFrontendDiagnosticArchiveEnabled, setLocalFrontendDiagnosticArchiveEnabled] = useState<boolean>(false);
+  const frontendDiagnosticArchiveEnabled =
+    frontendDiagnosticArchiveEnabledProp ?? localFrontendDiagnosticArchiveEnabled;
 
   const [localRightClickOpenDevToolsEnabled, setLocalRightClickOpenDevToolsEnabled] = useState<boolean>(false);
   const rightClickOpenDevToolsEnabled = rightClickOpenDevToolsEnabledProp ?? localRightClickOpenDevToolsEnabled;
@@ -414,6 +437,42 @@ export function useSettingsBasicActions({
     setLocalAutoOpenFileEnabled(enabled);
     sendToJava(`set_auto_open_file_enabled:${JSON.stringify({ autoOpenFileEnabled: enabled })}`);
   }, [onAutoOpenFileEnabledChangeProp]);
+
+  /**
+   * 切换前端调试面板开关。
+   * 该开关与诊断日志落档共享同一份后端配置对象，因此每次修改都需要提交完整 payload。
+   *
+   * @param enabled 是否启用前端调试面板
+   */
+  const handleFrontendDebugPanelEnabledChange = useCallback((enabled: boolean) => {
+    if (onFrontendDebugPanelEnabledChangeProp) {
+      onFrontendDebugPanelEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalFrontendDebugPanelEnabled(enabled);
+    sendToJava(`set_frontend_debug_config:${JSON.stringify({
+      panelEnabled: enabled,
+      archiveEnabled: frontendDiagnosticArchiveEnabled,
+    })}`);
+  }, [frontendDiagnosticArchiveEnabled, onFrontendDebugPanelEnabledChangeProp]);
+
+  /**
+   * 切换前端诊断日志落档开关。
+   * 为保证后端持久化始终拿到完整快照，这里也必须和调试面板开关一起回写。
+   *
+   * @param enabled 是否允许桥接关键前端诊断日志到 idea.log
+   */
+  const handleFrontendDiagnosticArchiveEnabledChange = useCallback((enabled: boolean) => {
+    if (onFrontendDiagnosticArchiveEnabledChangeProp) {
+      onFrontendDiagnosticArchiveEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalFrontendDiagnosticArchiveEnabled(enabled);
+    sendToJava(`set_frontend_debug_config:${JSON.stringify({
+      panelEnabled: frontendDebugPanelEnabled,
+      archiveEnabled: enabled,
+    })}`);
+  }, [frontendDebugPanelEnabled, onFrontendDiagnosticArchiveEnabledChangeProp]);
 
   /**
    * 切换“右键打开调试面板”设置。
@@ -712,6 +771,12 @@ export function useSettingsBasicActions({
     sendShortcut,
     localAutoOpenFileEnabled,
     setLocalAutoOpenFileEnabled,
+    frontendDebugPanelEnabled,
+    localFrontendDebugPanelEnabled,
+    setLocalFrontendDebugPanelEnabled,
+    frontendDiagnosticArchiveEnabled,
+    localFrontendDiagnosticArchiveEnabled,
+    setLocalFrontendDiagnosticArchiveEnabled,
     rightClickOpenDevToolsEnabled,
     localRightClickOpenDevToolsEnabled,
     setLocalRightClickOpenDevToolsEnabled,
@@ -739,6 +804,8 @@ export function useSettingsBasicActions({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleFrontendDebugPanelEnabledChange,
+    handleFrontendDiagnosticArchiveEnabledChange,
     handleRightClickOpenDevToolsEnabledChange,
     handleTaskReminderEnabledChange,
     handleTaskReminderStateToggle,

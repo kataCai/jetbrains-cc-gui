@@ -26,6 +26,7 @@ export const startInitialSettingsRequest = (): void => {
       window.sendToJava('get_streaming_enabled:');
       window.sendToJava('get_send_shortcut:');
       window.sendToJava('get_auto_open_file_enabled:');
+      window.sendToJava('get_frontend_debug_config:');
       window.sendToJava('get_right_click_open_devtools_enabled:');
       window.sendToJava('get_codex_model_state:');
       window.sendToJava('get_permission_dialog_timeout:');
@@ -161,6 +162,12 @@ export const drainPendingSettings = (): void => {
     const pending = w.__pendingRightClickOpenDevToolsEnabled;
     delete w.__pendingRightClickOpenDevToolsEnabled;
     window.updateRightClickOpenDevToolsEnabled?.(pending);
+  }
+
+  if (typeof w.__pendingFrontendDebugConfig === 'string') {
+    const pending = w.__pendingFrontendDebugConfig;
+    delete w.__pendingFrontendDebugConfig;
+    window.updateFrontendDebugConfig?.(pending);
   }
 
   if (typeof w.__pendingPermissionDialogTimeout === 'string') {

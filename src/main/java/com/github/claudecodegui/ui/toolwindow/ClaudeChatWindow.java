@@ -65,6 +65,7 @@ public class ClaudeChatWindow {
 
     private static final Logger LOG = Logger.getInstance(ClaudeChatWindow.class);
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
+    private static final int FRONTEND_DEBUG_DETAILS_MAX_LENGTH = 512;
     private static final long PROJECT_STATE_FLUSH_DEBOUNCE_MS = 1500L;
     private static final long WEBVIEW_RECOVERY_MIN_INTERVAL_MS = 10_000L;
 
@@ -688,6 +689,11 @@ public class ClaudeChatWindow {
         String type = parts[0];
         String content = parts.length > 1 ? parts[1] : "";
 
+        if ("frontend_debug_log".equals(type)) {
+            handleFrontendDebugLog(content);
+            return;
+        }
+
         if ("update_title".equals(type)) {
             LOG.info("[HistoryTitleSync] Bridge received update_title. content=" + content);
         }
@@ -706,6 +712,66 @@ public class ClaudeChatWindow {
         }
 
         LOG.warn("Unknown message type: " + type);
+    }
+
+    /**
+     * 处理前端显式桥接回来的诊断日志。
+     * 该入口独立于 console monkey-patch，用于保证分发包静音 console 后，
+     * rich paste、历史恢复等关键诊断日志依然可以进入 idea.log。
+     *
+     * @param content 前端发来的结构化 JSON 载荷
+     */
+    private void handleFrontendDebugLog(String content) {
+        try {
+            JsonObject payload = new Gson().fromJson(content, JsonObject.class);
+            if (payload == null) {
+                LOG.warn("[FrontendDebug] Skip empty diagnostic payload");
+                return;
+            }
+
+            String scope = payload.has("scope") && !payload.get("scope").isJsonNull()
+                    ? payload.get("scope").getAsString()
+                    : "UnknownScope";
+            String message = payload.has("message") && !payload.get("message").isJsonNull()
+                    ? payload.get("message").getAsString()
+                    : "";
+            String details = payload.has("details") && !payload.get("details").isJsonNull()
+                    ? payload.get("details").toString()
+                    : "{}";
+
+            LOG.info(buildFrontendDebugLogLine(scope, message, details));
+        } catch (Exception e) {
+            LOG.warn("[FrontendDebug] Failed to parse diagnostic payload: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 构造前端诊断日志最终写入 IDEA 日志的单行文本。
+     * 前端已经会先做一轮裁剪与脱敏；这里仍保留 Java 侧兜底，避免后续新增桥接入口
+     * 或异常 payload 绕过前端工具后，把超长详情直接刷进 idea.log。
+     *
+     * @param scope 前端诊断分类
+     * @param message 诊断摘要
+     * @param details 已序列化的详情字符串
+     * @return 可直接写入 IDEA 日志的单行文本
+     */
+    private static String buildFrontendDebugLogLine(String scope, String message, String details) {
+        return "[FrontendDebug][" + scope + "] " + message + " " + truncateFrontendDebugDetails(details);
+    }
+
+    /**
+     * 对写入 IDEA 日志的前端诊断详情做最终长度保护。
+     * 这里只做长度兜底，不再重复解析 JSON 结构，避免额外引入日志链路异常点。
+     *
+     * @param details 详情字符串
+     * @return 裁剪后的详情字符串
+     */
+    private static String truncateFrontendDebugDetails(String details) {
+        if (details == null || details.length() <= FRONTEND_DEBUG_DETAILS_MAX_LENGTH) {
+            return details;
+        }
+        return details.substring(0, FRONTEND_DEBUG_DETAILS_MAX_LENGTH)
+                + "...[truncated " + (details.length() - FRONTEND_DEBUG_DETAILS_MAX_LENGTH) + " chars]";
     }
 
     // ==================== Session Delegates ====================

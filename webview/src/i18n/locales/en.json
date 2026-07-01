@@ -229,6 +229,18 @@
         "disabled": "Disabled",
         "hint": "When enabled, selecting a file in the project tree will automatically send its file path to AI (note: only the file path is sent, not the file content). When disabled, manual action is required."
       },
+      "frontendDebugPanel": {
+        "label": "Frontend Debug Panel",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, the runtime may display a frontend debug panel inside the WebView for direct inspection of frontend diagnostics."
+      },
+      "frontendDiagnosticArchive": {
+        "label": "Frontend Diagnostic Log Archive",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, key frontend diagnostic logs will be bridged to the plugin side and written into idea.log for distribution-package troubleshooting."
+      },
       "rightClickOpenDevTools": {
         "label": "Right-click Open DevTools",
         "enabled": "Enabled",

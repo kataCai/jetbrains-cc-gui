@@ -228,6 +228,18 @@
         "disabled": "已关闭",
         "hint": "开启后，在项目树选择文件时会自动将文件路径告诉 AI（注意：只传递文件路径，不传文件内容）。关闭后需要手动操作。"
       },
+      "frontendDebugPanel": {
+        "label": "前端调试面板",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "hint": "开启后，运行时允许在 WebView 内显示前端调试面板，便于直接查看前端诊断信息。"
+      },
+      "frontendDiagnosticArchive": {
+        "label": "前端诊断日志落档",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "hint": "开启后，关键前端诊断日志会桥接到插件侧并写入 idea.log，便于分析分发包环境问题。"
+      },
       "rightClickOpenDevTools": {
         "label": "\u53f3\u952e\u6253\u5f00\u8c03\u8bd5\u9762\u677f",
         "enabled": "\u5df2\u5f00\u542f",

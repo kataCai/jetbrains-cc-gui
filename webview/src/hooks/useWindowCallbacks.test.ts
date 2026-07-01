@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { useWindowCallbacks } from './useWindowCallbacks.js';
 import type { UseWindowCallbacksOptions } from './useWindowCallbacks.js';
 import type { ClaudeMessage } from '../types/index.js';
+import * as debugModule from '../utils/debug.js';
 
 vi.mock('./windowCallbacks/settingsBootstrap', async () => {
   const actual = await vi.importActual<typeof import('./windowCallbacks/settingsBootstrap')>('./windowCallbacks/settingsBootstrap');
@@ -168,6 +169,32 @@ describe('useWindowCallbacks integration', () => {
 
     expect(opts.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.5');
     expect(opts.setSelectedCodexSelectionKey).toHaveBeenCalledWith('custom_gateway::gpt-5.5');
+  });
+
+  /**
+   * 验证聊天页收到后端下发的前端调试配置时，会同步刷新运行时诊断日志配置。
+   * 这样即使设置页未打开，rich paste 与历史恢复链路的关键诊断日志也能立即按最新开关生效。
+   */
+  it('updateFrontendDebugConfig refreshes runtime diagnostic config in chat mode', () => {
+    const updateRuntimeSpy = vi.spyOn(debugModule, 'updateFrontendDebugRuntimeConfig');
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.updateFrontendDebugConfig?.(JSON.stringify({
+        panelEnabled: true,
+        archiveEnabled: true,
+        panelConfigured: false,
+        archiveConfigured: false,
+      }));
+    });
+
+    expect(updateRuntimeSpy).toHaveBeenCalledWith({
+      panelEnabled: true,
+      archiveEnabled: true,
+      panelConfigured: false,
+      archiveConfigured: false,
+    });
   });
 
   // ===== historyLoadComplete releases transition guard =====

@@ -8,12 +8,14 @@ describe('settingsBootstrap', () => {
     window.updateSendShortcut = undefined;
     window.updateAutoOpenFileEnabled = undefined;
     window.updateRightClickOpenDevToolsEnabled = undefined;
+    window.updateFrontendDebugConfig = undefined;
     window.onModeReceived = undefined;
     window.updateCodexModelState = undefined;
     window.__pendingStreamingEnabled = undefined;
     window.__pendingSendShortcut = undefined;
     window.__pendingAutoOpenFileEnabled = undefined;
     window.__pendingRightClickOpenDevToolsEnabled = undefined;
+    window.__pendingFrontendDebugConfig = undefined;
     window.__pendingModeReceived = undefined;
     window.__pendingCodexModelState = undefined;
   });
@@ -54,5 +56,23 @@ describe('settingsBootstrap', () => {
       rightClickOpenDevToolsEnabled: true,
     }));
     expect(window.__pendingRightClickOpenDevToolsEnabled).toBeUndefined();
+  });
+
+  it('replays pending frontend debug config captured before callback registration', () => {
+    // 前端调试双开关需要支持和其他基础设置相同的预注册回放，否则启动早期返回的配置会在 React 注册前丢失。
+    const updateFrontendDebugConfig = vi.fn();
+    window.updateFrontendDebugConfig = updateFrontendDebugConfig;
+    window.__pendingFrontendDebugConfig = JSON.stringify({
+      panelEnabled: true,
+      archiveEnabled: true,
+    });
+
+    drainPendingSettings();
+
+    expect(updateFrontendDebugConfig).toHaveBeenCalledWith(JSON.stringify({
+      panelEnabled: true,
+      archiveEnabled: true,
+    }));
+    expect(window.__pendingFrontendDebugConfig).toBeUndefined();
   });
 });

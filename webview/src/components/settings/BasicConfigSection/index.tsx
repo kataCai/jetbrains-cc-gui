@@ -59,6 +59,10 @@ interface BasicConfigSectionProps {
   onStreamingEnabledChange?: (enabled: boolean) => void;
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  frontendDebugPanelEnabled?: boolean;
+  onFrontendDebugPanelEnabledChange?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabled?: boolean;
+  onFrontendDiagnosticArchiveEnabledChange?: (enabled: boolean) => void;
   rightClickOpenDevToolsEnabled?: boolean;
   onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   sendShortcut?: 'enter' | 'cmdEnter';
@@ -157,6 +161,10 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onStreamingEnabledChange={props.onStreamingEnabledChange}
           autoOpenFileEnabled={props.autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={props.onAutoOpenFileEnabledChange}
+          frontendDebugPanelEnabled={props.frontendDebugPanelEnabled}
+          onFrontendDebugPanelEnabledChange={props.onFrontendDebugPanelEnabledChange}
+          frontendDiagnosticArchiveEnabled={props.frontendDiagnosticArchiveEnabled}
+          onFrontendDiagnosticArchiveEnabledChange={props.onFrontendDiagnosticArchiveEnabledChange}
           rightClickOpenDevToolsEnabled={props.rightClickOpenDevToolsEnabled}
           onRightClickOpenDevToolsEnabledChange={props.onRightClickOpenDevToolsEnabledChange}
           diffExpandedByDefault={props.diffExpandedByDefault}

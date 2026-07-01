@@ -3,6 +3,7 @@ import type { PermissionMode, ReasoningEffort } from '../../../components/ChatIn
 import { isValidPermissionMode, normalizeClaudeModelId } from '../../../components/ChatInputBox/types';
 import { buildCodexSelectedModelKey } from '../../../types/provider';
 import { clampPermissionDialogTimeoutSeconds } from '../../../utils/permissionDialogTimeout';
+import { updateFrontendDebugRuntimeConfig } from '../../../utils/debug';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
 /**
@@ -38,6 +39,8 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setSendShortcut,
     setAutoOpenFileEnabled,
     setRightClickOpenDevToolsEnabled,
+    setFrontendDebugPanelEnabled,
+    setFrontendDiagnosticArchiveEnabled,
     setPermissionDialogTimeoutSeconds,
     currentProviderRef,
     activeCodexProviderIdRef,
@@ -343,6 +346,29 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setRightClickOpenDevToolsEnabled?.(data.rightClickOpenDevToolsEnabled ?? false);
     } catch (error) {
       console.error('[Frontend] Failed to parse right click devtools enabled:', error);
+    }
+  };
+
+  /**
+   * 回写前端诊断日志运行时配置。
+   * 该配置既要驱动聊天运行态日志桥接，也要在设置页未打开时保持最新值，
+   * 因此这里除了写入可选 React setter 外，还必须同步更新模块级 runtime config。
+   */
+  window.updateFrontendDebugConfig = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      const panelEnabled = data.panelEnabled === true;
+      const archiveEnabled = data.archiveEnabled === true;
+      updateFrontendDebugRuntimeConfig({
+        panelEnabled,
+        archiveEnabled,
+        panelConfigured: data.panelConfigured === true,
+        archiveConfigured: data.archiveConfigured === true,
+      });
+      setFrontendDebugPanelEnabled?.(panelEnabled);
+      setFrontendDiagnosticArchiveEnabled?.(archiveEnabled);
+    } catch (error) {
+      console.error('[Frontend] Failed to parse frontend debug config:', error);
     }
   };
 

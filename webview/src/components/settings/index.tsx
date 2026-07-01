@@ -53,6 +53,11 @@ interface SettingsViewProps {
   // Auto open file configuration (passed from App.tsx for state sync)
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  // Frontend debug configuration (passed from App.tsx for state sync)
+  frontendDebugPanelEnabled?: boolean;
+  onFrontendDebugPanelEnabledChange?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabled?: boolean;
+  onFrontendDiagnosticArchiveEnabledChange?: (enabled: boolean) => void;
   // Right click devtools configuration (passed from App.tsx for state sync)
   rightClickOpenDevToolsEnabled?: boolean;
   onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
@@ -71,6 +76,10 @@ const SettingsView = ({
   onSendShortcutChange: onSendShortcutChangeProp,
   autoOpenFileEnabled: autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp,
+  frontendDebugPanelEnabled: frontendDebugPanelEnabledProp,
+  onFrontendDebugPanelEnabledChange: onFrontendDebugPanelEnabledChangeProp,
+  frontendDiagnosticArchiveEnabled: frontendDiagnosticArchiveEnabledProp,
+  onFrontendDiagnosticArchiveEnabledChange: onFrontendDiagnosticArchiveEnabledChangeProp,
   rightClickOpenDevToolsEnabled: rightClickOpenDevToolsEnabledProp,
   onRightClickOpenDevToolsEnabledChange: onRightClickOpenDevToolsEnabledChangeProp,
   permissionDialogTimeoutSeconds: permissionDialogTimeoutSecondsProp,
@@ -157,7 +166,11 @@ const SettingsView = ({
     setLocalSendShortcut,
     sendShortcut,
     autoOpenFileEnabled,
+    frontendDebugPanelEnabled,
+    frontendDiagnosticArchiveEnabled,
     rightClickOpenDevToolsEnabled,
+    setLocalFrontendDebugPanelEnabled,
+    setLocalFrontendDiagnosticArchiveEnabled,
     setLocalRightClickOpenDevToolsEnabled,
     promptEnhancerConfig,
     setPromptEnhancerConfig,
@@ -184,6 +197,8 @@ const SettingsView = ({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleFrontendDebugPanelEnabledChange,
+    handleFrontendDiagnosticArchiveEnabledChange,
     handleRightClickOpenDevToolsEnabledChange,
     handleTaskReminderEnabledChange,
     handleTaskReminderStateToggle,
@@ -231,6 +246,10 @@ const SettingsView = ({
     onSendShortcutChangeProp,
     autoOpenFileEnabledProp,
     onAutoOpenFileEnabledChangeProp,
+    frontendDebugPanelEnabledProp,
+    onFrontendDebugPanelEnabledChangeProp,
+    frontendDiagnosticArchiveEnabledProp,
+    onFrontendDiagnosticArchiveEnabledChangeProp,
     rightClickOpenDevToolsEnabledProp,
     onRightClickOpenDevToolsEnabledChangeProp,
     permissionDialogTimeoutSecondsProp,
@@ -403,6 +422,8 @@ const SettingsView = ({
     setRemoteCollabConfig,
     setRemoteCollabDebugSnapshot,
     setRemoteCollabProviderOperationResult,
+    setFrontendDebugPanelEnabled: setLocalFrontendDebugPanelEnabled,
+    setFrontendDiagnosticArchiveEnabled: setLocalFrontendDiagnosticArchiveEnabled,
     setRightClickOpenDevToolsEnabled: setLocalRightClickOpenDevToolsEnabled,
     setCommitGenerationEnabled,
     setAiTitleGenerationEnabled,
@@ -599,6 +620,10 @@ const SettingsView = ({
               onSendShortcutChange={handleSendShortcutChange}
               autoOpenFileEnabled={autoOpenFileEnabled}
               onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+              frontendDebugPanelEnabled={frontendDebugPanelEnabled}
+              onFrontendDebugPanelEnabledChange={handleFrontendDebugPanelEnabledChange}
+              frontendDiagnosticArchiveEnabled={frontendDiagnosticArchiveEnabled}
+              onFrontendDiagnosticArchiveEnabledChange={handleFrontendDiagnosticArchiveEnabledChange}
               rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
               onRightClickOpenDevToolsEnabledChange={handleRightClickOpenDevToolsEnabledChange}
               chatBgColor={chatBgColor}

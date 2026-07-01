@@ -288,6 +288,11 @@ interface Window {
   updateRightClickOpenDevToolsEnabled?: (json: string) => void;
 
   /**
+   * Update frontend debug config setting
+   */
+  updateFrontendDebugConfig?: (json: string) => void;
+
+  /**
    * Update commit AI prompt configuration
    */
   updateCommitPrompt?: (json: string) => void;
@@ -909,6 +914,11 @@ interface Window {
    * Pending right click devtools enabled status before React initialization
    */
   __pendingRightClickOpenDevToolsEnabled?: string;
+
+  /**
+   * Pending frontend debug config before React initialization
+   */
+  __pendingFrontendDebugConfig?: string;
 
   /**
    * Pending permission dialog timeout before React initialization

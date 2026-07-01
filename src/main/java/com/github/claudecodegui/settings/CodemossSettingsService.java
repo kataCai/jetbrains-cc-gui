@@ -55,6 +55,9 @@ public class CodemossSettingsService {
     private static final String TASK_REMINDER_KEY = "taskReminder";
     private static final String SOUND_NOTIFICATION_KEY = "soundNotification";
     private static final String REMOTE_COLLAB_KEY = "remoteCollab";
+    private static final String FRONTEND_DEBUG_CONFIG_KEY = "frontendDebugConfig";
+    private static final String FRONTEND_DEBUG_PANEL_ENABLED_KEY = "panelEnabled";
+    private static final String FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY = "archiveEnabled";
     private static final String DEBUG_KEY = "debug";
     private static final String ENABLED_KEY = "enabled";
     private static final String INTERACTIVE_PROVIDER_ID_KEY = "interactiveProviderId";
@@ -327,6 +330,74 @@ public class CodemossSettingsService {
         config.add(REMOTE_COLLAB_KEY, createDefaultRemoteCollabConfig());
 
         return config;
+    }
+
+    /**
+     * 获取前端调试配置。
+     * 该配置属于插件级运行时偏好，不依赖具体项目，因此保存在根配置节点。
+     * 这里统一做标准化，保证旧配置缺字段或字段类型异常时前端仍能拿到完整布尔结构。
+     *
+     * @return 标准化后的前端调试配置
+     * @throws IOException 读取配置失败时抛出
+     */
+    public JsonObject getFrontendDebugConfig() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(FRONTEND_DEBUG_CONFIG_KEY) || !config.get(FRONTEND_DEBUG_CONFIG_KEY).isJsonObject()) {
+            return createDefaultFrontendDebugConfig();
+        }
+        return normalizeFrontendDebugConfig(config.getAsJsonObject(FRONTEND_DEBUG_CONFIG_KEY));
+    }
+
+    /**
+     * 获取带“是否已显式配置”标记的前端调试配置快照。
+     * 设置页保存值的优先级高于构建期开关；若用户尚未保存该配置，则前端应退回构建期默认值。
+     *
+     * @return 包含生效布尔值与 configured 标记的配置快照
+     * @throws IOException 读取配置失败时抛出
+     */
+    public JsonObject getFrontendDebugConfigState() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject persisted = config.has(FRONTEND_DEBUG_CONFIG_KEY) && config.get(FRONTEND_DEBUG_CONFIG_KEY).isJsonObject()
+                ? config.getAsJsonObject(FRONTEND_DEBUG_CONFIG_KEY)
+                : null;
+        JsonObject normalized = normalizeFrontendDebugConfig(persisted);
+        JsonObject response = new JsonObject();
+        response.addProperty(
+                FRONTEND_DEBUG_PANEL_ENABLED_KEY,
+                normalized.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).getAsBoolean()
+        );
+        response.addProperty(
+                FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY,
+                normalized.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).getAsBoolean()
+        );
+        response.addProperty(
+                "panelConfigured",
+                hasExplicitBooleanProperty(persisted, FRONTEND_DEBUG_PANEL_ENABLED_KEY)
+        );
+        response.addProperty(
+                "archiveConfigured",
+                hasExplicitBooleanProperty(persisted, FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY)
+        );
+        return response;
+    }
+
+    /**
+     * 保存前端调试配置。
+     * 调试面板显示和诊断日志落档两个开关需要一次性持久化，避免前端分两次提交时出现中间态。
+     *
+     * @param panelEnabled 是否允许显示前端调试面板
+     * @param archiveEnabled 是否允许将关键前端诊断日志桥接并落入 idea.log
+     * @throws IOException 写配置失败时抛出
+     */
+    public void setFrontendDebugConfig(boolean panelEnabled, boolean archiveEnabled) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject frontendDebugConfig = new JsonObject();
+        frontendDebugConfig.addProperty(FRONTEND_DEBUG_PANEL_ENABLED_KEY, panelEnabled);
+        frontendDebugConfig.addProperty(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY, archiveEnabled);
+        config.add(FRONTEND_DEBUG_CONFIG_KEY, frontendDebugConfig);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set frontend debug config: panelEnabled=" + panelEnabled
+                + ", archiveEnabled=" + archiveEnabled);
     }
 
     // ==================== Language Config Management ====================
@@ -646,6 +717,65 @@ public class CodemossSettingsService {
         config.addProperty("rightClickOpenDevToolsEnabled", enabled);
         writeConfig(config);
         LOG.info("[CodemossSettings] Set right click open DevTools enabled: " + enabled);
+    }
+
+    /**
+     * 创建前端调试配置默认值。
+     * 分发包默认关闭调试面板和诊断日志落档，避免普通使用场景产生额外噪声。
+     *
+     * @return 默认前端调试配置
+     */
+    private JsonObject createDefaultFrontendDebugConfig() {
+        JsonObject config = new JsonObject();
+        config.addProperty(FRONTEND_DEBUG_PANEL_ENABLED_KEY, false);
+        config.addProperty(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY, false);
+        return config;
+    }
+
+    /**
+     * 标准化前端调试配置。
+     * 仅接受布尔值；缺失或类型异常时统一回退到 false，避免脏配置导致调试能力被意外打开。
+     *
+     * @param rawConfig 原始前端调试配置
+     * @return 标准化后的配置对象
+     */
+    private JsonObject normalizeFrontendDebugConfig(JsonObject rawConfig) {
+        JsonObject normalized = createDefaultFrontendDebugConfig();
+        if (rawConfig == null) {
+            return normalized;
+        }
+        if (rawConfig.has(FRONTEND_DEBUG_PANEL_ENABLED_KEY)
+                && rawConfig.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).isJsonPrimitive()
+                && rawConfig.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).getAsJsonPrimitive().isBoolean()) {
+            normalized.addProperty(
+                    FRONTEND_DEBUG_PANEL_ENABLED_KEY,
+                    rawConfig.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).getAsBoolean()
+            );
+        }
+        if (rawConfig.has(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY)
+                && rawConfig.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).isJsonPrimitive()
+                && rawConfig.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).getAsJsonPrimitive().isBoolean()) {
+            normalized.addProperty(
+                    FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY,
+                    rawConfig.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).getAsBoolean()
+            );
+        }
+        return normalized;
+    }
+
+    /**
+     * 判断指定配置节点中某个布尔字段是否由用户显式保存过。
+     * 只有显式存在且类型为 boolean 时，前端才应把该字段视为运行时覆盖值。
+     *
+     * @param source 原始配置节点
+     * @param key 目标字段名
+     * @return 字段显式存在且为布尔值时返回 true
+     */
+    private boolean hasExplicitBooleanProperty(JsonObject source, String key) {
+        return source != null
+                && source.has(key)
+                && source.get(key).isJsonPrimitive()
+                && source.get(key).getAsJsonPrimitive().isBoolean();
     }
 
     // ==================== Streaming Config Management ====================

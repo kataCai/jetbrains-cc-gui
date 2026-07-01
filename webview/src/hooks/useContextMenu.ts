@@ -6,6 +6,7 @@ import {
   getCopyableImageSourceFromElement,
   type CopyableImageSource,
 } from '../utils/imageClipboard';
+import { emitFrontendDiagnosticLog } from '../utils/debug.js';
 
 interface ContextMenuState {
   visible: boolean;
@@ -149,6 +150,10 @@ export function pasteAtCursor(savedRange: Range | null, el: HTMLElement, onCompl
   el.focus();
   restoreRange(savedRange);
   onComplete?.();
+  emitFrontendDiagnosticLog('RichPaste.ContextMenu', 'requested rich clipboard paste from context menu', {
+    hasSavedRange: savedRange !== null,
+    activeElementTag: el.tagName,
+  });
   sendToJava('read_clipboard_rich', '');
 }
 

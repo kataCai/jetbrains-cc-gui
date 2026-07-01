@@ -2,10 +2,15 @@ vi.mock('../utils/bridge.js', () => ({
   sendToJava: vi.fn(),
 }));
 
+vi.mock('../utils/debug.js', () => ({
+  emitFrontendDiagnosticLog: vi.fn(),
+}));
+
 import { act, renderHook } from '@testing-library/react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { cutSelection, pasteAtCursor, useContextMenu } from './useContextMenu.js';
 import { sendToJava } from '../utils/bridge.js';
+import { emitFrontendDiagnosticLog } from '../utils/debug.js';
 
 function mockSelection(options?: {
   text?: string;
@@ -145,5 +150,13 @@ describe('useContextMenu', () => {
     expect(selection.removeAllRanges).toHaveBeenCalledTimes(1);
     expect(selection.addRange).toHaveBeenCalledWith(savedRange);
     expect(sendToJava).toHaveBeenCalledWith('read_clipboard_rich', '');
+    expect(emitFrontendDiagnosticLog).toHaveBeenCalledWith(
+      'RichPaste.ContextMenu',
+      'requested rich clipboard paste from context menu',
+      {
+        hasSavedRange: true,
+        activeElementTag: 'DIV',
+      },
+    );
   });
 });

@@ -101,6 +101,40 @@ describe('useSettingsBasicActions merged settings behavior', () => {
     );
   });
 
+  it('sends frontend debug panel toggle updates together with the archive flag', () => {
+    // 前端调试配置在后端是一个双布尔对象，因此切换调试面板时必须带上当前 archiveEnabled，避免只提交半个配置对象。
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.setLocalFrontendDiagnosticArchiveEnabled(true);
+    });
+
+    act(() => {
+      result.current.handleFrontendDebugPanelEnabledChange(true);
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_frontend_debug_config:{"panelEnabled":true,"archiveEnabled":true}'
+    );
+  });
+
+  it('sends frontend diagnostic archive toggle updates together with the panel flag', () => {
+    // 诊断日志落档开关同样需要和 panelEnabled 一起提交，确保后端持久化始终拿到完整配置快照。
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.setLocalFrontendDebugPanelEnabled(true);
+    });
+
+    act(() => {
+      result.current.handleFrontendDiagnosticArchiveEnabledChange(true);
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_frontend_debug_config:{"panelEnabled":true,"archiveEnabled":true}'
+    );
+  });
+
   /**
    * 验证切换 Commit AI provider 只影响 commitAiConfig，不污染 promptEnhancerConfig。
    * 断言意图：覆盖本轮并轨吸收的 AI feature 配置分离语义。
