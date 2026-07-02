@@ -32,7 +32,7 @@ checkstyle {
 }
 
 group = 'com.github.idea-claude-code-gui'
-version = '0.4.3'
+version = '0.4.4'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -310,6 +310,8 @@ def aiBridgePackageLockFile = new File(aiBridgeDir, 'package-lock.json')
 def webviewDir = file('webview')
 def requestedTasks = gradle.startParameter.taskNames.collect { it.toLowerCase() }
 def enableVConsoleInWebview = requestedTasks.any { it.contains('runide') }
+def enableWebviewDebugInWebview = enableVConsoleInWebview || (project.findProperty('webviewDebug') ?: 'false').toString().toBoolean()
+def enableBridgeDiagnosticLogInWebview = requestedTasks.any { it.contains('runide') } || (project.findProperty('bridgeDiagnosticLog') ?: 'false').toString().toBoolean()
 def skipWebviewBuild = (project.findProperty('skipWebview') ?: 'false').toString().toBoolean()
 
 // Get custom Node.js path from local properties
@@ -318,6 +320,8 @@ def localNodePath = getLocalProperty('node.path')
 tasks.register('buildWebview', Exec) {
     workingDir webviewDir
     environment 'VITE_ENABLE_VCONSOLE', enableVConsoleInWebview ? 'true' : 'false'
+    environment 'VITE_WEBVIEW_DEBUG', enableWebviewDebugInWebview ? 'true' : 'false'
+    environment 'VITE_BRIDGE_DIAGNOSTIC_LOG', enableBridgeDiagnosticLogInWebview ? 'true' : 'false'
 
     // Determine npm command path with robust detection
     def npmCommand = 'npm'

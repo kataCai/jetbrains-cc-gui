@@ -19,11 +19,15 @@ import type { UiFontConfig } from './types/uiFontConfig';
 
 const enableVConsole =
   import.meta.env.DEV || import.meta.env.VITE_ENABLE_VCONSOLE === 'true';
+const enableWebviewDebug =
+  import.meta.env.DEV
+  || import.meta.env.VITE_ENABLE_VCONSOLE === 'true'
+  || import.meta.env.VITE_WEBVIEW_DEBUG === 'true';
 
 // Silence noisy console output in production (including third-party libs).
 // console.error is preserved so ErrorBoundary and unhandled exceptions still
 // surface in the IDE's webview devtools — silencing it would hide regressions.
-if (!import.meta.env.DEV && !enableVConsole) {
+if (!import.meta.env.DEV && !enableWebviewDebug) {
   const noop = () => {};
   console.log = noop;
   console.debug = noop;
@@ -543,6 +547,14 @@ if (typeof window !== 'undefined' && !window.updateStreamingEnabled) {
   window.updateStreamingEnabled = (json: string) => {
     debugLog('[Main] Storing pending streaming enabled status, length=' + (json ? json.length : 0));
     window.__pendingStreamingEnabled = json;
+  };
+}
+
+if (typeof window !== 'undefined' && !window.updateFrontendDebugConfig) {
+  debugLog('[Main] Pre-registering updateFrontendDebugConfig placeholder');
+  window.updateFrontendDebugConfig = (json: string) => {
+    debugLog('[Main] Storing pending frontend debug config, length=' + (json ? json.length : 0));
+    window.__pendingFrontendDebugConfig = json;
   };
 }
 

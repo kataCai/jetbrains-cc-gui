@@ -6,6 +6,7 @@ import { MessageItem } from './MessageItem';
 import WaitingIndicator from './WaitingIndicator';
 import { ContextMenu } from './ContextMenu';
 import { useContextMenu, copyImageSelection, copySelection } from '../hooks/useContextMenu.js';
+import { sendToJava } from '../utils/bridge';
 
 /** Always render at least this many recent messages. Earlier messages are collapsed. */
 const VISIBLE_MESSAGE_WINDOW = 15;
@@ -64,6 +65,8 @@ interface MessageListProps {
   onNavigateToDependencySettings?: () => void;
   /** Current active provider id; forwarded to MessageItem for streaming-connect label. */
   currentProvider?: string;
+  /** Whether to expose the DevTools entry in the message list context menu. */
+  rightClickOpenDevToolsEnabled?: boolean;
 }
 
 export const MessageList = memo(function MessageList({
@@ -83,6 +86,7 @@ export const MessageList = memo(function MessageList({
   onNavigateToProviderSettings,
   onNavigateToDependencySettings,
   currentProvider,
+  rightClickOpenDevToolsEnabled = false,
 }: MessageListProps) {
   // Number of earlier messages revealed beyond VISIBLE_MESSAGE_WINDOW. Grows in
   // page-size chunks as the user clicks "show earlier", avoiding a single huge
@@ -141,6 +145,12 @@ export const MessageList = memo(function MessageList({
               action: () => copySelection(ctxMenu.savedRange, ctxMenu.selectedText),
               disabled: !ctxMenu.hasSelection,
             },
+            ...(rightClickOpenDevToolsEnabled
+              ? [{
+                  label: t('contextMenu.openDevTools'),
+                  action: () => sendToJava('open_devtools', ''),
+                } as const]
+              : []),
           ]}
         />
       )}

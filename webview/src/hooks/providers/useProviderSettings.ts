@@ -21,6 +21,7 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
   const [streamingEnabledSetting, setStreamingEnabledSetting] = useState(true);
   const [sendShortcut, setSendShortcut] = useState<'enter' | 'cmdEnter'>('enter');
   const [autoOpenFileEnabled, setAutoOpenFileEnabled] = useState(false);
+  const [rightClickOpenDevToolsEnabled, setRightClickOpenDevToolsEnabled] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<SelectedAgent | null>(null);
   const [activeProviderConfig, setActiveProviderConfig] = useState<ProviderConfig | null>(null);
   const [, setProviderConfigVersion] = useState(0);
@@ -100,6 +101,21 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
     );
   }, [t, addToast]);
 
+  /**
+   * 切换“右键打开调试面板”全局开关。
+   * 该状态需要同时驱动设置页与聊天区右键菜单，因此必须走统一的
+   * 全局状态链并回写给后端，避免不同页面出现各自独立的默认值。
+   *
+   * @param enabled 是否允许通过右键菜单打开调试面板
+   */
+  const handleRightClickOpenDevToolsEnabledChange = useCallback((enabled: boolean) => {
+    setRightClickOpenDevToolsEnabled(enabled);
+    sendBridgeEvent(
+      'set_right_click_open_devtools_enabled',
+      JSON.stringify({ rightClickOpenDevToolsEnabled: enabled }),
+    );
+  }, []);
+
   return {
     streamingEnabledSetting,
     setStreamingEnabledSetting,
@@ -107,6 +123,8 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
     setSendShortcut,
     autoOpenFileEnabled,
     setAutoOpenFileEnabled,
+    rightClickOpenDevToolsEnabled,
+    setRightClickOpenDevToolsEnabled,
     selectedAgent,
     setSelectedAgent,
     activeProviderConfig,
@@ -117,6 +135,7 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
     handleStreamingEnabledChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
   };
 }
 

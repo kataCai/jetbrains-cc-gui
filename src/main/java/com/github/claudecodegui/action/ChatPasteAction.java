@@ -35,11 +35,16 @@ public class ChatPasteAction extends ChatToolWindowAction {
     protected void performAction(@NotNull AnActionEvent e, @NotNull Project project, @NotNull ClaudeChatWindow chatWindow) {
         try {
             Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            LOG.info("[RichPaste][BridgeRead] Clipboard flavors: " + java.util.Arrays.toString(clipboard.getAvailableDataFlavors()));
             if (clipboard.isDataFlavorAvailable(ClipboardHandler.RICH_JSON_FLAVOR)) {
                 Object richData = clipboard.getData(ClipboardHandler.RICH_JSON_FLAVOR);
                 if (richData instanceof String richJson) {
                     ClipboardHandler.ClipboardRichPayload richPayload = ClipboardHandler.parseClipboardRichPayload(richJson);
                     if (richPayload != null) {
+                        LOG.info("[RichPaste][BridgeRead] Using rich clipboard flavor: textLength="
+                                + (richPayload.text != null ? richPayload.text.length() : 0)
+                                + ", imageCount=" + (richPayload.images != null ? richPayload.images.length : (richPayload.image != null ? 1 : 0))
+                                + ", orderedBlockCount=" + (richPayload.orderedBlocks != null ? richPayload.orderedBlocks.length : 0));
                         chatWindow.executeJavaScriptCode(buildRichPasteScript(richPayload));
                         return;
                     }
@@ -66,6 +71,8 @@ public class ChatPasteAction extends ChatToolWindowAction {
                 return;
             }
 
+            LOG.info("[RichPaste][BridgeRead] Falling back to basic clipboard paste: textLength="
+                    + text.length() + ", hasImage=" + (imageBase64 != null));
             chatWindow.executeJavaScriptCode(buildPasteScript(text, imageBase64));
         } catch (Exception ex) {
             LOG.warn("Failed to read clipboard for paste action", ex);

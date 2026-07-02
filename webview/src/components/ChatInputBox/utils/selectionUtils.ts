@@ -7,6 +7,20 @@
 
 import { TEXT_LENGTH_THRESHOLDS } from '../../../constants/performance.js';
 
+const RICH_PASTE_SELECTION_LOG_PREFIX = '[RichPaste][Selection]';
+
+/**
+ * 输出选区恢复链路的轻量调试日志。
+ * 仅记录失败分支原因，便于定位 rich paste 文本为何没有进入输入框。
+ *
+ * @param message 日志说明
+ * @param details 附加结构化上下文
+ * @return 无返回值
+ */
+function logSelectionFailure(message: string, details?: Record<string, unknown>): void {
+  console.debug(RICH_PASTE_SELECTION_LOG_PREFIX, message, details ?? {});
+}
+
 /**
  * Insert text at current cursor position in a contenteditable element
  *
@@ -20,12 +34,23 @@ import { TEXT_LENGTH_THRESHOLDS } from '../../../constants/performance.js';
  */
 export function insertTextAtCursor(text: string, element?: HTMLElement | null): boolean {
   const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return false;
+  if (!selection) {
+    logSelectionFailure('insertTextAtCursor aborted because selection is null');
+    return false;
+  }
+  if (selection.rangeCount === 0) {
+    logSelectionFailure('insertTextAtCursor aborted because selection has no ranges');
+    return false;
+  }
 
   const range = selection.getRangeAt(0);
 
   // Verify cursor is within the target element if provided
   if (element && !element.contains(range.commonAncestorContainer)) {
+    logSelectionFailure('insertTextAtCursor aborted because range is outside target element', {
+      targetTag: element.tagName,
+      anchorNodeName: selection.anchorNode?.nodeName ?? null,
+    });
     return false;
   }
 

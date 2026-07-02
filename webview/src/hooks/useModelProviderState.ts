@@ -176,11 +176,14 @@ export function useModelProviderState({
     setSendShortcut,
     autoOpenFileEnabled,
     setAutoOpenFileEnabled,
+    rightClickOpenDevToolsEnabled,
+    setRightClickOpenDevToolsEnabled,
     syncActiveProviderModelMapping,
     handleAgentSelect,
     handleStreamingEnabledChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
   } = settings;
   const {
     usagePercentage,
@@ -520,6 +523,8 @@ export function useModelProviderState({
     setSendShortcut,
     autoOpenFileEnabled,
     setAutoOpenFileEnabled,
+    rightClickOpenDevToolsEnabled,
+    setRightClickOpenDevToolsEnabled,
     sdkStatus,
     setSdkStatus,
     sdkStatusLoaded,
@@ -543,6 +548,7 @@ export function useModelProviderState({
     handleStreamingEnabledChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
     handleLongContextChange,
   };
 }

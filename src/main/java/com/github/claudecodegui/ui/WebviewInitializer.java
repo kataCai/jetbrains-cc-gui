@@ -177,7 +177,14 @@ public class WebviewInitializer {
         }
 
         try {
-            JBCefBrowser browser = JBCefBrowserFactory.create();
+            boolean rightClickOpenDevToolsEnabled = false;
+            try {
+                rightClickOpenDevToolsEnabled = host.getHandlerContext().getSettingsService().getRightClickOpenDevToolsEnabled();
+            } catch (Exception e) {
+                LOG.warn("[WebviewInitializer] Failed to read right click DevTools setting, fallback to disabled", e);
+            }
+
+            JBCefBrowser browser = JBCefBrowserFactory.create(rightClickOpenDevToolsEnabled);
             host.setBrowser(browser);
             host.getHandlerContext().setBrowser(browser);
 

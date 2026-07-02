@@ -65,6 +65,7 @@ public class ClaudeChatWindow {
 
     private static final Logger LOG = Logger.getInstance(ClaudeChatWindow.class);
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
+    private static final int FRONTEND_DEBUG_DETAILS_MAX_LENGTH = 512;
     private static final long PROJECT_STATE_FLUSH_DEBOUNCE_MS = 1500L;
     private static final long WEBVIEW_RECOVERY_MIN_INTERVAL_MS = 10_000L;
 
@@ -89,7 +90,6 @@ public class ClaudeChatWindow {
     private volatile boolean initialized = false;
     private volatile boolean frontendReady = false;
     private volatile boolean slashCommandsFetched = false;
-    private final AtomicBoolean restoredHistoryLoadStarted = new AtomicBoolean(false);
     private final AtomicBoolean freshNewTabDefaultsApplied = new AtomicBoolean(false);
     private final Object projectStateFlushLock = new Object();
     private final AtomicInteger projectStateFlushRequestCount = new AtomicInteger(0);
@@ -485,48 +485,17 @@ public class ClaudeChatWindow {
                 + ", sessionId=" + savedState.sessionId + ", cwd=" + savedState.cwd + ")");
     }
 
+    /**
+     * 恢复持久化的标签页会话绑定状态。
+     * 当前历史恢复已经统一收敛到“前端 ready 后由 SessionLifecycleManager 执行”的主链路，
+     * 因此这里不再根据 `loadImmediately` 直接触发旧的 `session.loadFromServer()` 抢跑入口，
+     * 避免启动恢复与手动重绑阶段再次出现通用恢复和增强恢复并行执行。
+     *
+     * @param savedState 持久化标签页状态
+     * @param loadImmediately 旧语义中的“是否立即恢复历史”，现仅保留参数兼容，不再驱动旧恢复链路
+     */
     public void restorePersistedTabSessionState(TabStateService.TabSessionState savedState, boolean loadImmediately) {
         restorePersistedTabSessionState(savedState);
-        if (TabSessionRestorePolicy.shouldLoadImmediately(savedState, loadImmediately)) {
-            loadRestoredHistoryIfNeeded(savedState);
-        }
-    }
-
-    public void loadRestoredHistoryIfNeeded() {
-        if (session == null) {
-            return;
-        }
-
-        TabStateService.TabSessionState currentState = new TabStateService.TabSessionState();
-        currentState.sessionId = session.getSessionId();
-        loadRestoredHistoryIfNeeded(currentState);
-    }
-
-    private void loadRestoredHistoryIfNeeded(TabStateService.TabSessionState savedState) {
-        if (!TabSessionRestorePolicy.shouldLoadHistory(savedState) || session == null) {
-            return;
-        }
-        if (!restoredHistoryLoadStarted.compareAndSet(false, true)) {
-            return;
-        }
-
-        session.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
-            if (!disposed) {
-                tabSessionRestoreState.markRestoreFinished(session.getSessionId());
-                callJavaScript("historyLoadComplete");
-            }
-        })).exceptionally(ex -> {
-            LOG.warn("[TabRestore] Failed to load persisted tab history: " + ex.getMessage(), ex);
-            ApplicationManager.getApplication().invokeLater(() -> {
-                if (!disposed) {
-                    tabSessionRestoreState.markRestoreFailed();
-                    callJavaScript("historyLoadComplete");
-                    callJavaScript("addErrorMessage",
-                            JsUtils.escapeJs("Failed to restore session history: " + ex.getMessage()));
-                }
-            });
-            return null;
-        });
     }
 
     public void addCodeSnippetFromExternal(String selectionInfo) {
@@ -678,6 +647,13 @@ public class ClaudeChatWindow {
         });
     }
 
+    /**
+     * 处理 WebView 通过桥接上报的 JavaScript 消息。
+     * 这里除了业务事件外，还负责承接前端 console 日志；为了排查 rich paste 与历史恢复链路，
+     * 需要把 `console.info` 显式提升到 IDEA 的 `INFO` 级别，避免关键诊断日志只停留在 debug 通道。
+     *
+     * @param message 前端桥接上来的原始消息
+     */
     void handleJavaScriptMessage(String message) {
         if (message.startsWith("{\"type\":\"console.")) {
             try {
@@ -693,7 +669,7 @@ public class ClaudeChatWindow {
 
                 if ("console.error".equals(logType)) {
                     LOG.warn(logMessage.toString());
-                } else if ("console.warn".equals(logType)) {
+                } else if ("console.warn".equals(logType) || "console.info".equals(logType)) {
                     LOG.info(logMessage.toString());
                 } else {
                     LOG.debug(logMessage.toString());
@@ -713,6 +689,11 @@ public class ClaudeChatWindow {
         String type = parts[0];
         String content = parts.length > 1 ? parts[1] : "";
 
+        if ("frontend_debug_log".equals(type)) {
+            handleFrontendDebugLog(content);
+            return;
+        }
+
         if ("update_title".equals(type)) {
             LOG.info("[HistoryTitleSync] Bridge received update_title. content=" + content);
         }
@@ -731,6 +712,66 @@ public class ClaudeChatWindow {
         }
 
         LOG.warn("Unknown message type: " + type);
+    }
+
+    /**
+     * 处理前端显式桥接回来的诊断日志。
+     * 该入口独立于 console monkey-patch，用于保证分发包静音 console 后，
+     * rich paste、历史恢复等关键诊断日志依然可以进入 idea.log。
+     *
+     * @param content 前端发来的结构化 JSON 载荷
+     */
+    private void handleFrontendDebugLog(String content) {
+        try {
+            JsonObject payload = new Gson().fromJson(content, JsonObject.class);
+            if (payload == null) {
+                LOG.warn("[FrontendDebug] Skip empty diagnostic payload");
+                return;
+            }
+
+            String scope = payload.has("scope") && !payload.get("scope").isJsonNull()
+                    ? payload.get("scope").getAsString()
+                    : "UnknownScope";
+            String message = payload.has("message") && !payload.get("message").isJsonNull()
+                    ? payload.get("message").getAsString()
+                    : "";
+            String details = payload.has("details") && !payload.get("details").isJsonNull()
+                    ? payload.get("details").toString()
+                    : "{}";
+
+            LOG.info(buildFrontendDebugLogLine(scope, message, details));
+        } catch (Exception e) {
+            LOG.warn("[FrontendDebug] Failed to parse diagnostic payload: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 构造前端诊断日志最终写入 IDEA 日志的单行文本。
+     * 前端已经会先做一轮裁剪与脱敏；这里仍保留 Java 侧兜底，避免后续新增桥接入口
+     * 或异常 payload 绕过前端工具后，把超长详情直接刷进 idea.log。
+     *
+     * @param scope 前端诊断分类
+     * @param message 诊断摘要
+     * @param details 已序列化的详情字符串
+     * @return 可直接写入 IDEA 日志的单行文本
+     */
+    private static String buildFrontendDebugLogLine(String scope, String message, String details) {
+        return "[FrontendDebug][" + scope + "] " + message + " " + truncateFrontendDebugDetails(details);
+    }
+
+    /**
+     * 对写入 IDEA 日志的前端诊断详情做最终长度保护。
+     * 这里只做长度兜底，不再重复解析 JSON 结构，避免额外引入日志链路异常点。
+     *
+     * @param details 详情字符串
+     * @return 裁剪后的详情字符串
+     */
+    private static String truncateFrontendDebugDetails(String details) {
+        if (details == null || details.length() <= FRONTEND_DEBUG_DETAILS_MAX_LENGTH) {
+            return details;
+        }
+        return details.substring(0, FRONTEND_DEBUG_DETAILS_MAX_LENGTH)
+                + "...[truncated " + (details.length() - FRONTEND_DEBUG_DETAILS_MAX_LENGTH) + " chars]";
     }
 
     // ==================== Session Delegates ====================

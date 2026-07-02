@@ -3,6 +3,8 @@
     "ready": "Ready",
     "loading": "Loading",
     "save": "Save",
+    "browse": "Browse",
+    "reset": "Reset",
     "cancel": "Cancel",
     "confirm": "Confirm",
     "delete": "Delete",
@@ -33,6 +35,7 @@
     "uploadedFiles": "Uploaded files: {{files}}",
     "emptyMessage": "Empty message",
     "clickToPreview": "Click to preview",
+    "historyImageMissing": "Image cache expired. Preview unavailable.",
     "userUploadedImage": "User uploaded image",
     "inputPlaceholder": "@reference files, #invoke agents, !insert prompts, Enter to send",
     "inputPlaceholderEnter": "@reference files, #invoke agents, !insert prompts, Enter to send",
@@ -129,7 +132,8 @@
     "cut": "Cut",
     "paste": "Paste",
     "newline": "Insert Newline",
-    "copyImage": "Copy image"
+    "copyImage": "Copy image",
+    "openDevTools": "Open DevTools"
   },
   "settings": {
     "title": "Settings",
@@ -185,6 +189,13 @@
         "placeholder": "e.g. project1 or leave empty to use project root",
         "hint": "Specify the directory where Claude works. Can use relative path (relative to project root) or absolute path. Leave empty to use project root."
       },
+      "codexHistoryImageCache": {
+        "label": "Codex History Image Cache",
+        "dirPlaceholder": "Optional: custom directory for Codex history image cache",
+        "retentionDays": "Retention Days",
+        "maxSizeMb": "Max Size (MB)",
+        "hint": "Used to replay historical Codex images and restore image attachments when copying history back to the chat input. Effective default directory:"
+      },
       "fontSize": {
         "label": "Font Size",
         "level1": "Small (80%)",
@@ -217,6 +228,24 @@
         "enabled": "Enabled",
         "disabled": "Disabled",
         "hint": "When enabled, selecting a file in the project tree will automatically send its file path to AI (note: only the file path is sent, not the file content). When disabled, manual action is required."
+      },
+      "frontendDebugPanel": {
+        "label": "Frontend Debug Panel",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, the runtime may display a frontend debug panel inside the WebView for direct inspection of frontend diagnostics."
+      },
+      "frontendDiagnosticArchive": {
+        "label": "Frontend Diagnostic Log Archive",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, key frontend diagnostic logs will be bridged to the plugin side and written into idea.log for distribution-package troubleshooting."
+      },
+      "rightClickOpenDevTools": {
+        "label": "Right-click Open DevTools",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, the chat area's right-click menu will include an entry to open the current WebView DevTools."
       },
       "promptEnhancer": {
         "label": "Prompt Enhancer",

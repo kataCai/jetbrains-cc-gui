@@ -23,6 +23,13 @@ interface Window {
   updateMessages?: (json: string, sequence?: string | number) => void;
 
   /**
+   * 准备下一次历史恢复快照应用所需的幂等上下文。
+   * 后端会在 `clearMessages -> updateMessages` 前先下发 restore key 与 snapshot signature，
+   * 前端据此忽略同一恢复周期内重复注入的完全相同历史快照。
+   */
+  prepareHistoryRestoreSnapshot?: (restoreKey: string, snapshotSignature: string) => void;
+
+  /**
    * Patch a single message UUID without re-sending the full message list.
    */
   patchMessageUuid?: (content: string, uuid: string) => void;
@@ -276,6 +283,16 @@ interface Window {
   updateAutoOpenFileEnabled?: (json: string) => void;
 
   /**
+   * Update right click devtools enabled setting
+   */
+  updateRightClickOpenDevToolsEnabled?: (json: string) => void;
+
+  /**
+   * Update frontend debug config setting
+   */
+  updateFrontendDebugConfig?: (json: string) => void;
+
+  /**
    * Update commit AI prompt configuration
    */
   updateCommitPrompt?: (json: string) => void;
@@ -349,6 +366,16 @@ interface Window {
    * Update working directory configuration
    */
   updateWorkingDirectory?: (json: string) => void;
+
+  /**
+   * Update Codex history image cache configuration
+   */
+  updateCodexHistoryImageCacheConfig?: (json: string) => void;
+
+  /**
+   * Directory chooser callback for Codex history image cache path
+   */
+  onCodexHistoryImageCacheDirBrowsed?: (json: string) => void;
 
   /**
    * Update linkify/navigation capabilities used by Markdown rendering.
@@ -763,6 +790,12 @@ interface Window {
   __pendingUpdateJson?: string | null;
   __pendingUpdateSequence?: number | null;
   __minAcceptedUpdateSequence?: number;
+  /** 当前待消费的历史恢复快照上下文。只在紧随其后的单次 `updateMessages` 中生效。 */
+  __preparedHistoryRestoreKey?: string | null;
+  __preparedHistoryRestoreSignature?: string | null;
+  /** 最近一次已经成功落地到界面的历史恢复快照标识，用于忽略重复注入。 */
+  __lastAppliedHistoryRestoreKey?: string | null;
+  __lastAppliedHistoryRestoreSignature?: string | null;
   /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
   __cancelPendingUpdateMessages?: () => void;
   /**
@@ -876,6 +909,16 @@ interface Window {
    * Pending auto open file enabled status before React initialization
    */
   __pendingAutoOpenFileEnabled?: string;
+
+  /**
+   * Pending right click devtools enabled status before React initialization
+   */
+  __pendingRightClickOpenDevToolsEnabled?: string;
+
+  /**
+   * Pending frontend debug config before React initialization
+   */
+  __pendingFrontendDebugConfig?: string;
 
   /**
    * Pending permission dialog timeout before React initialization

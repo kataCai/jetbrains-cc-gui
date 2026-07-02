@@ -7,6 +7,7 @@ import { ContextMenu } from '../ContextMenu/ContextMenu';
 import { setActiveImageTarget } from '../../utils/activeImageTarget';
 import { buildCopyableImageDataset, copyImageViaBridge } from '../../utils/imageClipboard';
 import { copyImageSelection, useContextMenu } from '../../hooks/useContextMenu';
+import { sendToJava } from '../../utils/bridge';
 
 /**
  * 输入区附件列表。
@@ -16,6 +17,7 @@ export const AttachmentList = ({
   attachments,
   onRemove,
   onPreview,
+  rightClickOpenDevToolsEnabled = false,
 }: AttachmentListProps) => {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<Attachment | null>(null);
@@ -150,16 +152,25 @@ export const AttachmentList = ({
         })}
       </div>
 
-      {ctxMenu.visible && ctxMenu.imageTarget && (
+      {ctxMenu.visible && (ctxMenu.imageTarget || rightClickOpenDevToolsEnabled) && (
         <ContextMenu
           x={ctxMenu.x}
           y={ctxMenu.y}
           onClose={ctxMenu.close}
           items={[
-            {
+            ...(ctxMenu.imageTarget ? [{
               label: t('contextMenu.copyImage', '复制图片'),
               action: () => void copyImageSelection(ctxMenu.imageTarget),
-            },
+            }] : []),
+            ...(rightClickOpenDevToolsEnabled
+              ? [
+                  ...(ctxMenu.imageTarget ? [{ separator: true as const }] : []),
+                  {
+                    label: t('contextMenu.openDevTools'),
+                    action: () => sendToJava('open_devtools', ''),
+                  } as const,
+                ]
+              : []),
           ]}
         />
       )}

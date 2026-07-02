@@ -522,6 +522,32 @@
   margin-bottom: 24px;
 }
 
+.inlineActionGroup {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inlineNumberGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin: 12px 0 4px;
+}
+
+.numberField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.numberFieldLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 /* 🔧 流式传输开关样式 */
 .streamingSection {
   margin-bottom: 24px;

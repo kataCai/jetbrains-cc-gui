@@ -84,6 +84,58 @@ describe('useSettingsBasicActions merged settings behavior', () => {
   });
 
   /**
+   * 验证“右键打开调试面板”开关会通过独立 bridge 消息写回后端。
+   * 前置条件：使用默认 hook 状态并触发新增布尔开关的变更。
+   * 断言意图：确保设置页新增开关不会误复用其他配置 key，
+   * 而是稳定写回本次需求约定的独立协议。
+   */
+  it('sends right click devtools toggle updates through the dedicated bridge message', () => {
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.handleRightClickOpenDevToolsEnabledChange(true);
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_right_click_open_devtools_enabled:{"rightClickOpenDevToolsEnabled":true}'
+    );
+  });
+
+  it('sends frontend debug panel toggle updates together with the archive flag', () => {
+    // 前端调试配置在后端是一个双布尔对象，因此切换调试面板时必须带上当前 archiveEnabled，避免只提交半个配置对象。
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.setLocalFrontendDiagnosticArchiveEnabled(true);
+    });
+
+    act(() => {
+      result.current.handleFrontendDebugPanelEnabledChange(true);
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_frontend_debug_config:{"panelEnabled":true,"archiveEnabled":true}'
+    );
+  });
+
+  it('sends frontend diagnostic archive toggle updates together with the panel flag', () => {
+    // 诊断日志落档开关同样需要和 panelEnabled 一起提交，确保后端持久化始终拿到完整配置快照。
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.setLocalFrontendDebugPanelEnabled(true);
+    });
+
+    act(() => {
+      result.current.handleFrontendDiagnosticArchiveEnabledChange(true);
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_frontend_debug_config:{"panelEnabled":true,"archiveEnabled":true}'
+    );
+  });
+
+  /**
    * 验证切换 Commit AI provider 只影响 commitAiConfig，不污染 promptEnhancerConfig。
    * 断言意图：覆盖本轮并轨吸收的 AI feature 配置分离语义。
    */
@@ -133,6 +185,28 @@ describe('useSettingsBasicActions merged settings behavior', () => {
     expect(result.current.promptEnhancerConfig).toEqual(promptEnhancerBefore);
     expect(window.sendToJava).toHaveBeenCalledWith(
       'set_commit_ai_config:{"provider":"codex","models":{"claude":"claude-sonnet-4-6","codex":"gpt-5.4"}}'
+    );
+  });
+
+  /**
+   * 验证 Codex 历史图片缓存配置会以单条命令整体写回后端。
+   * 断言意图：目录、保留天数和容量上限必须作为一个原子配置提交，避免设置页出现部分保存成功的中间态。
+   */
+  it('sends codex history image cache config as one payload', () => {
+    const { result } = renderHook(() => useSettingsBasicActions({}));
+
+    act(() => {
+      result.current.setCodexHistoryImageCacheDir('/tmp/codex-history-images');
+      result.current.setCodexHistoryImageCacheRetentionDays(45);
+      result.current.setCodexHistoryImageCacheMaxSizeMb(2048);
+    });
+
+    act(() => {
+      result.current.handleSaveCodexHistoryImageCacheConfig();
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'set_codex_history_image_cache_config:{"customDir":"/tmp/codex-history-images","retentionDays":45,"maxSizeMb":2048}'
     );
   });
 });

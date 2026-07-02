@@ -4,6 +4,7 @@ import { isValidPermissionMode, normalizeClaudeModelId } from '../../../componen
 import { buildCodexSelectedModelKey } from '../../../types/provider';
 import { clampPermissionDialogTimeoutSeconds } from '../../../utils/permissionDialogTimeout';
 import { debugLog } from '../../../utils/debug';
+import { updateFrontendDebugRuntimeConfig } from '../../../utils/debug';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
 /**
@@ -43,6 +44,9 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setStreamingEnabledSetting,
     setSendShortcut,
     setAutoOpenFileEnabled,
+    setRightClickOpenDevToolsEnabled,
+    setFrontendDebugPanelEnabled,
+    setFrontendDiagnosticArchiveEnabled,
     setPermissionDialogTimeoutSeconds,
     currentProviderRef,
     activeCodexProviderIdRef,
@@ -391,6 +395,44 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setAutoOpenFileEnabled(data.autoOpenFileEnabled ?? false);
     } catch (error) {
       console.error('[Frontend] Failed to parse auto open file enabled:', error);
+    }
+  };
+
+  /**
+   * 回写“右键打开调试面板”全局开关。
+   * 该值会同时驱动设置页和聊天页的右键菜单入口，因此必须与其他
+   * 基础行为开关保持同一类回写协议，保证首次挂载时状态一致。
+   */
+  window.updateRightClickOpenDevToolsEnabled = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      // 该回调只在设置页挂载时需要，聊天页不一定提供这个 setter，因此必须做可选调用。
+      setRightClickOpenDevToolsEnabled?.(data.rightClickOpenDevToolsEnabled ?? false);
+    } catch (error) {
+      console.error('[Frontend] Failed to parse right click devtools enabled:', error);
+    }
+  };
+
+  /**
+   * 回写前端诊断日志运行时配置。
+   * 该配置既要驱动聊天运行态日志桥接，也要在设置页未打开时保持最新值，
+   * 因此这里除了写入可选 React setter 外，还必须同步更新模块级 runtime config。
+   */
+  window.updateFrontendDebugConfig = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      const panelEnabled = data.panelEnabled === true;
+      const archiveEnabled = data.archiveEnabled === true;
+      updateFrontendDebugRuntimeConfig({
+        panelEnabled,
+        archiveEnabled,
+        panelConfigured: data.panelConfigured === true,
+        archiveConfigured: data.archiveConfigured === true,
+      });
+      setFrontendDebugPanelEnabled?.(panelEnabled);
+      setFrontendDiagnosticArchiveEnabled?.(archiveEnabled);
+    } catch (error) {
+      console.error('[Frontend] Failed to parse frontend debug config:', error);
     }
   };
 

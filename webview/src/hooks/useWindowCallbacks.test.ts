@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { useWindowCallbacks } from './useWindowCallbacks.js';
 import type { UseWindowCallbacksOptions } from './useWindowCallbacks.js';
 import type { ClaudeMessage } from '../types/index.js';
+import * as debugModule from '../utils/debug.js';
 
 vi.mock('./windowCallbacks/settingsBootstrap', async () => {
   const actual = await vi.importActual<typeof import('./windowCallbacks/settingsBootstrap')>('./windowCallbacks/settingsBootstrap');
@@ -129,6 +130,10 @@ describe('useWindowCallbacks integration', () => {
     window.__sessionTransitionToken = null;
     window.__pendingSessionTransitionToast = undefined;
     window.__deniedToolIds = new Set();
+    window.__preparedHistoryRestoreKey = null;
+    window.__preparedHistoryRestoreSignature = null;
+    window.__lastAppliedHistoryRestoreKey = null;
+    window.__lastAppliedHistoryRestoreSignature = null;
     window.sendToJava = vi.fn();
   });
 
@@ -172,6 +177,32 @@ describe('useWindowCallbacks integration', () => {
 
     expect(opts.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.5');
     expect(opts.setSelectedCodexSelectionKey).toHaveBeenCalledWith('custom_gateway::gpt-5.5');
+  });
+
+  /**
+   * 验证聊天页收到后端下发的前端调试配置时，会同步刷新运行时诊断日志配置。
+   * 这样即使设置页未打开，rich paste 与历史恢复链路的关键诊断日志也能立即按最新开关生效。
+   */
+  it('updateFrontendDebugConfig refreshes runtime diagnostic config in chat mode', () => {
+    const updateRuntimeSpy = vi.spyOn(debugModule, 'updateFrontendDebugRuntimeConfig');
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.updateFrontendDebugConfig?.(JSON.stringify({
+        panelEnabled: true,
+        archiveEnabled: true,
+        panelConfigured: false,
+        archiveConfigured: false,
+      }));
+    });
+
+    expect(updateRuntimeSpy).toHaveBeenCalledWith({
+      panelEnabled: true,
+      archiveEnabled: true,
+      panelConfigured: false,
+      archiveConfigured: false,
+    });
   });
 
   it('restoreTabRuntimeState 恢复逻辑会话与 continued segment 运行态字段', () => {
@@ -373,6 +404,90 @@ describe('useWindowCallbacks integration', () => {
 
     // setMessages SHOULD be called
     expect(opts.setMessages).toHaveBeenCalled();
+  });
+
+  it('ignores duplicate history snapshot when restore key and snapshot signature are unchanged', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const restoredMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: 'Paste images',
+        timestamp: '2026-06-29T12:00:00.000Z',
+        raw: {
+          message: {
+            content: [
+              { type: 'image', src: 'data:image/png;base64,AAAA', mediaType: 'image/png', alt: 'diagram.png' },
+              { type: 'text', text: 'Paste images' },
+            ],
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-001');
+      window.updateMessages!(JSON.stringify(restoredMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-001');
+      window.updateMessages!(JSON.stringify(restoredMessages));
+    });
+
+    expect(opts.setMessages).not.toHaveBeenCalled();
+  });
+
+  it('accepts history snapshot again when snapshot signature changes under the same restore key', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const firstMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: 'Paste images',
+        timestamp: '2026-06-29T12:00:00.000Z',
+        raw: {
+          message: {
+            content: [
+              { type: 'image', src: 'data:image/png;base64,AAAA', mediaType: 'image/png', alt: 'diagram.png' },
+              { type: 'text', text: 'Paste images' },
+            ],
+          },
+        } as any,
+      },
+    ];
+    const secondMessages: ClaudeMessage[] = [
+      {
+        ...firstMessages[0],
+        raw: {
+          message: {
+            content: [
+              { type: 'image', src: 'data:image/png;base64,BBBB', mediaType: 'image/png', alt: 'diagram.png' },
+              { type: 'text', text: 'Paste images' },
+            ],
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-001');
+      window.updateMessages!(JSON.stringify(firstMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('session-001|history_switch|transition-001', 'snapshot-signature-002');
+      window.updateMessages!(JSON.stringify(secondMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(2);
   });
 
   it('patchMessageUuid updates the latest unresolved user message using raw text fallback', () => {

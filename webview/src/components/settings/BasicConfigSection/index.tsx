@@ -35,6 +35,17 @@ interface BasicConfigSectionProps {
   onWorkingDirectoryChange?: (dir: string) => void;
   onSaveWorkingDirectory?: () => void;
   savingWorkingDirectory?: boolean;
+  codexHistoryImageCacheDir?: string;
+  codexHistoryImageCacheResolvedDir?: string;
+  codexHistoryImageCacheRetentionDays?: number;
+  codexHistoryImageCacheMaxSizeMb?: number;
+  onCodexHistoryImageCacheDirChange?: (dir: string) => void;
+  onCodexHistoryImageCacheRetentionDaysChange?: (days: number) => void;
+  onCodexHistoryImageCacheMaxSizeMbChange?: (size: number) => void;
+  onBrowseCodexHistoryImageCacheDir?: () => void;
+  onResetCodexHistoryImageCacheDir?: () => void;
+  onSaveCodexHistoryImageCacheConfig?: () => void;
+  savingCodexHistoryImageCache?: boolean;
   editorFontConfig?: {
     fontFamily: string;
     fontSize: number;
@@ -48,6 +59,12 @@ interface BasicConfigSectionProps {
   onStreamingEnabledChange?: (enabled: boolean) => void;
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  frontendDebugPanelEnabled?: boolean;
+  onFrontendDebugPanelEnabledChange?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabled?: boolean;
+  onFrontendDiagnosticArchiveEnabledChange?: (enabled: boolean) => void;
+  rightClickOpenDevToolsEnabled?: boolean;
+  onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   sendShortcut?: 'enter' | 'cmdEnter';
   onSendShortcutChange?: (shortcut: 'enter' | 'cmdEnter') => void;
   chatBgColor?: string;
@@ -144,6 +161,12 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onStreamingEnabledChange={props.onStreamingEnabledChange}
           autoOpenFileEnabled={props.autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={props.onAutoOpenFileEnabledChange}
+          frontendDebugPanelEnabled={props.frontendDebugPanelEnabled}
+          onFrontendDebugPanelEnabledChange={props.onFrontendDebugPanelEnabledChange}
+          frontendDiagnosticArchiveEnabled={props.frontendDiagnosticArchiveEnabled}
+          onFrontendDiagnosticArchiveEnabledChange={props.onFrontendDiagnosticArchiveEnabledChange}
+          rightClickOpenDevToolsEnabled={props.rightClickOpenDevToolsEnabled}
+          onRightClickOpenDevToolsEnabledChange={props.onRightClickOpenDevToolsEnabledChange}
           diffExpandedByDefault={props.diffExpandedByDefault}
           onDiffExpandedByDefaultChange={props.onDiffExpandedByDefaultChange}
           commitGenerationEnabled={props.commitGenerationEnabled}
@@ -187,6 +210,17 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onWorkingDirectoryChange={props.onWorkingDirectoryChange}
           onSaveWorkingDirectory={props.onSaveWorkingDirectory}
           savingWorkingDirectory={props.savingWorkingDirectory}
+          codexHistoryImageCacheDir={props.codexHistoryImageCacheDir}
+          codexHistoryImageCacheResolvedDir={props.codexHistoryImageCacheResolvedDir}
+          codexHistoryImageCacheRetentionDays={props.codexHistoryImageCacheRetentionDays}
+          codexHistoryImageCacheMaxSizeMb={props.codexHistoryImageCacheMaxSizeMb}
+          onCodexHistoryImageCacheDirChange={props.onCodexHistoryImageCacheDirChange}
+          onCodexHistoryImageCacheRetentionDaysChange={props.onCodexHistoryImageCacheRetentionDaysChange}
+          onCodexHistoryImageCacheMaxSizeMbChange={props.onCodexHistoryImageCacheMaxSizeMbChange}
+          onBrowseCodexHistoryImageCacheDir={props.onBrowseCodexHistoryImageCacheDir}
+          onResetCodexHistoryImageCacheDir={props.onResetCodexHistoryImageCacheDir}
+          onSaveCodexHistoryImageCacheConfig={props.onSaveCodexHistoryImageCacheConfig}
+          savingCodexHistoryImageCache={props.savingCodexHistoryImageCache}
         />
       )}
     </div>

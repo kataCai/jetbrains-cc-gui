@@ -74,4 +74,30 @@ describe('EnvironmentTab Claude CLI path section', () => {
     const saveButtons = screen.getAllByRole('button', { name: 'common.save' });
     expect(saveButtons[1].hasAttribute('disabled')).toBe(true);
   });
+
+  /**
+   * 验证环境页会渲染 Codex 历史图片缓存配置入口，并暴露浏览与恢复默认操作。
+   * 这样用户才能配置图片缓存目录与治理参数，而不是只能依赖后端默认值。
+   */
+  it('renders codex history image cache controls', () => {
+    const onBrowseCodexHistoryImageCacheDir = vi.fn();
+    const onResetCodexHistoryImageCacheDir = vi.fn();
+    renderEnvironmentTab({
+      codexHistoryImageCacheDir: '/tmp/codex-history-images',
+      codexHistoryImageCacheResolvedDir: '/tmp/codex-history-images',
+      codexHistoryImageCacheRetentionDays: 45,
+      codexHistoryImageCacheMaxSizeMb: 2048,
+      onBrowseCodexHistoryImageCacheDir,
+      onResetCodexHistoryImageCacheDir,
+    });
+
+    expect(screen.getByDisplayValue('/tmp/codex-history-images')).toBeTruthy();
+    expect(screen.getByDisplayValue('45')).toBeTruthy();
+    expect(screen.getByDisplayValue('2048')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'common.browse' }));
+    fireEvent.click(screen.getByRole('button', { name: 'common.reset' }));
+
+    expect(onBrowseCodexHistoryImageCacheDir).toHaveBeenCalledTimes(1);
+    expect(onResetCodexHistoryImageCacheDir).toHaveBeenCalledTimes(1);
+  });
 });

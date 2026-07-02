@@ -62,6 +62,12 @@ function renderBehaviorTab(overrides: Partial<ComponentProps<typeof BehaviorTab>
     onSendShortcutChange: vi.fn(),
     autoOpenFileEnabled: false,
     onAutoOpenFileEnabledChange: vi.fn(),
+    frontendDebugPanelEnabled: false,
+    onFrontendDebugPanelEnabledChange: vi.fn(),
+    frontendDiagnosticArchiveEnabled: false,
+    onFrontendDiagnosticArchiveEnabledChange: vi.fn(),
+    rightClickOpenDevToolsEnabled: false,
+    onRightClickOpenDevToolsEnabledChange: vi.fn(),
     commitGenerationEnabled: true,
     onCommitGenerationEnabledChange: vi.fn(),
     aiTitleGenerationEnabled: true,
@@ -193,5 +199,58 @@ describe('BehaviorTab permission dialog timeout', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(onPermissionDialogTimeoutChange).toHaveBeenCalledWith(3600);
+  });
+});
+
+describe('BehaviorTab right click devtools toggle', () => {
+  it('renders the right click devtools toggle and forwards the changed value', () => {
+    // 验证新增的“右键打开调试面板”开关在行为页可见，
+    // 并且切换时会把最新布尔值继续透传给上层回调。
+    const onRightClickOpenDevToolsEnabledChange = vi.fn();
+    renderBehaviorTab({
+      rightClickOpenDevToolsEnabled: false,
+      onRightClickOpenDevToolsEnabledChange,
+    });
+
+    const toggle = screen.getByRole('checkbox', {
+      name: /settings\.basic\.rightClickOpenDevTools\.(enabled|disabled)/i,
+    });
+    fireEvent.click(toggle);
+
+    expect(onRightClickOpenDevToolsEnabledChange).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('BehaviorTab frontend debug toggles', () => {
+  it('renders the frontend debug panel toggle and forwards the changed value', () => {
+    // 验证设置页新增的前端调试面板开关可见，并且切换后会把最新布尔值透传给上层回调。
+    const onFrontendDebugPanelEnabledChange = vi.fn();
+    renderBehaviorTab({
+      frontendDebugPanelEnabled: false,
+      onFrontendDebugPanelEnabledChange,
+    });
+
+    const toggle = screen.getByRole('checkbox', {
+      name: /settings\.basic\.frontendDebugPanel\.(enabled|disabled)/i,
+    });
+    fireEvent.click(toggle);
+
+    expect(onFrontendDebugPanelEnabledChange).toHaveBeenCalledWith(true);
+  });
+
+  it('renders the frontend diagnostic archive toggle and forwards the changed value', () => {
+    // 验证诊断日志落档开关也作为独立布尔项暴露给设置页，避免与调试面板开关混用一个状态位。
+    const onFrontendDiagnosticArchiveEnabledChange = vi.fn();
+    renderBehaviorTab({
+      frontendDiagnosticArchiveEnabled: false,
+      onFrontendDiagnosticArchiveEnabledChange,
+    });
+
+    const toggle = screen.getByRole('checkbox', {
+      name: /settings\.basic\.frontendDiagnosticArchive\.(enabled|disabled)/i,
+    });
+    fireEvent.click(toggle);
+
+    expect(onFrontendDiagnosticArchiveEnabledChange).toHaveBeenCalledWith(true);
   });
 });

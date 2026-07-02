@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsWindowCallbacks, type SettingsWindowCallbacksDeps } from './useSettingsWindowCallbacks';
 import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
 import type { PromptEnhancerConfig } from '../../../types/promptEnhancer';
+import * as debugModule from '../../../utils/debug';
 
 const translations: Record<string, string> = {
   'settings.codexProvider.runtimeSourceLabel': 'Runtime Source: {{source}}',
@@ -40,6 +41,11 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setSavingClaudeCliPath: vi.fn(),
     setWorkingDirectory: vi.fn(),
     setSavingWorkingDirectory: vi.fn(),
+    setCodexHistoryImageCacheDir: vi.fn(),
+    setCodexHistoryImageCacheResolvedDir: vi.fn(),
+    setCodexHistoryImageCacheRetentionDays: vi.fn(),
+    setCodexHistoryImageCacheMaxSizeMb: vi.fn(),
+    setSavingCodexHistoryImageCache: vi.fn(),
     setCommitPrompt: vi.fn(),
     setSavingCommitPrompt: vi.fn(),
     setCommitAiConfig: vi.fn(),
@@ -52,6 +58,8 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setLocalStreamingEnabled: vi.fn(),
     setCodexSandboxMode: vi.fn(),
     setLocalSendShortcut: vi.fn(),
+    setFrontendDebugPanelEnabled: vi.fn(),
+    setFrontendDiagnosticArchiveEnabled: vi.fn(),
     setLoading: vi.fn(),
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
@@ -105,6 +113,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_node_path:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_claude_cli_path:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_working_directory:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_codex_history_image_cache_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_editor_font_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_ui_font_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_streaming_enabled:');
@@ -115,6 +124,8 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(window.sendToJava).toHaveBeenCalledWith('get_commit_ai_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_prompt_enhancer_config:');
     expect(window.sendToJava).toHaveBeenCalledWith('get_sound_notification_config:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_frontend_debug_config:');
+    expect(window.sendToJava).toHaveBeenCalledWith('get_right_click_open_devtools_enabled:');
   });
 
   /**
@@ -302,6 +313,57 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
   });
 
   /**
+   * 验证后端推送“右键打开调试面板”配置时，设置页会把值回写到对应状态槽位。
+   * 断言意图：保证新增全局布尔配置沿用现有 window.updateXxx 协议，
+   * 并且不会污染其他行为类设置状态。
+   */
+  it('writes right click devtools toggle updates into the dedicated settings state', () => {
+    const deps = createDeps();
+    const setRightClickOpenDevToolsEnabled = vi.fn();
+    renderHook(() => useSettingsWindowCallbacks({
+      ...deps,
+      setRightClickOpenDevToolsEnabled,
+    } as SettingsWindowCallbacksDeps & {
+      setRightClickOpenDevToolsEnabled: (enabled: boolean) => void;
+    }));
+
+    window.updateRightClickOpenDevToolsEnabled?.(JSON.stringify({
+      rightClickOpenDevToolsEnabled: true,
+    }));
+
+    expect(setRightClickOpenDevToolsEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('writes frontend debug config updates into the dedicated settings state', () => {
+    // 验证设置页会把后端返回的双开关分别回写到各自状态位，避免两个开关在前端被错误复用成同一个布尔值。
+    const deps = createDeps();
+    const updateRuntimeSpy = vi.spyOn(debugModule, 'updateFrontendDebugRuntimeConfig');
+    const setFrontendDebugPanelEnabled = vi.fn();
+    const setFrontendDiagnosticArchiveEnabled = vi.fn();
+    renderHook(() => useSettingsWindowCallbacks({
+      ...deps,
+      setFrontendDebugPanelEnabled,
+      setFrontendDiagnosticArchiveEnabled,
+    }));
+
+    window.updateFrontendDebugConfig?.(JSON.stringify({
+      panelEnabled: true,
+      archiveEnabled: false,
+      panelConfigured: false,
+      archiveConfigured: false,
+    }));
+
+    expect(setFrontendDebugPanelEnabled).toHaveBeenCalledWith(true);
+    expect(setFrontendDiagnosticArchiveEnabled).toHaveBeenCalledWith(false);
+    expect(updateRuntimeSpy).toHaveBeenCalledWith({
+      panelEnabled: true,
+      archiveEnabled: false,
+      panelConfigured: false,
+      archiveConfigured: false,
+    });
+  });
+
+  /**
    * 验证 UI 字体配置会同时落状态并立即应用到页面。
    * 断言意图：保留 upstream 的 UI 字体即时生效能力。
    */
@@ -347,6 +409,28 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
 
     expect(deps.setClaudeCliPath).toHaveBeenCalledWith('/opt/claude/bin/claude');
     expect(deps.setSavingClaudeCliPath).toHaveBeenCalledWith(false);
+  });
+
+  /**
+   * 验证后端推送的 Codex 历史图片缓存配置会正确写入设置页状态。
+   * 这保证设置页打开时既能显示用户自定义目录，也能展示默认生效目录与治理参数。
+   */
+  it('updates Codex history image cache config state from backend callback', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.updateCodexHistoryImageCacheConfig?.(JSON.stringify({
+      customDir: '/tmp/codex-history-images',
+      resolvedDir: '/tmp/codex-history-images',
+      retentionDays: 45,
+      maxSizeMb: 2048,
+    }));
+
+    expect(deps.setCodexHistoryImageCacheDir).toHaveBeenCalledWith('/tmp/codex-history-images');
+    expect(deps.setCodexHistoryImageCacheResolvedDir).toHaveBeenCalledWith('/tmp/codex-history-images');
+    expect(deps.setCodexHistoryImageCacheRetentionDays).toHaveBeenCalledWith(45);
+    expect(deps.setCodexHistoryImageCacheMaxSizeMb).toHaveBeenCalledWith(2048);
+    expect(deps.setSavingCodexHistoryImageCache).toHaveBeenCalledWith(false);
   });
 
   /**

@@ -382,10 +382,8 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
 
             @Override
             public void selectionChanged(@NotNull ContentManagerEvent event) {
-                ClaudeChatWindow window = contentToWindowMap.get(event.getContent());
-                if (window != null) {
-                    window.loadRestoredHistoryIfNeeded();
-                }
+                // 历史恢复已统一收敛到前端 ready 后的 pending restore 主链，
+                // 切换标签页时不应再补跑旧的 `loadFromServer()`，否则会在手动重绑后产生晚到快照。
             }
 
             @Override
@@ -688,13 +686,14 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
     }
 
     /**
-     * 恢复单个标签页的会话绑定关系，并根据可见性决定是否立即加载历史。
-     * 这里统一采用四参版本，避免 loading 面板替换流程和普通恢复流程使用不同的语义分支。
+     * 恢复单个标签页的会话绑定关系。
+     * 历史消息恢复已经统一收敛到前端 ready 后的 pending restore 主链，
+     * 因此这里的 `loadImmediately` 仅保留给既有调用点做兼容透传，不再驱动旧的即时历史恢复。
      *
      * @param savedState 持久化的标签页状态
      * @param tabIndex 当前标签页索引，仅用于日志定位
      * @param chatWindow 目标聊天窗口
-     * @param loadImmediately 是否立即触发历史恢复
+     * @param loadImmediately 兼容旧调用语义的标记，不再触发旧恢复链路
      */
     private void restoreTabSessionState(
             TabStateService.TabSessionState savedState,

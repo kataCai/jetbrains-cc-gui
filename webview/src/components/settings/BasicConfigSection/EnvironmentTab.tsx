@@ -16,6 +16,17 @@ export interface EnvironmentTabProps {
   onWorkingDirectoryChange?: (dir: string) => void;
   onSaveWorkingDirectory?: () => void;
   savingWorkingDirectory?: boolean;
+  codexHistoryImageCacheDir?: string;
+  codexHistoryImageCacheResolvedDir?: string;
+  codexHistoryImageCacheRetentionDays?: number;
+  codexHistoryImageCacheMaxSizeMb?: number;
+  onCodexHistoryImageCacheDirChange?: (dir: string) => void;
+  onCodexHistoryImageCacheRetentionDaysChange?: (days: number) => void;
+  onCodexHistoryImageCacheMaxSizeMbChange?: (size: number) => void;
+  onBrowseCodexHistoryImageCacheDir?: () => void;
+  onResetCodexHistoryImageCacheDir?: () => void;
+  onSaveCodexHistoryImageCacheConfig?: () => void;
+  savingCodexHistoryImageCache?: boolean;
 }
 
 const EnvironmentTab = ({
@@ -33,6 +44,17 @@ const EnvironmentTab = ({
   onWorkingDirectoryChange = () => {},
   onSaveWorkingDirectory = () => {},
   savingWorkingDirectory = false,
+  codexHistoryImageCacheDir = '',
+  codexHistoryImageCacheResolvedDir = '',
+  codexHistoryImageCacheRetentionDays = 30,
+  codexHistoryImageCacheMaxSizeMb = 1024,
+  onCodexHistoryImageCacheDirChange = () => {},
+  onCodexHistoryImageCacheRetentionDaysChange = () => {},
+  onCodexHistoryImageCacheMaxSizeMbChange = () => {},
+  onBrowseCodexHistoryImageCacheDir = () => {},
+  onResetCodexHistoryImageCacheDir = () => {},
+  onSaveCodexHistoryImageCacheConfig = () => {},
+  savingCodexHistoryImageCache = false,
 }: EnvironmentTabProps) => {
   const { t } = useTranslation();
 
@@ -162,6 +184,85 @@ const EnvironmentTab = ({
           <span className="codicon codicon-info" />
           <span>
             {t('settings.basic.workingDirectory.hint')}
+          </span>
+        </small>
+      </div>
+
+      <div className={styles.workingDirSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-device-camera" />
+          <span className={styles.fieldLabel}>{t('settings.basic.codexHistoryImageCache.label')}</span>
+        </div>
+        <div className={styles.nodePathInputWrapper}>
+          <input
+            type="text"
+            className={styles.nodePathInput}
+            placeholder={t('settings.basic.codexHistoryImageCache.dirPlaceholder')}
+            value={codexHistoryImageCacheDir}
+            onChange={(e) => onCodexHistoryImageCacheDirChange(e.target.value)}
+          />
+          <div className={styles.inlineActionGroup}>
+            <button
+              className={styles.saveBtn}
+              onClick={onBrowseCodexHistoryImageCacheDir}
+              type="button"
+            >
+              {t('common.browse')}
+            </button>
+            <button
+              className={styles.saveBtn}
+              onClick={onResetCodexHistoryImageCacheDir}
+              type="button"
+            >
+              {t('common.reset')}
+            </button>
+          </div>
+        </div>
+        <div className={styles.inlineNumberGrid}>
+          <label className={styles.numberField}>
+            <span className={styles.numberFieldLabel}>
+              {t('settings.basic.codexHistoryImageCache.retentionDays')}
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={365}
+              className={styles.nodePathInput}
+              value={codexHistoryImageCacheRetentionDays}
+              onChange={(e) => onCodexHistoryImageCacheRetentionDaysChange(Number(e.target.value) || 1)}
+            />
+          </label>
+          <label className={styles.numberField}>
+            <span className={styles.numberFieldLabel}>
+              {t('settings.basic.codexHistoryImageCache.maxSizeMb')}
+            </span>
+            <input
+              type="number"
+              min={64}
+              max={10240}
+              className={styles.nodePathInput}
+              value={codexHistoryImageCacheMaxSizeMb}
+              onChange={(e) => onCodexHistoryImageCacheMaxSizeMbChange(Number(e.target.value) || 64)}
+            />
+          </label>
+          <button
+            className={styles.saveBtn}
+            onClick={onSaveCodexHistoryImageCacheConfig}
+            disabled={savingCodexHistoryImageCache}
+            type="button"
+          >
+            {savingCodexHistoryImageCache && (
+              <span className="codicon codicon-loading codicon-modifier-spin" />
+            )}
+            {t('common.save')}
+          </button>
+        </div>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>
+            {t('settings.basic.codexHistoryImageCache.hint')}
+            {' '}
+            <code>{codexHistoryImageCacheResolvedDir}</code>
           </span>
         </small>
       </div>

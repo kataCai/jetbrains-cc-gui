@@ -179,6 +179,33 @@ public class CodexSDKBridgeHistoryTest {
         }
     }
 
+    /**
+     * 验证当 Codex 历史里声明了 local_images，但缓存文件已经被清理时，
+     * 历史恢复仍然会产出 image_missing 占位块，而不是直接丢失图片语义。
+     */
+    @Test
+    public void getSessionMessagesKeepsMissingImageSemanticWhenCacheFileWasRemoved() throws IOException {
+        Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-missing-image");
+        try {
+            writeSessionFile(
+                    sessionsDir,
+                    "session-missing-image",
+                    line("2026-05-11T09:04:20Z", "event_msg",
+                            "{\"type\":\"user_message\",\"message\":\"Restore image\",\"local_images\":[\"C:/missing/history-image.png\"]}")
+            );
+
+            CodexSDKBridge bridge = new CodexSDKBridge(sessionsDir);
+            List<JsonObject> messages = bridge.getSessionMessages("session-missing-image", sessionsDir.toString());
+
+            assertEquals(1, messages.size());
+            JsonArray contentBlocks = messages.get(0).getAsJsonObject("raw").getAsJsonArray("content");
+            assertEquals("image_missing", contentBlocks.get(0).getAsJsonObject().get("type").getAsString());
+            assertEquals("history-image.png", contentBlocks.get(0).getAsJsonObject().get("fileName").getAsString());
+        } finally {
+            deleteDirectory(sessionsDir);
+        }
+    }
+
     private static Path writeSessionFile(Path dir, String sessionId, String... lines) throws IOException {
         Files.createDirectories(dir);
         Path file = dir.resolve(sessionId + ".jsonl");

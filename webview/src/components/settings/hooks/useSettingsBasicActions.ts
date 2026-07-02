@@ -29,6 +29,12 @@ export interface UseSettingsBasicActionsProps {
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabledProp?: boolean;
   onAutoOpenFileEnabledChangeProp?: (enabled: boolean) => void;
+  frontendDebugPanelEnabledProp?: boolean;
+  onFrontendDebugPanelEnabledChangeProp?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabledProp?: boolean;
+  onFrontendDiagnosticArchiveEnabledChangeProp?: (enabled: boolean) => void;
+  rightClickOpenDevToolsEnabledProp?: boolean;
+  onRightClickOpenDevToolsEnabledChangeProp?: (enabled: boolean) => void;
   permissionDialogTimeoutSecondsProp?: number;
   onPermissionDialogTimeoutChangeProp?: (seconds: number) => void;
 }
@@ -42,6 +48,11 @@ export interface UseSettingsBasicActionsReturn {
   savingClaudeCliPath: boolean;
   workingDirectory: string;
   savingWorkingDirectory: boolean;
+  codexHistoryImageCacheDir: string;
+  codexHistoryImageCacheResolvedDir: string;
+  codexHistoryImageCacheRetentionDays: number;
+  codexHistoryImageCacheMaxSizeMb: number;
+  savingCodexHistoryImageCache: boolean;
   editorFontConfig:
     | {
         fontFamily: string;
@@ -57,6 +68,12 @@ export interface UseSettingsBasicActionsReturn {
   localSendShortcut: 'enter' | 'cmdEnter';
   autoOpenFileEnabled: boolean;
   localAutoOpenFileEnabled: boolean;
+  frontendDebugPanelEnabled: boolean;
+  localFrontendDebugPanelEnabled: boolean;
+  frontendDiagnosticArchiveEnabled: boolean;
+  localFrontendDiagnosticArchiveEnabled: boolean;
+  rightClickOpenDevToolsEnabled: boolean;
+  localRightClickOpenDevToolsEnabled: boolean;
   commitPrompt: string;
   savingCommitPrompt: boolean;
   taskReminderConfig: TaskReminderConfig;
@@ -74,6 +91,9 @@ export interface UseSettingsBasicActionsReturn {
   handleSaveNodePath: () => void;
   handleSaveClaudeCliPath: () => void;
   handleSaveWorkingDirectory: () => void;
+  handleSaveCodexHistoryImageCacheConfig: () => void;
+  handleBrowseCodexHistoryImageCacheDir: () => void;
+  handleResetCodexHistoryImageCacheDir: () => void;
   handleUiFontSelectionChange: (selection: string) => void;
   handleSaveUiFontCustomPath: (path: string) => void;
   handleBrowseUiFontFile: () => void;
@@ -81,6 +101,9 @@ export interface UseSettingsBasicActionsReturn {
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
   handleAutoOpenFileEnabledChange: (enabled: boolean) => void;
+  handleFrontendDebugPanelEnabledChange: (enabled: boolean) => void;
+  handleFrontendDiagnosticArchiveEnabledChange: (enabled: boolean) => void;
+  handleRightClickOpenDevToolsEnabledChange: (enabled: boolean) => void;
   handleTaskReminderEnabledChange: (channel: TaskReminderChannel, enabled: boolean) => void;
   handleTaskReminderStateToggle: (
     channel: TaskReminderChannel,
@@ -125,6 +148,11 @@ export interface UseSettingsBasicActionsReturn {
   setSavingClaudeCliPath: (saving: boolean) => void;
   setWorkingDirectory: (dir: string) => void;
   setSavingWorkingDirectory: (saving: boolean) => void;
+  setCodexHistoryImageCacheDir: (dir: string) => void;
+  setCodexHistoryImageCacheResolvedDir: (dir: string) => void;
+  setCodexHistoryImageCacheRetentionDays: (days: number) => void;
+  setCodexHistoryImageCacheMaxSizeMb: (size: number) => void;
+  setSavingCodexHistoryImageCache: (saving: boolean) => void;
   setEditorFontConfig: (
     config:
       | {
@@ -139,6 +167,9 @@ export interface UseSettingsBasicActionsReturn {
   /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
   /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
   /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalFrontendDebugPanelEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalFrontendDiagnosticArchiveEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalRightClickOpenDevToolsEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitPrompt: (prompt: string) => void;
   /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
   setTaskReminderConfig: (
@@ -180,6 +211,12 @@ export function useSettingsBasicActions({
   onSendShortcutChangeProp,
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
+  frontendDebugPanelEnabledProp,
+  onFrontendDebugPanelEnabledChangeProp,
+  frontendDiagnosticArchiveEnabledProp,
+  onFrontendDiagnosticArchiveEnabledChangeProp,
+  rightClickOpenDevToolsEnabledProp,
+  onRightClickOpenDevToolsEnabledChangeProp,
   permissionDialogTimeoutSecondsProp,
   onPermissionDialogTimeoutChangeProp,
 }: UseSettingsBasicActionsProps): UseSettingsBasicActionsReturn {
@@ -192,6 +229,11 @@ export function useSettingsBasicActions({
 
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [savingWorkingDirectory, setSavingWorkingDirectory] = useState(false);
+  const [codexHistoryImageCacheDir, setCodexHistoryImageCacheDir] = useState('');
+  const [codexHistoryImageCacheResolvedDir, setCodexHistoryImageCacheResolvedDir] = useState('');
+  const [codexHistoryImageCacheRetentionDays, setCodexHistoryImageCacheRetentionDays] = useState(30);
+  const [codexHistoryImageCacheMaxSizeMb, setCodexHistoryImageCacheMaxSizeMb] = useState(1024);
+  const [savingCodexHistoryImageCache, setSavingCodexHistoryImageCache] = useState(false);
 
   const [editorFontConfig, setEditorFontConfig] = useState<
     | {
@@ -215,6 +257,16 @@ export function useSettingsBasicActions({
 
   const [localAutoOpenFileEnabled, setLocalAutoOpenFileEnabled] = useState<boolean>(false);
   const autoOpenFileEnabled = autoOpenFileEnabledProp ?? localAutoOpenFileEnabled;
+
+  const [localFrontendDebugPanelEnabled, setLocalFrontendDebugPanelEnabled] = useState<boolean>(false);
+  const frontendDebugPanelEnabled = frontendDebugPanelEnabledProp ?? localFrontendDebugPanelEnabled;
+
+  const [localFrontendDiagnosticArchiveEnabled, setLocalFrontendDiagnosticArchiveEnabled] = useState<boolean>(false);
+  const frontendDiagnosticArchiveEnabled =
+    frontendDiagnosticArchiveEnabledProp ?? localFrontendDiagnosticArchiveEnabled;
+
+  const [localRightClickOpenDevToolsEnabled, setLocalRightClickOpenDevToolsEnabled] = useState<boolean>(false);
+  const rightClickOpenDevToolsEnabled = rightClickOpenDevToolsEnabledProp ?? localRightClickOpenDevToolsEnabled;
 
   const [commitPrompt, setCommitPrompt] = useState('');
   const [savingCommitPrompt, setSavingCommitPrompt] = useState(false);
@@ -297,6 +349,38 @@ export function useSettingsBasicActions({
     sendToJava(`set_working_directory:${JSON.stringify({ customWorkingDir: (workingDirectory || '').trim() })}`);
   }, [workingDirectory]);
 
+  /**
+   * 保存 Codex 历史图片缓存配置。
+   * 这里把目录、保留天数和容量上限作为同一组配置一次性提交，避免用户分别保存后出现中间态。
+   */
+  const handleSaveCodexHistoryImageCacheConfig = useCallback(() => {
+    setSavingCodexHistoryImageCache(true);
+    sendToJava(`set_codex_history_image_cache_config:${JSON.stringify({
+      customDir: (codexHistoryImageCacheDir || '').trim(),
+      retentionDays: Math.max(1, Math.trunc(codexHistoryImageCacheRetentionDays || 0)),
+      maxSizeMb: Math.max(64, Math.trunc(codexHistoryImageCacheMaxSizeMb || 0)),
+    })}`);
+  }, [
+    codexHistoryImageCacheDir,
+    codexHistoryImageCacheMaxSizeMb,
+    codexHistoryImageCacheRetentionDays,
+  ]);
+
+  /**
+   * 打开目录选择器，仅回填输入框，不直接持久化。
+   */
+  const handleBrowseCodexHistoryImageCacheDir = useCallback(() => {
+    sendToJava('browse_codex_history_image_cache_dir:');
+  }, []);
+
+  /**
+   * 恢复到默认缓存目录。
+   * 真正写配置仍通过统一的保存按钮完成，避免“浏览自动保存、恢复默认自动保存”的交互不一致。
+   */
+  const handleResetCodexHistoryImageCacheDir = useCallback(() => {
+    setCodexHistoryImageCacheDir('');
+  }, []);
+
   const handleUiFontSelectionChange = useCallback((selection: string) => {
     if (selection === 'followEditor') {
       sendToJava(`set_ui_font_config:${JSON.stringify({ mode: 'followEditor' })}`);
@@ -353,6 +437,58 @@ export function useSettingsBasicActions({
     setLocalAutoOpenFileEnabled(enabled);
     sendToJava(`set_auto_open_file_enabled:${JSON.stringify({ autoOpenFileEnabled: enabled })}`);
   }, [onAutoOpenFileEnabledChangeProp]);
+
+  /**
+   * 切换前端调试面板开关。
+   * 该开关与诊断日志落档共享同一份后端配置对象，因此每次修改都需要提交完整 payload。
+   *
+   * @param enabled 是否启用前端调试面板
+   */
+  const handleFrontendDebugPanelEnabledChange = useCallback((enabled: boolean) => {
+    if (onFrontendDebugPanelEnabledChangeProp) {
+      onFrontendDebugPanelEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalFrontendDebugPanelEnabled(enabled);
+    sendToJava(`set_frontend_debug_config:${JSON.stringify({
+      panelEnabled: enabled,
+      archiveEnabled: frontendDiagnosticArchiveEnabled,
+    })}`);
+  }, [frontendDiagnosticArchiveEnabled, onFrontendDebugPanelEnabledChangeProp]);
+
+  /**
+   * 切换前端诊断日志落档开关。
+   * 为保证后端持久化始终拿到完整快照，这里也必须和调试面板开关一起回写。
+   *
+   * @param enabled 是否允许桥接关键前端诊断日志到 idea.log
+   */
+  const handleFrontendDiagnosticArchiveEnabledChange = useCallback((enabled: boolean) => {
+    if (onFrontendDiagnosticArchiveEnabledChangeProp) {
+      onFrontendDiagnosticArchiveEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalFrontendDiagnosticArchiveEnabled(enabled);
+    sendToJava(`set_frontend_debug_config:${JSON.stringify({
+      panelEnabled: frontendDebugPanelEnabled,
+      archiveEnabled: enabled,
+    })}`);
+  }, [frontendDebugPanelEnabled, onFrontendDiagnosticArchiveEnabledChangeProp]);
+
+  /**
+   * 切换“右键打开调试面板”设置。
+   * 如果外层已经提供受控值，则仅向上层透传；否则在本地状态与后端
+   * 持久化之间保持同步，避免设置页和聊天页使用不同的默认值。
+   *
+   * @param enabled 是否启用右键打开调试面板
+   */
+  const handleRightClickOpenDevToolsEnabledChange = useCallback((enabled: boolean) => {
+    if (onRightClickOpenDevToolsEnabledChangeProp) {
+      onRightClickOpenDevToolsEnabledChangeProp(enabled);
+      return;
+    }
+    setLocalRightClickOpenDevToolsEnabled(enabled);
+    sendToJava(`set_right_click_open_devtools_enabled:${JSON.stringify({ rightClickOpenDevToolsEnabled: enabled })}`);
+  }, [onRightClickOpenDevToolsEnabledChangeProp]);
 
   const handleTaskReminderEnabledChange = useCallback((channel: TaskReminderChannel, enabled: boolean) => {
     updateAndPersistTaskReminder((prev) => ({
@@ -611,6 +747,16 @@ export function useSettingsBasicActions({
     setWorkingDirectory,
     savingWorkingDirectory,
     setSavingWorkingDirectory,
+    codexHistoryImageCacheDir,
+    setCodexHistoryImageCacheDir,
+    codexHistoryImageCacheResolvedDir,
+    setCodexHistoryImageCacheResolvedDir,
+    codexHistoryImageCacheRetentionDays,
+    setCodexHistoryImageCacheRetentionDays,
+    codexHistoryImageCacheMaxSizeMb,
+    setCodexHistoryImageCacheMaxSizeMb,
+    savingCodexHistoryImageCache,
+    setSavingCodexHistoryImageCache,
     editorFontConfig,
     setEditorFontConfig,
     uiFontConfig,
@@ -625,6 +771,15 @@ export function useSettingsBasicActions({
     sendShortcut,
     localAutoOpenFileEnabled,
     setLocalAutoOpenFileEnabled,
+    frontendDebugPanelEnabled,
+    localFrontendDebugPanelEnabled,
+    setLocalFrontendDebugPanelEnabled,
+    frontendDiagnosticArchiveEnabled,
+    localFrontendDiagnosticArchiveEnabled,
+    setLocalFrontendDiagnosticArchiveEnabled,
+    rightClickOpenDevToolsEnabled,
+    localRightClickOpenDevToolsEnabled,
+    setLocalRightClickOpenDevToolsEnabled,
     autoOpenFileEnabled,
     commitPrompt,
     setCommitPrompt,
@@ -639,6 +794,9 @@ export function useSettingsBasicActions({
     handleSaveNodePath,
     handleSaveClaudeCliPath,
     handleSaveWorkingDirectory,
+    handleSaveCodexHistoryImageCacheConfig,
+    handleBrowseCodexHistoryImageCacheDir,
+    handleResetCodexHistoryImageCacheDir,
     handleUiFontSelectionChange,
     handleSaveUiFontCustomPath,
     handleBrowseUiFontFile,
@@ -646,6 +804,9 @@ export function useSettingsBasicActions({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleFrontendDebugPanelEnabledChange,
+    handleFrontendDiagnosticArchiveEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
     handleTaskReminderEnabledChange,
     handleTaskReminderStateToggle,
     handleTaskReminderOnlyWhenIdeUnfocusedChange,

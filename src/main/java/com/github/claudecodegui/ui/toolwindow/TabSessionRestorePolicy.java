@@ -11,10 +11,6 @@ final class TabSessionRestorePolicy {
         return savedState != null && isNonEmpty(savedState.sessionId);
     }
 
-    static boolean shouldLoadImmediately(TabStateService.TabSessionState savedState, boolean selectedTab) {
-        return selectedTab && shouldLoadHistory(savedState);
-    }
-
     private static boolean isNonEmpty(String value) {
         return value != null && !value.trim().isEmpty();
     }

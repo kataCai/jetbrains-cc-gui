@@ -7,7 +7,9 @@ import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.action.SendShortcutSync;
 import com.github.claudecodegui.provider.claude.ClaudeHistoryReader;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
+import com.github.claudecodegui.provider.codex.CodexHistoryImageCacheService;
 import com.github.claudecodegui.util.FontConfigService;
+import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.github.claudecodegui.util.ThemeConfigService;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
@@ -19,6 +21,7 @@ import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import java.nio.file.Path;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -33,11 +36,13 @@ public class ProjectConfigHandler {
 
     private final HandlerContext context;
     private final CodemossSettingsService settingsService;
+    private final CodexHistoryImageCacheService codexHistoryImageCacheService;
     private final Gson gson = new Gson();
 
     public ProjectConfigHandler(HandlerContext context) {
         this.context = context;
         this.settingsService = context.getSettingsService();
+        this.codexHistoryImageCacheService = new CodexHistoryImageCacheService();
     }
 
     // ---- Internal helpers --------------------------------------------------
@@ -195,6 +200,77 @@ public class ProjectConfigHandler {
         }
     }
 
+    /**
+     * 读取 Codex 历史图片缓存配置，并回推给设置页。
+     * 前端除了需要用户显式配置值，还需要拿到默认解析目录用于说明展示，因此这里额外补充 resolvedDir。
+     */
+    public void handleGetCodexHistoryImageCacheConfig() {
+        respondWithJson(
+                "window.updateCodexHistoryImageCacheConfig",
+                this::buildCodexHistoryImageCacheResponse,
+                buildDefaultCodexHistoryImageCacheResponse(),
+                "Failed to get Codex history image cache config"
+        );
+    }
+
+    /**
+     * 持久化 Codex 历史图片缓存配置。
+     * 保存成功后会立刻触发一次清理，让新的 TTL / 容量上限尽快生效，但仍不回退到“发送后即删”的模式。
+     *
+     * @param content 前端提交的缓存配置 JSON
+     */
+    public void handleSetCodexHistoryImageCacheConfig(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            String customDir = readString(json, "customDir", "");
+            int retentionDays = json != null && json.has("retentionDays") && !json.get("retentionDays").isJsonNull()
+                    ? json.get("retentionDays").getAsInt()
+                    : CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS;
+            int maxSizeMb = json != null && json.has("maxSizeMb") && !json.get("maxSizeMb").isJsonNull()
+                    ? json.get("maxSizeMb").getAsInt()
+                    : CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB;
+
+            if (customDir != null && !customDir.isBlank()) {
+                java.io.File directory = new java.io.File(customDir);
+                if (directory.exists() && !directory.isDirectory()) {
+                    showError("Codex history image cache path is not a directory: " + directory.getAbsolutePath());
+                    return;
+                }
+            }
+
+            settingsService.setCodexHistoryImageCacheConfig(customDir, retentionDays, maxSizeMb);
+            codexHistoryImageCacheService.cleanupCache();
+            pushJson("window.updateCodexHistoryImageCacheConfig", buildCodexHistoryImageCacheResponse());
+            showSuccess("Codex history image cache config saved");
+        } catch (Exception e) {
+            LOG.error("[ProjectConfigHandler] Failed to save Codex history image cache config: " + e.getMessage(), e);
+            showError("Failed to save Codex history image cache config: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 打开目录选择器，让用户选择 Codex 历史图片缓存目录。
+     * 浏览动作只回填输入框，不直接写配置，保持与环境页其他路径项相同的“浏览后显式保存”交互。
+     */
+    public void handleBrowseCodexHistoryImageCacheDir() {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            try {
+                FileChooserDescriptor descriptor = new FileChooserDescriptor(false, true, false, false, false, false)
+                        .withTitle("Select Codex History Image Cache Directory")
+                        .withDescription("Choose a directory used to persist Codex history images");
+                FileChooser.chooseFile(
+                        descriptor,
+                        context.getProject(),
+                        resolveCurrentCodexHistoryImageCacheDir(),
+                        selected -> pushJson("window.onCodexHistoryImageCacheDirBrowsed", jsonOf("path", selected.getPath()))
+                );
+            } catch (Exception e) {
+                LOG.error("[ProjectConfigHandler] Failed to browse Codex history image cache directory: " + e.getMessage(), e);
+                showError("Failed to browse Codex history image cache directory: " + e.getMessage());
+            }
+        });
+    }
+
     public void handleGetStreamingEnabled() {
         respondWithJson("window.updateStreamingEnabled",
             () -> {
@@ -254,6 +330,135 @@ public class ProjectConfigHandler {
             settingsService::setAutoOpenFileEnabled,
             "window.updateAutoOpenFileEnabled",
             "Failed to save auto open file config");
+    }
+
+    /**
+     * 构造设置页消费的 Codex 历史图片缓存配置响应。
+     */
+    private JsonObject buildCodexHistoryImageCacheResponse() throws Exception {
+        JsonObject persisted = settingsService.getCodexHistoryImageCacheConfig();
+        JsonObject response = new JsonObject();
+        String customDir = readString(persisted, "customDir", "");
+        String resolvedDir = resolveEffectiveCodexHistoryImageCacheDir().toAbsolutePath().normalize().toString();
+        response.addProperty("customDir", customDir);
+        response.addProperty("retentionDays", persisted.get("retentionDays").getAsInt());
+        response.addProperty("maxSizeMb", persisted.get("maxSizeMb").getAsInt());
+        response.addProperty("resolvedDir", resolvedDir);
+        return response;
+    }
+
+    /**
+     * 构造设置页兜底配置，避免读取异常时前端状态为空。
+     */
+    private JsonObject buildDefaultCodexHistoryImageCacheResponse() {
+        JsonObject response = new JsonObject();
+        response.addProperty("customDir", "");
+        response.addProperty("retentionDays", CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS);
+        response.addProperty("maxSizeMb", CodemossSettingsService.DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB);
+        response.addProperty("resolvedDir", codexHistoryImageCacheService.getDefaultCacheDirectory().toAbsolutePath().normalize().toString());
+        return response;
+    }
+
+    /**
+     * 向前端回写“右键打开调试面板”全局开关。
+     * 该配置不依赖项目路径，因此直接从全局设置读取并返回统一 JSON 结构，
+     * 保证设置页首次打开和运行态补同步时都能复用同一条 bridge 协议。
+     */
+    public void handleGetRightClickOpenDevToolsEnabled() {
+        respondWithJson("window.updateRightClickOpenDevToolsEnabled",
+            () -> jsonOf("rightClickOpenDevToolsEnabled", settingsService.getRightClickOpenDevToolsEnabled()),
+            jsonOf("rightClickOpenDevToolsEnabled", false),
+            "Failed to get right click open DevTools enabled");
+    }
+
+    private JsonObject buildFrontendDebugConfigResponse() throws Exception {
+        JsonObject persisted = settingsService.getFrontendDebugConfigState();
+        JsonObject response = new JsonObject();
+        response.addProperty("panelEnabled", readBoolean(persisted, "panelEnabled", false));
+        response.addProperty("archiveEnabled", readBoolean(persisted, "archiveEnabled", false));
+        response.addProperty("panelConfigured", readBoolean(persisted, "panelConfigured", false));
+        response.addProperty("archiveConfigured", readBoolean(persisted, "archiveConfigured", false));
+        return response;
+    }
+
+    /**
+     * 构造前端调试配置的统一兜底响应。
+     * 这里必须显式声明两个 configured 标记为 false，保证前端在配置读取失败时
+     * 仍会回退到构建期默认值，而不是把兜底值误判成“用户已经手动关闭调试能力”。
+     *
+     * @return 包含默认布尔值与未配置标记的兜底响应
+     */
+    private JsonObject buildDefaultFrontendDebugConfigResponse() {
+        JsonObject response = new JsonObject();
+        response.addProperty("panelEnabled", false);
+        response.addProperty("archiveEnabled", false);
+        response.addProperty("panelConfigured", false);
+        response.addProperty("archiveConfigured", false);
+        return response;
+    }
+
+    public void handleGetFrontendDebugConfig() {
+        respondWithJson(
+                "window.updateFrontendDebugConfig",
+                this::buildFrontendDebugConfigResponse,
+                buildDefaultFrontendDebugConfigResponse(),
+                "Failed to get frontend debug config"
+        );
+    }
+
+    public void handleSetFrontendDebugConfig(String content) {
+        try {
+            JsonObject json = gson.fromJson(content, JsonObject.class);
+            boolean panelEnabled = readBoolean(json, "panelEnabled", false);
+            boolean archiveEnabled = readBoolean(json, "archiveEnabled", false);
+            settingsService.setFrontendDebugConfig(panelEnabled, archiveEnabled);
+            JsonObject response = buildFrontendDebugConfigResponse();
+            LOG.info("[ProjectConfigHandler] Set frontend debug config: panelEnabled="
+                    + response.get("panelEnabled").getAsBoolean()
+                    + ", archiveEnabled=" + response.get("archiveEnabled").getAsBoolean());
+            pushJson("window.updateFrontendDebugConfig", response);
+        } catch (Exception e) {
+            LOG.error("[ProjectConfigHandler] Failed to set frontend debug config; errorClass="
+                    + e.getClass().getSimpleName(), e);
+            showError("Failed to save frontend debug config. See IDE log for details.");
+        }
+    }
+
+    /**
+     * 保存“右键打开调试面板”全局开关，并将生效值立即回写给前端。
+     * 缺失字段时统一按 false 处理，避免 malformed payload 让调试入口被意外打开。
+     *
+     * @param content 前端传入的 JSON 字符串
+     */
+    public void handleSetRightClickOpenDevToolsEnabled(String content) {
+        try {
+            JsonObject response = setRightClickOpenDevToolsEnabledAndCreateResponse(content);
+            LOG.info("[ProjectConfigHandler] Set right click open DevTools enabled: "
+                    + response.get("rightClickOpenDevToolsEnabled").getAsBoolean());
+            pushJson("window.updateRightClickOpenDevToolsEnabled", response);
+        } catch (Exception e) {
+            LOG.error("[ProjectConfigHandler] Failed to set right click open DevTools enabled; errorClass="
+                    + e.getClass().getSimpleName(), e);
+            showError("Failed to save right click open DevTools setting. See IDE log for details.");
+        }
+    }
+
+    /**
+     * 解析前端提交的“右键打开调试面板”开关，并返回标准响应体。
+     * 该方法抽成 package-private，便于单元测试直接验证默认值和回写语义，
+     * 同时保证 handler 与测试共用同一套字段缺失兜底逻辑。
+     *
+     * @param content 前端传入的 JSON 字符串
+     * @return 包含生效布尔值的响应对象
+     * @throws Exception 配置读写失败时抛出
+     */
+    JsonObject setRightClickOpenDevToolsEnabledAndCreateResponse(String content) throws Exception {
+        JsonObject json = gson.fromJson(content, JsonObject.class);
+        boolean enabled = readBoolean(json, "rightClickOpenDevToolsEnabled", false);
+        settingsService.setRightClickOpenDevToolsEnabled(enabled);
+        // 运行态立即刷新当前 Browser 的原生右键菜单能力，避免必须重开窗口才生效。
+        JBCefBrowserFactory.refreshContextMenu(context.getBrowser(), enabled);
+        return jsonOf("rightClickOpenDevToolsEnabled", settingsService.getRightClickOpenDevToolsEnabled());
     }
 
     public void handleGetPermissionDialogTimeout() {
@@ -553,6 +758,29 @@ public class ProjectConfigHandler {
             LOG.warn("[ProjectConfigHandler] Failed to resolve current custom font path: " + e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * 解析目录选择器的当前初始目录。
+     */
+    private VirtualFile resolveCurrentCodexHistoryImageCacheDir() {
+        try {
+            return LocalFileSystem.getInstance().findFileByPath(
+                    resolveEffectiveCodexHistoryImageCacheDir().toAbsolutePath().normalize().toString()
+            );
+        } catch (Exception ignored) {
+            return LocalFileSystem.getInstance().findFileByPath(
+                    codexHistoryImageCacheService.getDefaultCacheDirectory().toAbsolutePath().normalize().toString()
+            );
+        }
+    }
+
+    /**
+     * 解析当前配置下真正会被使用的 Codex 历史图片缓存目录。
+     * 这里显式复用缓存服务的目录回退逻辑，避免设置页与发送链路各自维护一套目录解析规则。
+     */
+    Path resolveEffectiveCodexHistoryImageCacheDir() throws Exception {
+        return codexHistoryImageCacheService.getEffectiveCacheDirectory();
     }
 
     private void saveSelectedCustomFont(VirtualFile file) {

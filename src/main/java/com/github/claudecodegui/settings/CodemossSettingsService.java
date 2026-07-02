@@ -57,6 +57,9 @@ public class CodemossSettingsService {
     private static final String TASK_REMINDER_KEY = "taskReminder";
     private static final String SOUND_NOTIFICATION_KEY = "soundNotification";
     private static final String REMOTE_COLLAB_KEY = "remoteCollab";
+    private static final String FRONTEND_DEBUG_CONFIG_KEY = "frontendDebugConfig";
+    private static final String FRONTEND_DEBUG_PANEL_ENABLED_KEY = "panelEnabled";
+    private static final String FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY = "archiveEnabled";
     private static final String DEBUG_KEY = "debug";
     private static final String ENABLED_KEY = "enabled";
     private static final String INTERACTIVE_PROVIDER_ID_KEY = "interactiveProviderId";
@@ -78,6 +81,11 @@ public class CodemossSettingsService {
     private static final String CODEX_LAST_REASONING_EFFORT_KEY = "lastReasoningEffort";
     private static final String CODEX_MODEL_SOURCE_KEY = "source";
     private static final String CODEX_MODEL_RUNNABLE_KEY = "runnable";
+    private static final String CODEX_CONFIG_KEY = "codex";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_KEY = "historyImageCache";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY = "customDir";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY = "retentionDays";
+    private static final String CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY = "maxSizeMb";
     private static final String AI_FEATURE_PROVIDER_KEY = "provider";
     private static final String AI_FEATURE_MODELS_KEY = "models";
     private static final String AI_FEATURE_EFFECTIVE_PROVIDER_KEY = "effectiveProvider";
@@ -93,6 +101,12 @@ public class CodemossSettingsService {
     private static final String DEFAULT_COMMIT_AI_CLAUDE_MODEL = "claude-sonnet-4-6";
     private static final String DEFAULT_COMMIT_AI_CODEX_MODEL = "gpt-5.5";
     private static final String USER_LANGUAGE_CONFIG_KEY = "language";
+    public static final int DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS = 30;
+    public static final int DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB = 1024;
+    public static final int MIN_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS = 1;
+    public static final int MAX_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS = 365;
+    public static final int MIN_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB = 64;
+    public static final int MAX_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB = 10 * 1024;
 
     private final Gson gson;
 
@@ -313,12 +327,81 @@ public class CodemossSettingsService {
         codex.add("providers", new JsonObject());
         codex.add(CODEX_MODEL_DISPLAY_KEY, new JsonObject());
         codex.addProperty("localConfigAuthorized", false);
-        config.add("codex", codex);
+        codex.add(CODEX_HISTORY_IMAGE_CACHE_KEY, createDefaultCodexHistoryImageCacheConfig());
+        config.add(CODEX_CONFIG_KEY, codex);
 
         config.add(TASK_REMINDER_KEY, createDefaultTaskReminderConfig());
         config.add(REMOTE_COLLAB_KEY, createDefaultRemoteCollabConfig());
 
         return config;
+    }
+
+    /**
+     * 获取前端调试配置。
+     * 该配置属于插件级运行时偏好，不依赖具体项目，因此保存在根配置节点。
+     * 这里统一做标准化，保证旧配置缺字段或字段类型异常时前端仍能拿到完整布尔结构。
+     *
+     * @return 标准化后的前端调试配置
+     * @throws IOException 读取配置失败时抛出
+     */
+    public JsonObject getFrontendDebugConfig() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(FRONTEND_DEBUG_CONFIG_KEY) || !config.get(FRONTEND_DEBUG_CONFIG_KEY).isJsonObject()) {
+            return createDefaultFrontendDebugConfig();
+        }
+        return normalizeFrontendDebugConfig(config.getAsJsonObject(FRONTEND_DEBUG_CONFIG_KEY));
+    }
+
+    /**
+     * 获取带“是否已显式配置”标记的前端调试配置快照。
+     * 设置页保存值的优先级高于构建期开关；若用户尚未保存该配置，则前端应退回构建期默认值。
+     *
+     * @return 包含生效布尔值与 configured 标记的配置快照
+     * @throws IOException 读取配置失败时抛出
+     */
+    public JsonObject getFrontendDebugConfigState() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject persisted = config.has(FRONTEND_DEBUG_CONFIG_KEY) && config.get(FRONTEND_DEBUG_CONFIG_KEY).isJsonObject()
+                ? config.getAsJsonObject(FRONTEND_DEBUG_CONFIG_KEY)
+                : null;
+        JsonObject normalized = normalizeFrontendDebugConfig(persisted);
+        JsonObject response = new JsonObject();
+        response.addProperty(
+                FRONTEND_DEBUG_PANEL_ENABLED_KEY,
+                normalized.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).getAsBoolean()
+        );
+        response.addProperty(
+                FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY,
+                normalized.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).getAsBoolean()
+        );
+        response.addProperty(
+                "panelConfigured",
+                hasExplicitBooleanProperty(persisted, FRONTEND_DEBUG_PANEL_ENABLED_KEY)
+        );
+        response.addProperty(
+                "archiveConfigured",
+                hasExplicitBooleanProperty(persisted, FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY)
+        );
+        return response;
+    }
+
+    /**
+     * 保存前端调试配置。
+     * 调试面板显示和诊断日志落档两个开关需要一次性持久化，避免前端分两次提交时出现中间态。
+     *
+     * @param panelEnabled 是否允许显示前端调试面板
+     * @param archiveEnabled 是否允许将关键前端诊断日志桥接并落入 idea.log
+     * @throws IOException 写配置失败时抛出
+     */
+    public void setFrontendDebugConfig(boolean panelEnabled, boolean archiveEnabled) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject frontendDebugConfig = new JsonObject();
+        frontendDebugConfig.addProperty(FRONTEND_DEBUG_PANEL_ENABLED_KEY, panelEnabled);
+        frontendDebugConfig.addProperty(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY, archiveEnabled);
+        config.add(FRONTEND_DEBUG_CONFIG_KEY, frontendDebugConfig);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set frontend debug config: panelEnabled=" + panelEnabled
+                + ", archiveEnabled=" + archiveEnabled);
     }
 
     // ==================== Language Config Management ====================
@@ -545,6 +628,47 @@ public class CodemossSettingsService {
                 + ", customFontPath=" + customFontPath);
     }
 
+    // ==================== Codex History Image Cache Config Management ====================
+
+    /**
+     * 读取 Codex 历史图片缓存配置。
+     * <p>
+     * 配置存放在 `config.json -> codex.historyImageCache`，并在读取时统一补齐默认值与范围校验，
+     * 避免设置页、缓存写入服务和清理逻辑各自散落默认值。
+     *
+     * @return 归一化后的缓存配置对象
+     * @throws IOException 配置文件读取失败时抛出
+     */
+    public JsonObject getCodexHistoryImageCacheConfig() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        if (!codex.has(CODEX_HISTORY_IMAGE_CACHE_KEY) || !codex.get(CODEX_HISTORY_IMAGE_CACHE_KEY).isJsonObject()) {
+            return createDefaultCodexHistoryImageCacheConfig();
+        }
+        return normalizeCodexHistoryImageCacheConfig(codex.getAsJsonObject(CODEX_HISTORY_IMAGE_CACHE_KEY));
+    }
+
+    /**
+     * 持久化 Codex 历史图片缓存配置。
+     *
+     * @param customDir 用户自定义缓存目录；空串表示恢复默认目录
+     * @param retentionDays 缓存保留天数
+     * @param maxSizeMb 缓存容量上限，单位 MB
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void setCodexHistoryImageCacheConfig(String customDir, int retentionDays, int maxSizeMb) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        codex.add(
+                CODEX_HISTORY_IMAGE_CACHE_KEY,
+                createCodexHistoryImageCacheConfig(customDir, retentionDays, maxSizeMb)
+        );
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Updated Codex history image cache config: customDir=" + customDir
+                + ", retentionDays=" + retentionDays
+                + ", maxSizeMb=" + maxSizeMb);
+    }
+
     // ==================== Permission Dialog Timeout Config Management ====================
 
     public static final int DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS =
@@ -566,6 +690,96 @@ public class CodemossSettingsService {
 
     public void setPermissionDialogTimeoutSeconds(int seconds) throws IOException {
         PermissionDialogTimeoutSettings.setPermissionDialogTimeoutSeconds(this, seconds);
+    }
+
+    /**
+     * 获取“是否允许通过右键菜单打开调试面板”的全局开关。
+     * 该配置属于 IDE / 插件级偏好，而不是项目级偏好，因此直接保存在根配置节点。
+     * 当配置缺失或值非法时，统一按关闭处理，避免在普通用户环境里默认暴露调试入口。
+     *
+     * @return true 表示允许在右键菜单中显示调试面板入口；false 表示隐藏
+     * @throws IOException 读取配置文件失败时抛出
+     */
+    public boolean getRightClickOpenDevToolsEnabled() throws IOException {
+        JsonObject config = readConfig();
+        if (config.has("rightClickOpenDevToolsEnabled") && !config.get("rightClickOpenDevToolsEnabled").isJsonNull()) {
+            return config.get("rightClickOpenDevToolsEnabled").getAsBoolean();
+        }
+        return false;
+    }
+
+    /**
+     * 保存“是否允许通过右键菜单打开调试面板”的全局开关。
+     * 这里仅负责持久化用户偏好；前端自定义菜单与 JCEF 原生菜单都会消费同一份布尔值，
+     * 以保证设置页、聊天页和浏览器右键菜单的表现一致。
+     *
+     * @param enabled true 表示显示右键调试入口；false 表示隐藏
+     * @throws IOException 写入配置文件失败时抛出
+     */
+    public void setRightClickOpenDevToolsEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty("rightClickOpenDevToolsEnabled", enabled);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set right click open DevTools enabled: " + enabled);
+    }
+
+    /**
+     * 创建前端调试配置默认值。
+     * 分发包默认关闭调试面板和诊断日志落档，避免普通使用场景产生额外噪声。
+     *
+     * @return 默认前端调试配置
+     */
+    private JsonObject createDefaultFrontendDebugConfig() {
+        JsonObject config = new JsonObject();
+        config.addProperty(FRONTEND_DEBUG_PANEL_ENABLED_KEY, false);
+        config.addProperty(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY, false);
+        return config;
+    }
+
+    /**
+     * 标准化前端调试配置。
+     * 仅接受布尔值；缺失或类型异常时统一回退到 false，避免脏配置导致调试能力被意外打开。
+     *
+     * @param rawConfig 原始前端调试配置
+     * @return 标准化后的配置对象
+     */
+    private JsonObject normalizeFrontendDebugConfig(JsonObject rawConfig) {
+        JsonObject normalized = createDefaultFrontendDebugConfig();
+        if (rawConfig == null) {
+            return normalized;
+        }
+        if (rawConfig.has(FRONTEND_DEBUG_PANEL_ENABLED_KEY)
+                && rawConfig.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).isJsonPrimitive()
+                && rawConfig.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).getAsJsonPrimitive().isBoolean()) {
+            normalized.addProperty(
+                    FRONTEND_DEBUG_PANEL_ENABLED_KEY,
+                    rawConfig.get(FRONTEND_DEBUG_PANEL_ENABLED_KEY).getAsBoolean()
+            );
+        }
+        if (rawConfig.has(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY)
+                && rawConfig.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).isJsonPrimitive()
+                && rawConfig.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).getAsJsonPrimitive().isBoolean()) {
+            normalized.addProperty(
+                    FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY,
+                    rawConfig.get(FRONTEND_DEBUG_ARCHIVE_ENABLED_KEY).getAsBoolean()
+            );
+        }
+        return normalized;
+    }
+
+    /**
+     * 判断指定配置节点中某个布尔字段是否由用户显式保存过。
+     * 只有显式存在且类型为 boolean 时，前端才应把该字段视为运行时覆盖值。
+     *
+     * @param source 原始配置节点
+     * @param key 目标字段名
+     * @return 字段显式存在且为布尔值时返回 true
+     */
+    private boolean hasExplicitBooleanProperty(JsonObject source, String key) {
+        return source != null
+                && source.has(key)
+                && source.get(key).isJsonPrimitive()
+                && source.get(key).getAsJsonPrimitive().isBoolean();
     }
 
     // ==================== Streaming Config Management ====================
@@ -605,6 +819,76 @@ public class CodemossSettingsService {
         return uiFont;
     }
 
+    /**
+     * 构造默认的 Codex 历史图片缓存配置。
+     */
+    private JsonObject createDefaultCodexHistoryImageCacheConfig() {
+        return createCodexHistoryImageCacheConfig(
+                "",
+                DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS,
+                DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB
+        );
+    }
+
+    /**
+     * 归一化 Codex 历史图片缓存配置，统一裁剪非法目录与数值范围。
+     */
+    private JsonObject normalizeCodexHistoryImageCacheConfig(JsonObject rawConfig) {
+        if (rawConfig == null) {
+            return createDefaultCodexHistoryImageCacheConfig();
+        }
+        String customDir = rawConfig.has(CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY)
+                && !rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY).isJsonNull()
+                ? rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY).getAsString()
+                : "";
+        int retentionDays = rawConfig.has(CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY)
+                && !rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY).isJsonNull()
+                ? rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY).getAsInt()
+                : DEFAULT_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS;
+        int maxSizeMb = rawConfig.has(CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY)
+                && !rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY).isJsonNull()
+                ? rawConfig.get(CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY).getAsInt()
+                : DEFAULT_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB;
+        return createCodexHistoryImageCacheConfig(customDir, retentionDays, maxSizeMb);
+    }
+
+    /**
+     * 构造可落盘的 Codex 历史图片缓存配置对象。
+     */
+    private JsonObject createCodexHistoryImageCacheConfig(String customDir, int retentionDays, int maxSizeMb) {
+        JsonObject cacheConfig = new JsonObject();
+        cacheConfig.addProperty(
+                CODEX_HISTORY_IMAGE_CACHE_CUSTOM_DIR_KEY,
+                normalizeString(customDir, "")
+        );
+        cacheConfig.addProperty(
+                CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS_KEY,
+                clampCodexHistoryImageCacheRetentionDays(retentionDays)
+        );
+        cacheConfig.addProperty(
+                CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB_KEY,
+                clampCodexHistoryImageCacheMaxSizeMb(maxSizeMb)
+        );
+        return cacheConfig;
+    }
+
+    private int clampCodexHistoryImageCacheRetentionDays(int retentionDays) {
+        return Math.max(
+                MIN_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS,
+                Math.min(MAX_CODEX_HISTORY_IMAGE_CACHE_RETENTION_DAYS, retentionDays)
+        );
+    }
+
+    private int clampCodexHistoryImageCacheMaxSizeMb(int maxSizeMb) {
+        return Math.max(
+                MIN_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB,
+                Math.min(MAX_CODEX_HISTORY_IMAGE_CACHE_MAX_SIZE_MB, maxSizeMb)
+        );
+    }
+
+    /**
+     * 确保 codex 根配置对象存在。
+     */
     private JsonObject normalizeUiFontConfig(JsonObject rawConfig) {
         if (rawConfig == null) {
             return createDefaultUiFontConfig();

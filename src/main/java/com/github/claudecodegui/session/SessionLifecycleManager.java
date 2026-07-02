@@ -2,7 +2,10 @@ package com.github.claudecodegui.session;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.handler.NodeJsServiceCaller;
+import com.github.claudecodegui.handler.history.HistoryMessageInjector;
 import com.github.claudecodegui.model.SessionTemplate;
+import com.github.claudecodegui.notifications.ClaudeNotifier;
+import com.github.claudecodegui.provider.codex.CodexHistoryReader;
 import com.github.claudecodegui.remote.debug.TabSessionRestoreDebugTrace;
 import com.github.claudecodegui.settings.CodexProviderManager;
 import com.github.claudecodegui.settings.CodemossSettingsService;
@@ -14,7 +17,9 @@ import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.skill.SlashCommandRegistry;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.PlatformUtils;
+import com.github.claudecodegui.util.TokenUsageUtils;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.application.ApplicationManager;
@@ -25,7 +30,10 @@ import com.intellij.ui.jcef.JBCefBrowser;
 import java.io.File;
 import java.util.List;
 import java.util.UUID;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Manages session lifecycle operations: creation, history loading,
@@ -37,6 +45,8 @@ public class SessionLifecycleManager {
     private static final String PERMISSION_MODE_PROPERTY_KEY = "claude.code.permission.mode";
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
     private static final String CONTINUATION_CARRYOVER_MODE = "session_summary";
+    private final Set<String> inFlightHistoryRestoreKeys = ConcurrentHashMap.newKeySet();
+    private final AtomicReference<String> lastFinishedHistoryRestoreKey = new AtomicReference<>();
 
     /**
      * Host interface providing access to window-level dependencies.
@@ -327,6 +337,13 @@ public class SessionLifecycleManager {
             String restoreSource,
             String transitionToken
     ) {
+        String restoreRequestKey = tryAcquireHistoryRestoreRequest(sessionId, restoreSource, transitionToken);
+        if (restoreRequestKey == null) {
+            LOG.info("[HistoryRestore] Skip duplicate restore request, sessionId=" + sessionId
+                    + ", restoreSource=" + restoreSource
+                    + ", transitionToken=" + transitionToken);
+            return;
+        }
         LOG.info("Loading history session: " + sessionId + " from project: " + projectPath);
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " loadHistorySession start sessionId="
                 + firstNonBlank(sessionId)
@@ -424,21 +441,29 @@ public class SessionLifecycleManager {
             // Prewarm daemon runtime for the historical session so /context and first message are fast
             host.getClaudeSDKBridge().prewarmDaemonAsync(workingDir, newSession.getRuntimeSessionEpoch(), sessionId);
 
-            newSession.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
-                replayRestoredSessionTitle(sessionId);
-                LOG.info(TabSessionRestoreDebugTrace.buildMessage(
-                        "history_restore_session_completed",
-                        -1,
-                        sessionId,
-                        resolvedProvider,
-                        resolvedRuntimeFamily,
-                        restoreSource,
-                        false,
-                        transitionToken
-                ));
-                host.callJavaScript("historyLoadComplete");
-            })).exceptionally(ex -> {
+            CompletableFuture<Void> loadFuture = SessionRuntimeFamily.CODEX.equals(resolvedRuntimeFamily)
+                    ? loadCodexHistorySession(newSession, sessionId, resolvedProvider, restoreSource, transitionToken)
+                    : newSession.loadFromServer();
+
+            loadFuture.handle((unused, ex) -> {
+                finishHistoryRestoreRequest(restoreRequestKey);
                 ApplicationManager.getApplication().invokeLater(() -> {
+                    if (ex == null) {
+                        replayRestoredSessionTitle(sessionId);
+                        LOG.info(TabSessionRestoreDebugTrace.buildMessage(
+                                "history_restore_session_completed",
+                                -1,
+                                sessionId,
+                                resolvedProvider,
+                                resolvedRuntimeFamily,
+                                restoreSource,
+                                false,
+                                transitionToken
+                        ));
+                        host.callJavaScript("historyLoadComplete");
+                        return;
+                    }
+
                     LOG.warn(TabSessionRestoreDebugTrace.buildMessage(
                             "history_restore_session_failed",
                             -1,
@@ -449,7 +474,7 @@ public class SessionLifecycleManager {
                             false,
                             transitionToken
                     ) + ", error=" + ex.getMessage());
-                    // Release transition guard so the frontend is not permanently stuck
+                    // 释放切换保护，避免前端因为历史恢复失败而永久卡住。
                     host.callJavaScript("historyLoadComplete");
                     host.callJavaScript("addErrorMessage",
                             JsUtils.escapeJs("Failed to load session: " + ex.getMessage()));
@@ -457,6 +482,7 @@ public class SessionLifecycleManager {
                 return null;
             });
         }).exceptionally(ex -> {
+            finishHistoryRestoreRequest(restoreRequestKey);
             LOG.error("Failed to load history session: " + ex.getMessage(), ex);
             ApplicationManager.getApplication().invokeLater(() -> {
                 LOG.warn(TabSessionRestoreDebugTrace.buildMessage(
@@ -474,6 +500,180 @@ public class SessionLifecycleManager {
                         JsUtils.escapeJs("Failed to load session: " + ex.getMessage()));
             });
             return null;
+        });
+    }
+
+    /**
+     * 以 Codex 增强恢复链路加载历史会话。
+     * 通用 `loadFromServer()` 只会把服务端快照交给通用消息解析器，无法恢复 `local_images` 对应的真实图片语义，
+     * 也无法避免占位文本快照与增强图片快照的双重注入。因此 Codex 历史恢复必须在这里统一走增强链路。
+     *
+     * @param session 当前待恢复的会话对象
+     * @param sessionId 历史会话 ID
+     * @param provider 展示 provider
+     * @param restoreSource 恢复来源
+     * @param transitionToken 前端切换令牌
+     * @return 异步加载任务
+     */
+    private CompletableFuture<Void> loadCodexHistorySession(
+            ClaudeSession session,
+            String sessionId,
+            String provider,
+            String restoreSource,
+            String transitionToken
+    ) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                CodexHistoryReader codexReader = new CodexHistoryReader();
+                String messagesJson = codexReader.getSessionMessagesAsJson(sessionId);
+                JsonArray messages = new Gson().fromJson(messagesJson, JsonArray.class);
+                if (messages == null) {
+                    messages = new JsonArray();
+                }
+
+                String[] sessionMeta = HistoryMessageInjector.extractCodexSessionMeta(messages);
+                String actualThreadId = sessionMeta[0] != null ? sessionMeta[0] : sessionId;
+                String resolvedCwd = sessionMeta[1];
+                if (resolvedCwd == null || resolvedCwd.trim().isEmpty()) {
+                    resolvedCwd = session.getCwd();
+                }
+
+                session.setSessionInfo(actualThreadId, resolvedCwd);
+                restoreCodexSessionBindingIfPresent(session, actualThreadId);
+                HistoryMessageInjector.restoreCodexMessagesToSessionState(session.getState(), messages);
+                pushCodexHistoryMessagesToFrontend(
+                        messages,
+                        buildHistoryRestoreRequestKey(actualThreadId, restoreSource, transitionToken)
+                );
+                restoreCodexHistoryTokenUsage(session, messages);
+
+                LOG.info(TabSessionRestoreDebugTrace.buildMessage(
+                        "history_restore_codex_enhanced_completed",
+                        -1,
+                        actualThreadId,
+                        provider,
+                        SessionRuntimeFamily.CODEX,
+                        restoreSource,
+                        false,
+                        transitionToken
+                ) + ", messageCount=" + messages.size());
+            } catch (Exception e) {
+                session.getState().setError(e.getMessage());
+                throw new RuntimeException("Failed to load Codex history session: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * 把 Codex 增强恢复后的最终消息快照推送到前端。
+     * 这里只保留单一的 `clearMessages -> updateMessages` 注入路径，
+     * 避免同一历史恢复周期内再出现第二条占位文本快照覆盖增强消息的问题。
+     *
+     * @param messages Codex 原始历史消息数组
+     */
+    private void pushCodexHistoryMessagesToFrontend(JsonArray messages, String restoreRequestKey) {
+        List<JsonObject> frontendMessages = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+        String payload = JsUtils.escapeJs(new Gson().toJson(frontendMessages));
+        String rawSnapshotSignature = HistoryMessageInjector.buildFrontendSnapshotSignature(frontendMessages);
+        String snapshotSignature = JsUtils.escapeJs(rawSnapshotSignature);
+        String escapedRestoreRequestKey = JsUtils.escapeJs(restoreRequestKey);
+        LOG.info("[HistoryRestore] Push Codex history snapshot to frontend: restoreRequestKey="
+                + restoreRequestKey
+                + ", snapshotSignature=" + rawSnapshotSignature
+                + ", frontendMessageCount=" + frontendMessages.size()
+                + ", rawMessageCount=" + messages.size());
+        ApplicationManager.getApplication().invokeLater(() -> {
+            host.callJavaScript("prepareHistoryRestoreSnapshot", escapedRestoreRequestKey, snapshotSignature);
+            host.callJavaScript("clearMessages");
+            host.callJavaScript("updateMessages", payload);
+        });
+    }
+
+    /**
+     * 构造历史恢复请求幂等 key。
+     * 该 key 由 `sessionId + restoreSource + transitionToken` 组成，用于把同一轮恢复链路里的重复请求
+     * 归并到同一个逻辑恢复周期内，避免重复打断会话和重复回放历史快照。
+     *
+     * @param sessionId 会话 ID
+     * @param restoreSource 恢复来源
+     * @param transitionToken 前端切换令牌
+     * @return 稳定的历史恢复请求 key
+     */
+    static String buildHistoryRestoreRequestKey(String sessionId, String restoreSource, String transitionToken) {
+        String normalizedSessionId = sessionId == null || sessionId.trim().isEmpty() ? "(unknown)" : sessionId.trim();
+        String normalizedRestoreSource = restoreSource == null || restoreSource.trim().isEmpty()
+                ? "history_switch"
+                : restoreSource.trim();
+        String normalizedTransitionToken = transitionToken == null || transitionToken.trim().isEmpty()
+                ? "(none)"
+                : transitionToken.trim();
+        return normalizedSessionId + "|" + normalizedRestoreSource + "|" + normalizedTransitionToken;
+    }
+
+    /**
+     * 申请当前历史恢复周期的幂等 key。
+     * 如果同一个 key 已经在执行中，或刚刚完成过一次，则直接拒绝后续重复请求。
+     *
+     * @param sessionId 会话 ID
+     * @param restoreSource 恢复来源
+     * @param transitionToken 前端切换令牌
+     * @return 可受理时返回 restore key；重复请求返回 `null`
+     */
+    protected String tryAcquireHistoryRestoreRequest(String sessionId, String restoreSource, String transitionToken) {
+        String restoreRequestKey = buildHistoryRestoreRequestKey(sessionId, restoreSource, transitionToken);
+        if (restoreRequestKey.equals(lastFinishedHistoryRestoreKey.get())) {
+            return null;
+        }
+        return inFlightHistoryRestoreKeys.add(restoreRequestKey) ? restoreRequestKey : null;
+    }
+
+    /**
+     * 标记一轮历史恢复周期结束。
+     * 无论恢复成功还是失败，都必须释放 in-flight 标记，并记录最后一次完成的 restore key，
+     * 以便抑制同一周期内的尾随重复请求。
+     *
+     * @param restoreRequestKey 已完成的恢复 key
+     */
+    protected void finishHistoryRestoreRequest(String restoreRequestKey) {
+        if (restoreRequestKey == null || restoreRequestKey.trim().isEmpty()) {
+            return;
+        }
+        inFlightHistoryRestoreKeys.remove(restoreRequestKey);
+        lastFinishedHistoryRestoreKey.set(restoreRequestKey);
+    }
+
+    /**
+     * 恢复 Codex 历史会话的 token usage 展示。
+     * 由于 Codex 历史不再走通用 `loadFromServer()`，这里需要把状态栏和前端 usage 回调手动补齐，
+     * 避免历史恢复后 usage 信息回退为 0。
+     *
+     * @param session 当前历史会话
+     * @param messages Codex 原始历史消息数组
+     */
+    private void restoreCodexHistoryTokenUsage(ClaudeSession session, JsonArray messages) {
+        List<JsonObject> rawMessages = new java.util.ArrayList<>();
+        messages.forEach(element -> {
+            if (element != null && element.isJsonObject()) {
+                rawMessages.add(element.getAsJsonObject());
+            }
+        });
+
+        JsonObject lastUsage = TokenUsageUtils.findLastUsageFromRawMessages(rawMessages);
+        if (lastUsage == null) {
+            return;
+        }
+
+        int usedTokens = TokenUsageUtils.extractUsedTokens(lastUsage, session.getProvider());
+        int maxTokens = SettingsHandler.getModelContextLimit(session.getModel());
+        ClaudeNotifier.setTokenUsage(host.getProject(), usedTokens, maxTokens);
+
+        ApplicationManager.getApplication().invokeLater(() -> {
+            double percentage = maxTokens > 0 ? (usedTokens * 100.0 / maxTokens) : 0.0;
+            String json = String.format("{\"percentage\":%.2f,\"usedTokens\":%d,\"maxTokens\":%d}",
+                    percentage,
+                    usedTokens,
+                    maxTokens);
+            host.callJavaScript("onUsageUpdate", JsUtils.escapeJs(json));
         });
     }
 

@@ -3,6 +3,8 @@
     "ready": "就绪",
     "loading": "加载中",
     "save": "保存",
+    "browse": "浏览",
+    "reset": "恢复默认",
     "cancel": "取消",
     "confirm": "确定",
     "delete": "删除",
@@ -130,6 +132,7 @@
     "paste": "粘贴",
     "newline": "插入换行",
     "copyImage": "复制图片"
+  ,    "openDevTools": "\u6253\u5f00\u8c03\u8bd5\u9762\u677f"
   },
   "settings": {
     "title": "设置",
@@ -185,6 +188,13 @@
         "placeholder": "例如 project1 或留空使用项目根目录",
         "hint": "指定 Claude 工作的目录。可以使用相对路径（相对于项目根目录）或绝对路径。留空则使用项目根目录。"
       },
+      "codexHistoryImageCache": {
+        "label": "Codex 历史图片缓存",
+        "dirPlaceholder": "可选：自定义 Codex 历史图片缓存目录",
+        "retentionDays": "保留天数",
+        "maxSizeMb": "容量上限（MB）",
+        "hint": "用于 Codex 历史图片回放，以及从会话历史复制图文后回贴到聊天输入框。当前默认生效目录："
+      },
       "fontSize": {
         "label": "字体大小",
         "level1": "小（80%）",
@@ -217,6 +227,24 @@
         "enabled": "已开启",
         "disabled": "已关闭",
         "hint": "开启后，在项目树选择文件时会自动将文件路径告诉 AI（注意：只传递文件路径，不传文件内容）。关闭后需要手动操作。"
+      },
+      "frontendDebugPanel": {
+        "label": "前端调试面板",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "hint": "开启后，运行时允许在 WebView 内显示前端调试面板，便于直接查看前端诊断信息。"
+      },
+      "frontendDiagnosticArchive": {
+        "label": "前端诊断日志落档",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "hint": "开启后，关键前端诊断日志会桥接到插件侧并写入 idea.log，便于分析分发包环境问题。"
+      },
+      "rightClickOpenDevTools": {
+        "label": "\u53f3\u952e\u6253\u5f00\u8c03\u8bd5\u9762\u677f",
+        "enabled": "\u5df2\u5f00\u542f",
+        "disabled": "\u5df2\u5173\u95ed",
+        "hint": "\u5f00\u542f\u540e\uff0c\u804a\u5929\u533a\u57df\u7684\u53f3\u952e\u83dc\u5355\u4f1a\u51fa\u73b0\u6253\u5f00\u5f53\u524d WebView \u8c03\u8bd5\u9762\u677f\u7684\u5165\u53e3\u3002"
       },
       "promptEnhancer": {
         "label": "增强提示词",

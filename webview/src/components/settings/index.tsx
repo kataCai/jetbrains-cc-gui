@@ -53,6 +53,14 @@ interface SettingsViewProps {
   // Auto open file configuration (passed from App.tsx for state sync)
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  // Frontend debug configuration (passed from App.tsx for state sync)
+  frontendDebugPanelEnabled?: boolean;
+  onFrontendDebugPanelEnabledChange?: (enabled: boolean) => void;
+  frontendDiagnosticArchiveEnabled?: boolean;
+  onFrontendDiagnosticArchiveEnabledChange?: (enabled: boolean) => void;
+  // Right click devtools configuration (passed from App.tsx for state sync)
+  rightClickOpenDevToolsEnabled?: boolean;
+  onRightClickOpenDevToolsEnabledChange?: (enabled: boolean) => void;
   // Permission dialog timeout configuration (passed from App.tsx for state sync)
   permissionDialogTimeoutSeconds?: number;
   onPermissionDialogTimeoutChange?: (seconds: number) => void;
@@ -68,6 +76,12 @@ const SettingsView = ({
   onSendShortcutChange: onSendShortcutChangeProp,
   autoOpenFileEnabled: autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp,
+  frontendDebugPanelEnabled: frontendDebugPanelEnabledProp,
+  onFrontendDebugPanelEnabledChange: onFrontendDebugPanelEnabledChangeProp,
+  frontendDiagnosticArchiveEnabled: frontendDiagnosticArchiveEnabledProp,
+  onFrontendDiagnosticArchiveEnabledChange: onFrontendDiagnosticArchiveEnabledChangeProp,
+  rightClickOpenDevToolsEnabled: rightClickOpenDevToolsEnabledProp,
+  onRightClickOpenDevToolsEnabledChange: onRightClickOpenDevToolsEnabledChangeProp,
   permissionDialogTimeoutSeconds: permissionDialogTimeoutSecondsProp,
   onPermissionDialogTimeoutChange: onPermissionDialogTimeoutChangeProp,
 }: SettingsViewProps) => {
@@ -131,6 +145,16 @@ const SettingsView = ({
     setWorkingDirectory,
     savingWorkingDirectory,
     setSavingWorkingDirectory,
+    codexHistoryImageCacheDir,
+    setCodexHistoryImageCacheDir,
+    codexHistoryImageCacheResolvedDir,
+    setCodexHistoryImageCacheResolvedDir,
+    codexHistoryImageCacheRetentionDays,
+    setCodexHistoryImageCacheRetentionDays,
+    codexHistoryImageCacheMaxSizeMb,
+    setCodexHistoryImageCacheMaxSizeMb,
+    savingCodexHistoryImageCache,
+    setSavingCodexHistoryImageCache,
     editorFontConfig,
     setEditorFontConfig,
     uiFontConfig,
@@ -142,6 +166,12 @@ const SettingsView = ({
     setLocalSendShortcut,
     sendShortcut,
     autoOpenFileEnabled,
+    frontendDebugPanelEnabled,
+    frontendDiagnosticArchiveEnabled,
+    rightClickOpenDevToolsEnabled,
+    setLocalFrontendDebugPanelEnabled,
+    setLocalFrontendDiagnosticArchiveEnabled,
+    setLocalRightClickOpenDevToolsEnabled,
     promptEnhancerConfig,
     setPromptEnhancerConfig,
     commitPrompt,
@@ -157,6 +187,9 @@ const SettingsView = ({
     handleSaveNodePath,
     handleSaveClaudeCliPath,
     handleSaveWorkingDirectory,
+    handleSaveCodexHistoryImageCacheConfig,
+    handleBrowseCodexHistoryImageCacheDir,
+    handleResetCodexHistoryImageCacheDir,
     handleUiFontSelectionChange,
     handleSaveUiFontCustomPath,
     handleBrowseUiFontFile,
@@ -164,6 +197,9 @@ const SettingsView = ({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleFrontendDebugPanelEnabledChange,
+    handleFrontendDiagnosticArchiveEnabledChange,
+    handleRightClickOpenDevToolsEnabledChange,
     handleTaskReminderEnabledChange,
     handleTaskReminderStateToggle,
     handleTaskReminderOnlyWhenIdeUnfocusedChange,
@@ -210,6 +246,12 @@ const SettingsView = ({
     onSendShortcutChangeProp,
     autoOpenFileEnabledProp,
     onAutoOpenFileEnabledChangeProp,
+    frontendDebugPanelEnabledProp,
+    onFrontendDebugPanelEnabledChangeProp,
+    frontendDiagnosticArchiveEnabledProp,
+    onFrontendDiagnosticArchiveEnabledChangeProp,
+    rightClickOpenDevToolsEnabledProp,
+    onRightClickOpenDevToolsEnabledChangeProp,
     permissionDialogTimeoutSecondsProp,
     onPermissionDialogTimeoutChangeProp,
   });
@@ -334,6 +376,11 @@ const SettingsView = ({
     setSavingClaudeCliPath,
     setWorkingDirectory,
     setSavingWorkingDirectory,
+    setCodexHistoryImageCacheDir,
+    setCodexHistoryImageCacheResolvedDir,
+    setCodexHistoryImageCacheRetentionDays,
+    setCodexHistoryImageCacheMaxSizeMb,
+    setSavingCodexHistoryImageCache,
     setCommitPrompt,
     setSavingCommitPrompt,
     setCommitAiConfig,
@@ -375,6 +422,9 @@ const SettingsView = ({
     setRemoteCollabConfig,
     setRemoteCollabDebugSnapshot,
     setRemoteCollabProviderOperationResult,
+    setFrontendDebugPanelEnabled: setLocalFrontendDebugPanelEnabled,
+    setFrontendDiagnosticArchiveEnabled: setLocalFrontendDiagnosticArchiveEnabled,
+    setRightClickOpenDevToolsEnabled: setLocalRightClickOpenDevToolsEnabled,
     setCommitGenerationEnabled,
     setAiTitleGenerationEnabled,
     setStatusBarWidgetEnabled,
@@ -548,6 +598,17 @@ const SettingsView = ({
               onWorkingDirectoryChange={setWorkingDirectory}
               onSaveWorkingDirectory={handleSaveWorkingDirectory}
               savingWorkingDirectory={savingWorkingDirectory}
+              codexHistoryImageCacheDir={codexHistoryImageCacheDir}
+              codexHistoryImageCacheResolvedDir={codexHistoryImageCacheResolvedDir}
+              codexHistoryImageCacheRetentionDays={codexHistoryImageCacheRetentionDays}
+              codexHistoryImageCacheMaxSizeMb={codexHistoryImageCacheMaxSizeMb}
+              onCodexHistoryImageCacheDirChange={setCodexHistoryImageCacheDir}
+              onCodexHistoryImageCacheRetentionDaysChange={setCodexHistoryImageCacheRetentionDays}
+              onCodexHistoryImageCacheMaxSizeMbChange={setCodexHistoryImageCacheMaxSizeMb}
+              onBrowseCodexHistoryImageCacheDir={handleBrowseCodexHistoryImageCacheDir}
+              onResetCodexHistoryImageCacheDir={handleResetCodexHistoryImageCacheDir}
+              onSaveCodexHistoryImageCacheConfig={handleSaveCodexHistoryImageCacheConfig}
+              savingCodexHistoryImageCache={savingCodexHistoryImageCache}
               editorFontConfig={editorFontConfig}
               uiFontConfig={uiFontConfig}
               onUiFontSelectionChange={handleUiFontSelectionChange}
@@ -559,6 +620,12 @@ const SettingsView = ({
               onSendShortcutChange={handleSendShortcutChange}
               autoOpenFileEnabled={autoOpenFileEnabled}
               onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+              frontendDebugPanelEnabled={frontendDebugPanelEnabled}
+              onFrontendDebugPanelEnabledChange={handleFrontendDebugPanelEnabledChange}
+              frontendDiagnosticArchiveEnabled={frontendDiagnosticArchiveEnabled}
+              onFrontendDiagnosticArchiveEnabledChange={handleFrontendDiagnosticArchiveEnabledChange}
+              rightClickOpenDevToolsEnabled={rightClickOpenDevToolsEnabled}
+              onRightClickOpenDevToolsEnabledChange={handleRightClickOpenDevToolsEnabledChange}
               chatBgColor={chatBgColor}
               onChatBgColorChange={setChatBgColor}
               userMsgColor={userMsgColor}

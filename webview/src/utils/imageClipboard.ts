@@ -27,6 +27,19 @@ export interface CopyableImageSource {
 
 const DATA_URL_PATTERN = /^data:([^;,]+)?(;base64)?,(.*)$/i;
 const PNG_MEDIA_TYPE = 'image/png';
+const RICH_COPY_BRIDGE_LOG_PREFIX = '[RichCopy][BridgeWrite]';
+
+/**
+ * 输出图片剪贴板桥接日志。
+ * 仅记录媒体类型、分支选择和统计信息，避免打印图片正文。
+ *
+ * @param message 日志说明
+ * @param details 附加结构化上下文
+ * @return 无返回值
+ */
+function logRichClipboardBridge(message: string, details?: Record<string, unknown>): void {
+  console.debug(RICH_COPY_BRIDGE_LOG_PREFIX, message, details ?? {});
+}
 
 /**
  * 将 HTML 文本中的特殊字符转义为安全实体，避免拼接富剪贴板 HTML 时引入非法标签。
@@ -197,17 +210,29 @@ async function normalizeImageSourceToPngDataUrl(src: string): Promise<string> {
 export async function buildClipboardImagePayload(source: CopyableImageSource): Promise<ClipboardImagePayload> {
   const directPayload = extractImagePayloadFromDataUrl(source.src, source.mediaType);
   if (directPayload?.mediaType === PNG_MEDIA_TYPE) {
+    logRichClipboardBridge('reuse direct PNG data url for clipboard image payload', {
+      mediaType: directPayload.mediaType,
+      hasFileName: Boolean(source.fileName),
+    });
     return {
       ...directPayload,
       fileName: source.fileName,
     };
   }
 
+  logRichClipboardBridge('normalize image source to PNG for clipboard payload', {
+    sourceMediaType: source.mediaType ?? 'unknown',
+    hasDirectPayload: Boolean(directPayload),
+    srcKind: source.src.startsWith('data:') ? 'data-url' : 'external',
+  });
   const normalizedDataUrl = directPayload?.mediaType?.startsWith('image/')
     ? await normalizeImageSourceToPngDataUrl(source.src)
     : await normalizeImageSourceToPngDataUrl(source.src);
   const normalizedPayload = extractImagePayloadFromDataUrl(normalizedDataUrl, PNG_MEDIA_TYPE);
   if (!normalizedPayload) {
+    logRichClipboardBridge('failed to normalize image payload to PNG', {
+      sourceMediaType: source.mediaType ?? 'unknown',
+    });
     throw new Error('Failed to normalize image payload');
   }
 
@@ -238,8 +263,15 @@ export async function copyImageViaBridge(source: CopyableImageSource): Promise<b
  */
 export function copyRichClipboardViaBridge(payload: ClipboardRichPayload): boolean {
   if (!payload.text.trim() && !payload.html.trim() && !payload.image && !payload.images?.length) {
+    logRichClipboardBridge('skip rich clipboard write because payload is empty');
     return false;
   }
+  logRichClipboardBridge('send rich clipboard payload to Java bridge', {
+    textLength: payload.text.length,
+    htmlLength: payload.html.length,
+    imageCount: payload.images?.length ?? (payload.image ? 1 : 0),
+    orderedBlockCount: payload.orderedBlocks?.length ?? 0,
+  });
   sendToJava('write_clipboard_rich', payload);
   return true;
 }

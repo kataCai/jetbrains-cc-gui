@@ -33,6 +33,7 @@ import {
   subscribeCodexProviderList,
   subscribeProviderList,
 } from '../../../utils/runtimeProviderCapabilities';
+import { updateFrontendDebugRuntimeConfig } from '../../../utils/debug';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -49,6 +50,11 @@ export interface SettingsWindowCallbacksDeps {
   setSavingClaudeCliPath: (saving: boolean) => void;
   setWorkingDirectory: (dir: string) => void;
   setSavingWorkingDirectory: (saving: boolean) => void;
+  setCodexHistoryImageCacheDir: (dir: string) => void;
+  setCodexHistoryImageCacheResolvedDir: (dir: string) => void;
+  setCodexHistoryImageCacheRetentionDays: (days: number) => void;
+  setCodexHistoryImageCacheMaxSizeMb: (size: number) => void;
+  setSavingCodexHistoryImageCache: (saving: boolean) => void;
   setCommitPrompt: (prompt: string) => void;
   setSavingCommitPrompt: (saving: boolean) => void;
   setProjectCommitPrompt?: (prompt: string) => void;
@@ -61,6 +67,8 @@ export interface SettingsWindowCallbacksDeps {
   setLocalStreamingEnabled: (enabled: boolean) => void;
   setCodexSandboxMode?: (mode: 'workspace-write' | 'danger-full-access') => void;
   setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
+  setFrontendDebugPanelEnabled?: (enabled: boolean) => void;
+  setFrontendDiagnosticArchiveEnabled?: (enabled: boolean) => void;
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
@@ -73,6 +81,7 @@ export interface SettingsWindowCallbacksDeps {
   setTaskReminderConfig?: (
     config: TaskReminderConfig | ((prev: TaskReminderConfig) => TaskReminderConfig)
   ) => void;
+  setRightClickOpenDevToolsEnabled?: (enabled: boolean) => void;
   setRemoteCollabConfig?: (
     config: RemoteCollabConfig | ((prev: RemoteCollabConfig) => RemoteCollabConfig)
   ) => void;
@@ -185,6 +194,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
+      d().setSavingCodexHistoryImageCache(false);
       d().setSavingCommitPrompt(false);
     };
 
@@ -241,11 +251,35 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
+    window.updateCodexHistoryImageCacheConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setCodexHistoryImageCacheDir(data.customDir || '');
+        d().setCodexHistoryImageCacheResolvedDir(data.resolvedDir || '');
+        d().setCodexHistoryImageCacheRetentionDays(Number(data.retentionDays) || 30);
+        d().setCodexHistoryImageCacheMaxSizeMb(Number(data.maxSizeMb) || 1024);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex history image cache config:', error);
+      } finally {
+        d().setSavingCodexHistoryImageCache(false);
+      }
+    };
+
+    window.onCodexHistoryImageCacheDirBrowsed = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setCodexHistoryImageCacheDir(data.path || '');
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex history image cache directory browse result:', error);
+      }
+    };
+
     window.showSuccess = (message: string) => {
       d().showAlert('success', t('toast.operationSuccess'), message);
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
+      d().setSavingCodexHistoryImageCache(false);
     };
 
     window.showSuccessI18n = (i18nKey: string) => {
@@ -346,6 +380,38 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         d().setPromptEnhancerConfig(JSON.parse(jsonStr));
       } catch (error) {
         console.error('[SettingsView] Failed to parse prompt enhancer config:', error);
+      }
+    };
+
+    /**
+     * 回写“右键打开调试面板”开关。
+     * 该开关同时影响设置页和聊天区右键菜单，因此必须在 React 注册后
+     * 恢复到同一份状态槽位，避免不同页面出现不同默认值。
+     */
+    window.updateRightClickOpenDevToolsEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setRightClickOpenDevToolsEnabled?.(data.rightClickOpenDevToolsEnabled ?? false);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse right click devtools config:', error);
+      }
+    };
+
+    window.updateFrontendDebugConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        const panelEnabled = data.panelEnabled === true;
+        const archiveEnabled = data.archiveEnabled === true;
+        updateFrontendDebugRuntimeConfig({
+          panelEnabled,
+          archiveEnabled,
+          panelConfigured: data.panelConfigured === true,
+          archiveConfigured: data.archiveConfigured === true,
+        });
+        d().setFrontendDebugPanelEnabled?.(panelEnabled);
+        d().setFrontendDiagnosticArchiveEnabled?.(archiveEnabled);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse frontend debug config:', error);
       }
     };
 
@@ -524,6 +590,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_node_path:');
     sendToJava('get_claude_cli_path:');
     sendToJava('get_working_directory:');
+    sendToJava('get_codex_history_image_cache_config:');
     sendToJava('get_editor_font_config:');
     sendToJava('get_ui_font_config:');
     sendToJava('get_streaming_enabled:');
@@ -534,6 +601,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_commit_ai_config:');
     sendToJava('get_prompt_enhancer_config:');
     sendToJava('get_sound_notification_config:');
+    sendToJava('get_frontend_debug_config:');
+    sendToJava('get_right_click_open_devtools_enabled:');
     sendToJava('get_commit_generation_enabled:');
     sendToJava('get_ai_title_generation_enabled:');
     sendToJava('get_status_bar_widget_enabled:');
@@ -556,6 +625,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateNodePath = undefined;
       window.updateClaudeCliPath = undefined;
       window.updateWorkingDirectory = undefined;
+      window.updateCodexHistoryImageCacheConfig = undefined;
+      window.onCodexHistoryImageCacheDirBrowsed = undefined;
       window.showSuccess = undefined;
       window.showSuccessI18n = undefined;
       window.onEditorFontConfigReceived = undefined;
@@ -571,6 +642,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateCommitPrompt = undefined;
       window.updateCommitAiConfig = undefined;
       window.updatePromptEnhancerConfig = undefined;
+      window.updateFrontendDebugConfig = undefined;
+      window.updateRightClickOpenDevToolsEnabled = undefined;
       window.updateTaskReminderConfig = undefined;
       window.updateSoundNotificationConfig = undefined;
       window.updateRemoteCollabConfig = undefined;

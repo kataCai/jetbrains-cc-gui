@@ -84,6 +84,9 @@
         <!-- Initialize Telegram / remote collaboration runtime on project open -->
         <postStartupActivity implementation="com.github.claudecodegui.startup.RemoteCollabStartupActivity"/>
 
+        <!-- Cleanup Codex history image cache on project open -->
+        <postStartupActivity implementation="com.github.claudecodegui.startup.CodexHistoryImageCacheCleanupStartupActivity"/>
+
         <!-- StatusBar widget for task notification -->
         <statusBarWidgetFactory id="ClaudeStatusBarWidget"
                                 implementation="com.github.claudecodegui.notifications.ClaudeStatusBarWidget$Factory"/>

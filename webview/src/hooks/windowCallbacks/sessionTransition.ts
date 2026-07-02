@@ -56,6 +56,9 @@ export const buildResetTransientUiState = (opts: ResetTransientUiStateOptions) =
     opts.streamingTurnIdRef.current = -1;
     // Clear stream-end idempotency guard to avoid stale state across sessions.
     window.__streamEndProcessedTurnId = undefined;
+    // 清理尚未消费的历史恢复快照上下文，避免跨会话误复用。
+    window.__preparedHistoryRestoreKey = null;
+    window.__preparedHistoryRestoreSignature = null;
     if (opts.contentUpdateTimeoutRef.current != null) {
       cancelAnimationFrame(opts.contentUpdateTimeoutRef.current);
       opts.contentUpdateTimeoutRef.current = null;
@@ -76,4 +79,7 @@ export const releaseSessionTransition = (): void => {
     window.__sessionTransitioning = false;
   }
   window.__sessionTransitionToken = null;
+  // 历史恢复链路在结束时清理待消费上下文，避免后续普通快照误命中历史 restore 逻辑。
+  window.__preparedHistoryRestoreKey = null;
+  window.__preparedHistoryRestoreSignature = null;
 };

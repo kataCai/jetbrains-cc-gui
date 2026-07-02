@@ -50,6 +50,9 @@ public class SettingsHandler extends BaseMessageHandler {
         "get_usage_statistics",
         "get_working_directory",
         "set_working_directory",
+        "get_codex_history_image_cache_config",
+        "set_codex_history_image_cache_config",
+        "browse_codex_history_image_cache_dir",
         "get_editor_font_config",
         "get_ui_font_config",
         "set_ui_font_config",
@@ -62,6 +65,10 @@ public class SettingsHandler extends BaseMessageHandler {
         "set_send_shortcut",
         "get_auto_open_file_enabled",
         "set_auto_open_file_enabled",
+        "get_frontend_debug_config",
+        "set_frontend_debug_config",
+        "get_right_click_open_devtools_enabled",
+        "set_right_click_open_devtools_enabled",
         "get_permission_dialog_timeout",
         "set_permission_dialog_timeout",
         "get_commit_generation_enabled",
@@ -210,6 +217,15 @@ public class SettingsHandler extends BaseMessageHandler {
             case "set_working_directory":
                 projectConfigHandler.handleSetWorkingDirectory(content);
                 return true;
+            case "get_codex_history_image_cache_config":
+                projectConfigHandler.handleGetCodexHistoryImageCacheConfig();
+                return true;
+            case "set_codex_history_image_cache_config":
+                projectConfigHandler.handleSetCodexHistoryImageCacheConfig(content);
+                return true;
+            case "browse_codex_history_image_cache_dir":
+                projectConfigHandler.handleBrowseCodexHistoryImageCacheDir();
+                return true;
             case "get_editor_font_config":
                 projectConfigHandler.handleGetEditorFontConfig();
                 return true;
@@ -245,6 +261,18 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "set_auto_open_file_enabled":
                 projectConfigHandler.handleSetAutoOpenFileEnabled(content);
+                return true;
+            case "get_frontend_debug_config":
+                projectConfigHandler.handleGetFrontendDebugConfig();
+                return true;
+            case "set_frontend_debug_config":
+                projectConfigHandler.handleSetFrontendDebugConfig(content);
+                return true;
+            case "get_right_click_open_devtools_enabled":
+                projectConfigHandler.handleGetRightClickOpenDevToolsEnabled();
+                return true;
+            case "set_right_click_open_devtools_enabled":
+                projectConfigHandler.handleSetRightClickOpenDevToolsEnabled(content);
                 return true;
             case "get_permission_dialog_timeout":
                 projectConfigHandler.handleGetPermissionDialogTimeout();
