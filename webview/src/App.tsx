@@ -116,6 +116,14 @@ const App = () => {
     setCurrentSessionId,
     customSessionTitle,
     setCustomSessionTitle,
+    logicalConversationId,
+    setLogicalConversationId,
+    activeSegmentSessionId,
+    setActiveSegmentSessionId,
+    setParentSegmentSessionId,
+    continuationPending,
+    setContinuationPending,
+    setContinuationSourceSessionId,
   } = useSession();
 
   const {
@@ -151,8 +159,30 @@ const App = () => {
     customSessionTitleRef.current = customSessionTitle;
   }, [customSessionTitle]);
 
+  const logicalConversationIdRef = useRef(logicalConversationId);
+  useEffect(() => {
+    logicalConversationIdRef.current = logicalConversationId;
+  }, [logicalConversationId]);
+
+  const activeSegmentSessionIdRef = useRef(activeSegmentSessionId);
+  useEffect(() => {
+    activeSegmentSessionIdRef.current = activeSegmentSessionId;
+  }, [activeSegmentSessionId]);
+
+  const continuationPendingRef = useRef(continuationPending);
+  useEffect(() => {
+    continuationPendingRef.current = continuationPending;
+  }, [continuationPending]);
+
   const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  const forceCreateNewSessionRef = useRef<(() => void) | null>(null);
+  const forceCreateNewSessionRef = useRef<((request: {
+    switchReason: 'provider' | 'model' | 'activeProvider';
+    targetProvider: string;
+    targetRuntimeFamily: 'claude' | 'codex';
+    targetModel: string;
+    targetReasoningEffort?: string;
+    targetCodexProviderId?: string;
+  }) => void) | null>(null);
   const [anchorCollapsedCount, setAnchorCollapsedCount] = useState(0);
   const handleMessageNodeRef = useCallback((id: string, node: HTMLDivElement | null) => {
     if (node) {
@@ -193,19 +223,25 @@ const App = () => {
   }, [setCurrentView]);
 
   /**
-   * 当 Codex 运行时配置发生变化时，强制切到新会话。
-   * 这里通过 ref 延迟绑定 `forceCreateNewSession`，避免在 hook 初始化阶段提前引用后置变量，
-   * 同时确保 provider、model 或 active provider 变化后不会继续复用旧线程。
+   * 当 Codex 运行时配置发生变化时，在当前逻辑会话下创建新的继续分段。
+   * 这里不再直接清空当前聊天记录，而是把“切配置”的动作桥接给后端生命周期入口。
    *
-   * @param reason 触发会话重建的配置变更来源，仅用于诊断日志
+   * @param request 目标运行时配置与切换原因
    */
-  const handleCodexConversationConfigChanged = useCallback((reason: 'provider' | 'model' | 'activeProvider') => {
+  const handleCodexConversationConfigChanged = useCallback((request: {
+    switchReason: 'provider' | 'model' | 'activeProvider';
+    targetProvider: string;
+    targetRuntimeFamily: 'claude' | 'codex';
+    targetModel: string;
+    targetReasoningEffort?: string;
+    targetCodexProviderId?: string;
+  }) => {
     debugLog('[CODEX_RUNTIME_TRACE][Webview] handleCodexConversationConfigChanged', {
-      reason,
+      ...request,
       currentSessionId: currentSessionIdRef.current,
       customSessionTitle: customSessionTitleRef.current,
     });
-    forceCreateNewSessionRef.current?.();
+    forceCreateNewSessionRef.current?.(request);
   }, []);
 
   useEffect(() => {
@@ -371,7 +407,7 @@ const App = () => {
     suppressNextStatusToastRef,
     createNewSession,
     forceCreateNewSession,
-    forceCreateNewSessionWithProvider,
+    createContinuedSegment,
     handleConfirmNewSession,
     handleCancelNewSession,
     handleConfirmInterrupt,
@@ -406,14 +442,7 @@ const App = () => {
     t,
   });
 
-  /**
-   * 当 Codex 的 provider 或 model 发生变化时，强制重建会话。
-   * 这里复用既有 `create_new_session` 链路，确保前端 `currentSessionId`
-   * 与后端缓存的 Codex `threadId` 一起失效，避免新配置继续沿用旧线程。
-   *
-   * @param reason 触发重建的配置变化来源，仅用于诊断日志
-   */
-  forceCreateNewSessionRef.current = forceCreateNewSession;
+  forceCreateNewSessionRef.current = createContinuedSegment;
 
   useHistoryLoader({ currentView, currentProvider });
 
@@ -430,6 +459,11 @@ const App = () => {
     setHistoryData,
     setCurrentSessionId,
     setCustomSessionTitle,
+    setLogicalConversationId,
+    setActiveSegmentSessionId,
+    setParentSegmentSessionId,
+    setContinuationPending,
+    setContinuationSourceSessionId,
     setUsagePercentage,
     setUsageUsedTokens,
     setUsageMaxTokens,
@@ -492,6 +526,9 @@ const App = () => {
     closeContextUsageDialog,
     customSessionTitleRef,
     currentSessionIdRef,
+    logicalConversationIdRef,
+    activeSegmentSessionIdRef,
+    continuationPendingRef,
     updateHistoryTitle,
     applyHistoryTitleLocal,
     setPermissionDialogTimeoutSeconds,
@@ -507,8 +544,7 @@ const App = () => {
   const wrappedHandleProviderSelect = useCallback((providerId: string) => {
     chatInputRef.current?.clear();
     handleProviderSelect(providerId);
-    forceCreateNewSessionWithProvider(providerId);
-  }, [forceCreateNewSessionWithProvider, handleProviderSelect]);
+  }, [handleProviderSelect]);
 
   const {
     handleSubmit: hookHandleSubmit,

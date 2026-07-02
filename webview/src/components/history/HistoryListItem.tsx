@@ -85,6 +85,7 @@ export const stopPropagationHandler = (e: React.MouseEvent) => {
 
 export interface HistoryListItemProps {
   session: HistorySessionSummary;
+  conversationKey: string;
   isEditing: boolean;
   isSelected: boolean;
   isSelectionMode: boolean;
@@ -107,6 +108,7 @@ export interface HistoryListItemProps {
 
 export const HistoryListItem = memo(({
   session,
+  conversationKey,
   isEditing,
   isSelected,
   isSelectionMode,
@@ -131,18 +133,18 @@ export const HistoryListItem = memo(({
   }, [onItemClick, session, isEditing]);
 
   const handleCheckboxChange = useCallback(() => {
-    onSelectionToggle(session.sessionId);
-  }, [onSelectionToggle, session.sessionId]);
+    onSelectionToggle(conversationKey);
+  }, [conversationKey, onSelectionToggle]);
 
   const handleEditStart = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onEditStart(session.sessionId, session.title);
-  }, [onEditStart, session.sessionId, session.title]);
+    onEditStart(conversationKey, session.title);
+  }, [conversationKey, onEditStart, session.title]);
 
   const handleEditSave = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
-    onEditSave(session.sessionId, editingTitle);
-  }, [onEditSave, session.sessionId, editingTitle]);
+    onEditSave(conversationKey, editingTitle);
+  }, [conversationKey, onEditSave, editingTitle]);
 
   const handleEditCancel = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
@@ -163,23 +165,23 @@ export const HistoryListItem = memo(({
 
   const handleExport = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onExport(session.sessionId, session.title);
-  }, [onExport, session.sessionId, session.title]);
+    onExport(conversationKey, session.title);
+  }, [conversationKey, onExport, session.title]);
 
   const handleDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onDelete(session.sessionId);
-  }, [onDelete, session.sessionId]);
+    onDelete(conversationKey);
+  }, [conversationKey, onDelete]);
 
   const handleFavorite = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onFavorite(session.sessionId);
-  }, [onFavorite, session.sessionId]);
+    onFavorite(conversationKey);
+  }, [conversationKey, onFavorite]);
 
   const handleCopy = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onCopySessionId(session.sessionId);
-  }, [onCopySessionId, session.sessionId]);
+    onCopySessionId(conversationKey);
+  }, [conversationKey, onCopySessionId]);
 
   const fileSize = session.fileSize ? formatFileSize(session.fileSize) : null;
 

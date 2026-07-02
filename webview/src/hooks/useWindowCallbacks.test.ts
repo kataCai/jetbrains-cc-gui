@@ -43,6 +43,11 @@ describe('useWindowCallbacks integration', () => {
     setUsagePercentage: vi.fn(),
     setUsageUsedTokens: vi.fn(),
     setUsageMaxTokens: vi.fn(),
+    setLogicalConversationId: vi.fn(),
+    setActiveSegmentSessionId: vi.fn(),
+    setParentSegmentSessionId: vi.fn(),
+    setContinuationPending: vi.fn(),
+    setContinuationSourceSessionId: vi.fn(),
     setCurrentProvider: vi.fn(),
     setSubagentHistories: vi.fn(),
     setPermissionMode: vi.fn(),
@@ -110,6 +115,9 @@ describe('useWindowCallbacks integration', () => {
     // B-011
     customSessionTitleRef: { current: null },
     currentSessionIdRef: { current: null },
+    logicalConversationIdRef: { current: null },
+    activeSegmentSessionIdRef: { current: null },
+    continuationPendingRef: { current: false },
     updateHistoryTitle: vi.fn(),
     applyHistoryTitleLocal: vi.fn(),
 
@@ -164,6 +172,52 @@ describe('useWindowCallbacks integration', () => {
 
     expect(opts.setSelectedCodexModel).toHaveBeenCalledWith('gpt-5.5');
     expect(opts.setSelectedCodexSelectionKey).toHaveBeenCalledWith('custom_gateway::gpt-5.5');
+  });
+
+  it('restoreTabRuntimeState 恢复逻辑会话与 continued segment 运行态字段', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.restoreTabRuntimeState?.(JSON.stringify({
+        provider: 'codex',
+        model: 'gpt-5.4',
+        codexProviderId: 'buycode',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'segment-002',
+        parentSegmentSessionId: 'segment-001',
+        continuationPending: true,
+        continuationSourceSessionId: 'segment-001',
+      }));
+    });
+
+    expect(opts.setLogicalConversationId).toHaveBeenCalledWith('logical-001');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(opts.setParentSegmentSessionId).toHaveBeenCalledWith('segment-001');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(true);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith('segment-001');
+  });
+
+  it('restoreTabRuntimeState falls back to latestSessionId when active segment is missing', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.restoreTabRuntimeState?.(JSON.stringify({
+        provider: 'codex',
+        model: 'gpt-5.4',
+        codexProviderId: 'buycode',
+        logicalConversationId: 'logical-001',
+        latestSessionId: 'segment-003',
+        parentSegmentSessionId: 'segment-002',
+      }));
+    });
+
+    expect(opts.setLogicalConversationId).toHaveBeenCalledWith('logical-001');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-003');
+    expect(opts.setParentSegmentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
   });
 
   // ===== historyLoadComplete releases transition guard =====

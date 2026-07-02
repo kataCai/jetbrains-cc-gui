@@ -4,9 +4,11 @@ import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.handler.NodeJsServiceCaller;
 import com.github.claudecodegui.model.SessionTemplate;
 import com.github.claudecodegui.remote.debug.TabSessionRestoreDebugTrace;
+import com.github.claudecodegui.settings.CodexProviderManager;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.handler.SettingsHandler;
+import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.skill.SlashCommandRegistry;
@@ -22,6 +24,7 @@ import com.intellij.ui.jcef.JBCefBrowser;
 
 import java.io.File;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -33,6 +36,7 @@ public class SessionLifecycleManager {
     private static final Logger LOG = Logger.getInstance(SessionLifecycleManager.class);
     private static final String PERMISSION_MODE_PROPERTY_KEY = "claude.code.permission.mode";
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
+    private static final String CONTINUATION_CARRYOVER_MODE = "session_summary";
 
     /**
      * Host interface providing access to window-level dependencies.
@@ -136,6 +140,79 @@ public class SessionLifecycleManager {
                 host.callJavaScript("historyLoadComplete");
                 host.callJavaScript("updateStatus",
                         JsUtils.escapeJs("Failed to create new session: " + ex.getMessage()));
+            });
+            return null;
+        });
+    }
+
+    /**
+     * 在当前逻辑会话下创建一个新的继续分段，并切换到新的运行时配置。
+     * 第一阶段只负责切断旧物理 session、创建新的运行态和打上 continuation pending 标记；
+     * 待底层 provider 返回新的真实 sessionId 后，再由完成钩子补齐逻辑会话和分段索引。
+     *
+     * @param payloadJson 前端传入的继续分段请求 JSON
+     */
+    public void createContinuedSessionWithRuntimeSwitch(String payloadJson) {
+        ContinuedSegmentRequest request = ContinuedSegmentRequest.fromJson(payloadJson);
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createContinuedSessionWithRuntimeSwitch request=" + request.toLogString());
+
+        ClaudeSession oldSession = host.getSession();
+        if (oldSession == null) {
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " createContinuedSessionWithRuntimeSwitch fallback=createNewSession because oldSession is null");
+            createNewSession();
+            return;
+        }
+
+        String previousPermissionMode = oldSession.getPermissionMode();
+        String workingDirectory = determineWorkingDirectory();
+
+        host.invalidateSessionCallbacks();
+        host.getStreamCoalescer().resetStreamState();
+
+        oldSession.interrupt().thenRun(() -> {
+            host.getClaudeSDKBridge().resetPersistentRuntime(oldSession.getRuntimeSessionEpoch());
+
+            ApplicationManager.getApplication().invokeLater(() -> {
+                host.callJavaScript("onStreamEnd");
+                host.callJavaScript("showLoading", "false");
+            });
+
+            ClaudeSession newSession = createDefaultSession();
+            newSession.setPermissionMode(previousPermissionMode);
+            newSession.setProvider(resolveTargetProviderForRuntime(request));
+            if (hasText(request.targetModel)) {
+                newSession.setModel(request.targetModel);
+            }
+            if (hasText(request.targetReasoningEffort)) {
+                newSession.setReasoningEffort(request.targetReasoningEffort);
+            }
+
+            CodexSessionBinding targetBinding = buildContinuedSegmentCodexBinding(request);
+            newSession.getState().setCodexSessionBinding(targetBinding);
+            primeContinuationMetadata(oldSession, newSession, request);
+
+            host.clearPendingPermissionRequests();
+            host.clearPermissionDecisionMemory();
+            host.setSession(newSession);
+            host.getHandlerContext().setSession(newSession);
+            syncHandlerRuntimeState(newSession);
+            host.setupSessionCallbacks();
+
+            newSession.setSessionInfo(null, workingDirectory);
+            fetchSlashCommandsOnStartup();
+
+            ApplicationManager.getApplication().invokeLater(() -> {
+                host.callJavaScript("historyLoadComplete");
+                host.callJavaScript("updateStatus",
+                        JsUtils.escapeJs(ClaudeCodeGuiBundle.message("toast.newSessionCreatedReady")));
+                resetTokenUsage();
+            });
+        }).exceptionally(ex -> {
+            LOG.error("Failed to create continued session: " + ex.getMessage(), ex);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                host.callJavaScript("historyLoadComplete");
+                host.callJavaScript("updateStatus",
+                        JsUtils.escapeJs("Failed to continue session: " + ex.getMessage()));
             });
             return null;
         });
@@ -251,6 +328,13 @@ public class SessionLifecycleManager {
             String transitionToken
     ) {
         LOG.info("Loading history session: " + sessionId + " from project: " + projectPath);
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " loadHistorySession start sessionId="
+                + firstNonBlank(sessionId)
+                + ", projectPath=" + firstNonBlank(projectPath)
+                + ", provider=" + firstNonBlank(provider)
+                + ", runtimeFamily=" + firstNonBlank(runtimeFamily)
+                + ", restoreSource=" + firstNonBlank(restoreSource)
+                + ", transitionToken=" + firstNonBlank(transitionToken));
 
         ClaudeSession oldSession = host.getSession();
         String previousPermissionMode;
@@ -327,6 +411,15 @@ public class SessionLifecycleManager {
                                     ? projectPath : determineWorkingDirectory();
             newSession.setSessionInfo(sessionId, workingDir);
             restoreCodexSessionBindingIfPresent(newSession, sessionId);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " loadHistorySession prepared newSession sessionId="
+                    + firstNonBlank(sessionId)
+                    + ", resolvedProvider=" + firstNonBlank(resolvedProvider)
+                    + ", resolvedRuntimeFamily=" + firstNonBlank(resolvedRuntimeFamily)
+                    + ", model=" + firstNonBlank(newSession.getModel())
+                    + ", permissionMode=" + firstNonBlank(newSession.getPermissionMode())
+                    + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding())
+                    + ", restoreSource=" + firstNonBlank(restoreSource)
+                    + ", transitionToken=" + firstNonBlank(transitionToken));
 
             // Prewarm daemon runtime for the historical session so /context and first message are fast
             host.getClaudeSDKBridge().prewarmDaemonAsync(workingDir, newSession.getRuntimeSessionEpoch(), sessionId);
@@ -500,6 +593,226 @@ public class SessionLifecycleManager {
      */
     protected CodemossSettingsService createSettingsService() {
         return new CodemossSettingsService();
+    }
+
+    /**
+     * 在新分段拿到真实 sessionId 后，补齐逻辑会话与分段索引并清除 continuation pending。
+     * 该方法会在会话 id 回调和单元测试桩中共用，因此需要保证幂等和兼容空元数据输入。
+     *
+     * @param sourceSessionId 来源分段 sessionId
+     * @param newSessionId 新分段真实 sessionId
+     * @param targetCodexProviderId 目标 Codex provider id
+     * @param targetProvider 新分段 provider
+     * @param targetRuntimeFamily 新分段 runtime family
+     * @param targetModel 新分段 model
+     * @param targetReasoningEffort 新分段 reasoning effort
+     * @param switchReason 切换原因
+     */
+    protected void completeContinuedSegment(
+            String sourceSessionId,
+            String newSessionId,
+            String targetCodexProviderId,
+            String targetProvider,
+            String targetRuntimeFamily,
+            String targetModel,
+            String targetReasoningEffort,
+            String switchReason
+    ) {
+        if (!hasText(newSessionId)) {
+            return;
+        }
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " completeContinuedSegment start sourceSessionId="
+                + firstNonBlank(sourceSessionId)
+                + ", newSessionId=" + firstNonBlank(newSessionId)
+                + ", targetCodexProviderId=" + firstNonBlank(targetCodexProviderId)
+                + ", targetProvider=" + firstNonBlank(targetProvider)
+                + ", targetRuntimeFamily=" + firstNonBlank(targetRuntimeFamily)
+                + ", targetModel=" + firstNonBlank(targetModel)
+                + ", targetReasoningEffort=" + firstNonBlank(targetReasoningEffort)
+                + ", switchReason=" + firstNonBlank(switchReason));
+
+        ClaudeSession session = host.getSession();
+        if (session == null) {
+            return;
+        }
+
+        SessionState state = session.getState();
+        String logicalConversationId = firstNonBlank(
+                state.getLogicalConversationId(),
+                resolveLogicalConversationIdBySessionId(sourceSessionId),
+                "logical-" + sourceSessionId
+        );
+
+        try {
+            CodemossSettingsService settingsService = createSettingsService();
+            List<ConversationSegmentRecord> existingSegments = settingsService.listConversationSegments(logicalConversationId);
+            int nextSegmentIndex = existingSegments.size();
+            long now = System.currentTimeMillis();
+
+            LogicalConversationRecord previousLogicalRecord = settingsService.getLogicalConversationRecord(logicalConversationId);
+            String rootSessionId = previousLogicalRecord != null && previousLogicalRecord.isMeaningful()
+                    ? firstNonBlank(previousLogicalRecord.getRootSessionId(), sourceSessionId, newSessionId)
+                    : firstNonBlank(sourceSessionId, newSessionId);
+            String title = previousLogicalRecord != null && previousLogicalRecord.isMeaningful()
+                    ? previousLogicalRecord.getTitle()
+                    : session.getSummary();
+            long createdAt = previousLogicalRecord != null && previousLogicalRecord.isMeaningful()
+                    ? previousLogicalRecord.getCreatedAt()
+                    : now;
+            boolean favorited = previousLogicalRecord != null && previousLogicalRecord.isMeaningful() && previousLogicalRecord.isFavorited();
+            long favoritedAt = previousLogicalRecord != null && previousLogicalRecord.isMeaningful()
+                    ? previousLogicalRecord.getFavoritedAt()
+                    : 0L;
+            SourceSegmentRuntimeMetadata sourceMetadata = resolveSourceSegmentRuntimeMetadata(
+                    settingsService,
+                    sourceSessionId,
+                    previousLogicalRecord,
+                    session
+            );
+
+            if (existingSegments.isEmpty() && hasText(sourceSessionId)) {
+                settingsService.saveConversationSegmentRecord(new ConversationSegmentRecord(
+                        sourceSessionId,
+                        logicalConversationId,
+                        "",
+                        0,
+                        sourceMetadata.provider,
+                        sourceMetadata.runtimeFamily,
+                        sourceMetadata.model,
+                        sourceMetadata.reasoningEffort,
+                        "backfill_source_segment",
+                        CONTINUATION_CARRYOVER_MODE,
+                        previousLogicalRecord != null && previousLogicalRecord.isMeaningful()
+                                ? previousLogicalRecord.getCreatedAt()
+                                : now
+                ));
+                existingSegments = settingsService.listConversationSegments(logicalConversationId);
+                nextSegmentIndex = existingSegments.size();
+            }
+
+            settingsService.saveConversationSegmentRecord(new ConversationSegmentRecord(
+                    newSessionId,
+                    logicalConversationId,
+                    firstNonBlank(sourceSessionId),
+                    nextSegmentIndex,
+                    firstNonBlank(targetProvider, session.getProvider()),
+                    firstNonBlank(targetRuntimeFamily, SessionRuntimeFamily.resolve(session.getProvider(), null, session.getState().getCodexSessionBinding())),
+                    firstNonBlank(targetModel, session.getModel()),
+                    firstNonBlank(targetReasoningEffort, session.getReasoningEffort()),
+                    "runtime_switch:" + firstNonBlank(switchReason, "unknown"),
+                    CONTINUATION_CARRYOVER_MODE,
+                    now
+            ));
+
+            settingsService.saveLogicalConversationRecord(new LogicalConversationRecord(
+                    logicalConversationId,
+                    rootSessionId,
+                    newSessionId,
+                    firstNonBlank(title),
+                    firstNonBlank(targetRuntimeFamily, SessionRuntimeFamily.resolve(session.getProvider(), null, session.getState().getCodexSessionBinding())),
+                    firstNonBlank(targetProvider, session.getProvider()),
+                    firstNonBlank(targetModel, session.getModel()),
+                    nextSegmentIndex + 1,
+                    createdAt,
+                    now,
+                    favorited,
+                    favoritedAt
+            ));
+        } catch (Exception e) {
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " completeContinuedSegment failed to persist metadata: " + e.getMessage(), e);
+        }
+
+        state.setLogicalConversationId(logicalConversationId);
+        state.setActiveSegmentSessionId(newSessionId);
+        state.setParentSegmentSessionId(firstNonBlank(sourceSessionId));
+        state.setContinuationPending(false);
+        state.setContinuationSourceSessionId(null);
+
+        if (hasText(targetProvider)) {
+            session.setProvider(targetProvider);
+        }
+        if (hasText(targetModel)) {
+            session.setModel(targetModel);
+        }
+        if (hasText(targetReasoningEffort)) {
+            session.setReasoningEffort(targetReasoningEffort);
+        }
+        if (SessionRuntimeFamily.CODEX.equals(targetRuntimeFamily) || hasText(targetCodexProviderId)) {
+            session.getState().setCodexSessionBinding(buildCodexBindingFromProvider(targetCodexProviderId, targetModel));
+        }
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " completeContinuedSegment applied logicalConversationId="
+                + firstNonBlank(state.getLogicalConversationId())
+                + ", activeSegmentSessionId=" + firstNonBlank(state.getActiveSegmentSessionId())
+                + ", parentSegmentSessionId=" + firstNonBlank(state.getParentSegmentSessionId())
+                + ", continuationPending=" + state.isContinuationPending()
+                + ", provider=" + firstNonBlank(session.getProvider())
+                + ", runtimeFamily=" + SessionRuntimeFamily.resolve(session.getProvider(), null, state.getCodexSessionBinding())
+                + ", model=" + firstNonBlank(session.getModel())
+                + ", binding=" + describeBinding(state.getCodexSessionBinding()));
+
+        syncHandlerRuntimeState(session);
+    }
+
+    /**
+     * 推断回填源分段时应写入的运行时元数据。
+     * 优先使用已持久化的源分段记录；若 legacy 会话尚无分段索引，则回退到逻辑会话主记录；
+     * 只有在两者都缺失时，才使用当前会话上的字段兜底。
+     *
+     * @param settingsService 配置服务
+     * @param sourceSessionId 源分段 sessionId
+     * @param logicalRecord 逻辑会话主记录
+     * @param currentSession 当前会话对象
+     * @return 源分段回填所需的最可信运行时元数据
+     */
+    private SourceSegmentRuntimeMetadata resolveSourceSegmentRuntimeMetadata(
+            CodemossSettingsService settingsService,
+            String sourceSessionId,
+            LogicalConversationRecord logicalRecord,
+            ClaudeSession currentSession
+    ) {
+        try {
+            ConversationSegmentRecord sourceSegmentRecord = settingsService.getConversationSegmentRecord(sourceSessionId);
+            if (sourceSegmentRecord != null && sourceSegmentRecord.isMeaningful()) {
+                return new SourceSegmentRuntimeMetadata(
+                        firstNonBlank(sourceSegmentRecord.getProvider()),
+                        firstNonBlank(sourceSegmentRecord.getRuntimeFamily()),
+                        firstNonBlank(sourceSegmentRecord.getModel()),
+                        firstNonBlank(sourceSegmentRecord.getReasoningEffort())
+                );
+            }
+        } catch (Exception e) {
+            LOG.debug(CODEX_RUNTIME_TRACE_PREFIX + " resolveSourceSegmentRuntimeMetadata segment lookup failed: " + e.getMessage());
+        }
+
+        if (logicalRecord != null && logicalRecord.isMeaningful()) {
+            return new SourceSegmentRuntimeMetadata(
+                    firstNonBlank(logicalRecord.getProvider(), currentSession != null ? currentSession.getProvider() : ""),
+                    firstNonBlank(logicalRecord.getRuntimeFamily(),
+                            currentSession != null
+                                    ? SessionRuntimeFamily.resolve(
+                                    currentSession.getProvider(),
+                                    null,
+                                    currentSession.getState().getCodexSessionBinding()
+                            )
+                                    : ""),
+                    firstNonBlank(logicalRecord.getLastModel(), currentSession != null ? currentSession.getModel() : ""),
+                    currentSession != null ? firstNonBlank(currentSession.getReasoningEffort()) : ""
+            );
+        }
+
+        if (currentSession == null) {
+            return new SourceSegmentRuntimeMetadata("", "", "", "");
+        }
+        return new SourceSegmentRuntimeMetadata(
+                firstNonBlank(currentSession.getProvider()),
+                firstNonBlank(SessionRuntimeFamily.resolve(
+                        currentSession.getProvider(),
+                        null,
+                        currentSession.getState().getCodexSessionBinding()
+                )),
+                firstNonBlank(currentSession.getModel()),
+                firstNonBlank(currentSession.getReasoningEffort())
+        );
     }
 
     /**
@@ -681,6 +994,239 @@ public class SessionLifecycleManager {
         return new ClaudeSession(host.getProject(), host.getClaudeSDKBridge(), host.getCodexSDKBridge());
     }
 
+    private void primeContinuationMetadata(
+            ClaudeSession oldSession,
+            ClaudeSession newSession,
+            ContinuedSegmentRequest request
+    ) {
+        String sourceSessionId = firstNonBlank(oldSession.getSessionId());
+        String logicalConversationId = firstNonBlank(
+                oldSession.getState().getLogicalConversationId(),
+                request.logicalConversationId,
+                resolveLogicalConversationIdBySessionId(sourceSessionId),
+                "logical-" + UUID.randomUUID()
+        );
+
+        newSession.getState().setLogicalConversationId(logicalConversationId);
+        newSession.getState().setActiveSegmentSessionId(null);
+        newSession.getState().setParentSegmentSessionId(sourceSessionId);
+        newSession.getState().setContinuationPending(true);
+        newSession.getState().setContinuationSourceSessionId(sourceSessionId);
+        newSession.getState().setSummary(oldSession.getSummary());
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " primeContinuationMetadata logicalConversationId="
+                + logicalConversationId
+                + ", sourceSessionId=" + sourceSessionId
+                + ", targetProvider=" + firstNonBlank(newSession.getProvider())
+                + ", targetModel=" + firstNonBlank(newSession.getModel())
+                + ", targetReasoningEffort=" + firstNonBlank(newSession.getReasoningEffort())
+                + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding())
+                + ", request=" + (request != null ? request.toLogString() : "(null)"));
+    }
+
+    private void syncHandlerRuntimeState(ClaudeSession session) {
+        HandlerContext handlerContext = host.getHandlerContext();
+        if (handlerContext == null || session == null) {
+            return;
+        }
+        handlerContext.setCurrentProvider(firstNonBlank(session.getProvider(), HandlerContext.DEFAULT_PROVIDER));
+        handlerContext.setCurrentModel(firstNonBlank(session.getModel(), HandlerContext.DEFAULT_MODEL));
+        handlerContext.requestTabSessionPersistence();
+    }
+
+    private String resolveTargetProviderForRuntime(ContinuedSegmentRequest request) {
+        if (request == null) {
+            return "claude";
+        }
+        return SessionRuntimeFamily.CODEX.equals(request.targetRuntimeFamily)
+                ? SessionRuntimeFamily.CODEX
+                : firstNonBlank(request.targetProvider, "claude");
+    }
+
+    private CodexSessionBinding buildContinuedSegmentCodexBinding(ContinuedSegmentRequest request) {
+        if (request == null || !SessionRuntimeFamily.CODEX.equals(request.targetRuntimeFamily)) {
+            return null;
+        }
+        return buildCodexBindingFromProvider(request.targetCodexProviderId, request.targetModel);
+    }
+
+    private CodexSessionBinding buildCodexBindingFromProvider(String providerId, String modelId) {
+        if (!hasText(providerId) && !hasText(modelId)) {
+            return null;
+        }
+
+        try {
+            JsonObject provider = createSettingsService().getCodexProviderById(providerId);
+            boolean isCliLoginProvider = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)
+                    || (provider != null
+                    && provider.has("isCodexCliLoginProvider")
+                    && !provider.get("isCodexCliLoginProvider").isJsonNull()
+                    && provider.get("isCodexCliLoginProvider").getAsBoolean());
+            if (isCliLoginProvider) {
+                return new CodexSessionBinding(
+                        providerId,
+                        firstNonBlank(modelId),
+                        "codex_sdk",
+                        CodexRuntimeProfile.AUTH_MODE_CLI_LOGIN,
+                        CodexRuntimeProfile.CONFIG_SOURCE_CLI_LOGIN
+                );
+            }
+
+            String requestMode = provider != null && provider.has("requestMode") && !provider.get("requestMode").isJsonNull()
+                    ? firstNonBlank(provider.get("requestMode").getAsString(), "codex_sdk")
+                    : "codex_sdk";
+            String baseUrlSource = provider != null
+                    && provider.has("baseUrl")
+                    && !provider.get("baseUrl").isJsonNull()
+                    && hasText(provider.get("baseUrl").getAsString())
+                    ? "provider"
+                    : "sdk_default";
+            return new CodexSessionBinding(
+                    firstNonBlank(providerId),
+                    firstNonBlank(modelId),
+                    requestMode,
+                    baseUrlSource,
+                    CodexRuntimeProfile.CONFIG_SOURCE_MANAGED_PROVIDER
+            );
+        } catch (Exception e) {
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " buildCodexBindingFromProvider failed: " + e.getMessage(), e);
+            return new CodexSessionBinding(firstNonBlank(providerId), firstNonBlank(modelId), "codex_sdk", "sdk_default", "");
+        }
+    }
+
+    private String resolveLogicalConversationIdBySessionId(String sessionId) {
+        if (!hasText(sessionId)) {
+            return null;
+        }
+        try {
+            CodemossSettingsService settingsService = createSettingsService();
+            ConversationSegmentRecord segmentRecord = settingsService.getConversationSegmentRecord(sessionId);
+            if (segmentRecord != null && segmentRecord.isMeaningful()) {
+                return segmentRecord.getLogicalConversationId();
+            }
+        } catch (Exception e) {
+            LOG.debug(CODEX_RUNTIME_TRACE_PREFIX + " resolveLogicalConversationIdBySessionId failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    /**
+     * continued segment 请求载荷。
+     * 该对象只承载当前最小闭环所需字段，避免第一版实现就提前绑定过重的 carryover 协议。
+     */
+    protected static final class ContinuedSegmentRequest {
+        private final String logicalConversationId;
+        private final String sourceSessionId;
+        private final String targetProvider;
+        private final String targetRuntimeFamily;
+        private final String targetModel;
+        private final String targetReasoningEffort;
+        private final String targetCodexProviderId;
+        private final String switchReason;
+
+        private ContinuedSegmentRequest(
+                String logicalConversationId,
+                String sourceSessionId,
+                String targetProvider,
+                String targetRuntimeFamily,
+                String targetModel,
+                String targetReasoningEffort,
+                String targetCodexProviderId,
+                String switchReason
+        ) {
+            this.logicalConversationId = firstNonBlank(logicalConversationId);
+            this.sourceSessionId = firstNonBlank(sourceSessionId);
+            this.targetProvider = firstNonBlank(targetProvider);
+            this.targetRuntimeFamily = firstNonBlank(targetRuntimeFamily);
+            this.targetModel = firstNonBlank(targetModel);
+            this.targetReasoningEffort = firstNonBlank(targetReasoningEffort);
+            this.targetCodexProviderId = firstNonBlank(targetCodexProviderId);
+            this.switchReason = firstNonBlank(switchReason);
+        }
+
+        private static ContinuedSegmentRequest fromJson(String payloadJson) {
+            if (!hasText(payloadJson)) {
+                return new ContinuedSegmentRequest("", "", "", "", "", "", "", "");
+            }
+            try {
+                JsonObject json = new Gson().fromJson(payloadJson, JsonObject.class);
+                if (json == null) {
+                    return new ContinuedSegmentRequest("", "", "", "", "", "", "", "");
+                }
+                return new ContinuedSegmentRequest(
+                        readString(json, "logicalConversationId"),
+                        readString(json, "sourceSessionId"),
+                        readString(json, "targetProvider"),
+                        readString(json, "targetRuntimeFamily"),
+                        readString(json, "targetModel"),
+                        readString(json, "targetReasoningEffort"),
+                        readString(json, "targetCodexProviderId"),
+                        readString(json, "switchReason")
+                );
+            } catch (Exception e) {
+                LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " failed to parse ContinuedSegmentRequest: " + e.getMessage(), e);
+                return new ContinuedSegmentRequest("", "", "", "", "", "", "", "");
+            }
+        }
+
+        private String toLogString() {
+            return "{logicalConversationId=" + logicalConversationId
+                    + ", sourceSessionId=" + sourceSessionId
+                    + ", targetProvider=" + targetProvider
+                    + ", targetRuntimeFamily=" + targetRuntimeFamily
+                    + ", targetModel=" + targetModel
+                    + ", targetReasoningEffort=" + targetReasoningEffort
+                    + ", targetCodexProviderId=" + targetCodexProviderId
+                    + ", switchReason=" + switchReason
+                    + "}";
+        }
+
+        private static String readString(JsonObject json, String key) {
+            if (json == null || key == null || !json.has(key) || json.get(key).isJsonNull()) {
+                return "";
+            }
+            return firstNonBlank(json.get(key).getAsString());
+        }
+    }
+
+    /**
+     * 源分段运行时元数据快照。
+     * 该对象只服务于继续分段元数据回填，避免在方法内部反复传递多组平行字符串。
+     */
+    private static final class SourceSegmentRuntimeMetadata {
+        private final String provider;
+        private final String runtimeFamily;
+        private final String model;
+        private final String reasoningEffort;
+
+        private SourceSegmentRuntimeMetadata(
+                String provider,
+                String runtimeFamily,
+                String model,
+                String reasoningEffort
+        ) {
+            this.provider = firstNonBlank(provider);
+            this.runtimeFamily = firstNonBlank(runtimeFamily);
+            this.model = firstNonBlank(model);
+            this.reasoningEffort = firstNonBlank(reasoningEffort);
+        }
+    }
+
     /**
      * 生成便于日志检索的 Codex binding 摘要。
      *
@@ -720,5 +1266,38 @@ public class SessionLifecycleManager {
                     JsUtils.escapeJs(ClaudeCodeGuiBundle.message("toast.newSessionCreatedReady")));
             resetTokenUsage();
         });
+    }
+
+    /**
+     * 当底层 provider 回传真实 sessionId/threadId 后，按需补齐 continued segment 元数据。
+     * 普通会话不会受到影响；只有 continuationPending=true 的会话才会触发逻辑会话/分段索引写回。
+     *
+     * @param newSessionId 底层刚回传的真实 sessionId
+     */
+    public void onSessionIdAssigned(String newSessionId) {
+        ClaudeSession session = host.getSession();
+        if (session == null || !session.getState().isContinuationPending() || !hasText(newSessionId)) {
+            return;
+        }
+
+        SessionState state = session.getState();
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " onSessionIdAssigned continuationPending sessionId="
+                + firstNonBlank(newSessionId)
+                + ", logicalConversationId=" + firstNonBlank(state.getLogicalConversationId())
+                + ", sourceSessionId=" + firstNonBlank(state.getContinuationSourceSessionId())
+                + ", provider=" + firstNonBlank(session.getProvider())
+                + ", runtimeFamily=" + SessionRuntimeFamily.resolve(session.getProvider(), null, state.getCodexSessionBinding())
+                + ", model=" + firstNonBlank(session.getModel())
+                + ", binding=" + describeBinding(state.getCodexSessionBinding()));
+        completeContinuedSegment(
+                state.getContinuationSourceSessionId(),
+                newSessionId,
+                state.getCodexSessionBinding() != null ? state.getCodexSessionBinding().getProviderId() : "",
+                session.getProvider(),
+                SessionRuntimeFamily.resolve(session.getProvider(), null, state.getCodexSessionBinding()),
+                session.getModel(),
+                session.getReasoningEffort(),
+                "session_id_assigned"
+        );
     }
 }

@@ -3,6 +3,7 @@ import type { PermissionMode, ReasoningEffort } from '../../../components/ChatIn
 import { isValidPermissionMode, normalizeClaudeModelId } from '../../../components/ChatInputBox/types';
 import { buildCodexSelectedModelKey } from '../../../types/provider';
 import { clampPermissionDialogTimeoutSeconds } from '../../../utils/permissionDialogTimeout';
+import { debugLog } from '../../../utils/debug';
 import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBootstrap';
 
 /**
@@ -19,6 +20,11 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setUsagePercentage,
     setUsageUsedTokens,
     setUsageMaxTokens,
+    setLogicalConversationId,
+    setActiveSegmentSessionId,
+    setParentSegmentSessionId,
+    setContinuationPending,
+    setContinuationSourceSessionId,
     setCurrentProvider,
     setPermissionMode,
     setClaudePermissionMode,
@@ -44,6 +50,9 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     shouldAdoptCodexDefaultReasoningEffortRef,
     syncActiveProviderModelMapping,
   } = options;
+  const traceCodexRuntime = (event: string, payload: Record<string, unknown>) => {
+    debugLog(`[CODEX_RUNTIME_TRACE][Webview] ${event}`, payload);
+  };
 
   window.onUsageUpdate = (json) => {
     try {
@@ -130,7 +139,25 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         permissionMode?: PermissionMode;
         reasoningEffort?: ReasoningEffort;
         codexProviderId?: string;
+        logicalConversationId?: string;
+        latestSessionId?: string;
+        activeSegmentSessionId?: string;
+        parentSegmentSessionId?: string;
+        continuationPending?: boolean;
+        continuationSourceSessionId?: string;
       };
+      traceCodexRuntime('restoreTabRuntimeState', {
+        provider: data.provider ?? null,
+        model: data.model ?? null,
+        permissionMode: data.permissionMode ?? null,
+        reasoningEffort: data.reasoningEffort ?? null,
+        codexProviderId: data.codexProviderId ?? null,
+        logicalConversationId: data.logicalConversationId ?? null,
+        activeSegmentSessionId: data.activeSegmentSessionId ?? data.latestSessionId ?? null,
+        parentSegmentSessionId: data.parentSegmentSessionId ?? null,
+        continuationPending: data.continuationPending === true,
+        continuationSourceSessionId: data.continuationSourceSessionId ?? null,
+      });
 
       const nextProvider = data.provider === 'codex' ? 'codex' : 'claude';
       setCurrentProvider(nextProvider);
@@ -153,6 +180,34 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         activeCodexProviderIdRef.current = normalizedProviderId;
         setActiveCodexProviderId(normalizedProviderId);
       }
+
+      // 中文注释：Tab 恢复阶段需要把逻辑会话与 continued segment 运行态一并恢复，
+      // 否则切换模型/供应商后的“继续会话”信息只停留在后端快照里，前端后续动作无法感知。
+      setLogicalConversationId(
+        typeof data.logicalConversationId === 'string' && data.logicalConversationId.trim().length > 0
+          ? data.logicalConversationId.trim()
+          : null,
+      );
+      const restoredActiveSegmentSessionId =
+        typeof data.activeSegmentSessionId === 'string' && data.activeSegmentSessionId.trim().length > 0
+          ? data.activeSegmentSessionId.trim()
+          : typeof data.latestSessionId === 'string' && data.latestSessionId.trim().length > 0
+            ? data.latestSessionId.trim()
+            : null;
+      // 中文注释：旧 Tab 快照可能只保留逻辑会话主键而缺失活动分段，后端补发 latestSessionId 时这里兜底到最新分段，
+      // 避免恢复后继续发送又落回旧物理分段或空分段。
+      setActiveSegmentSessionId(restoredActiveSegmentSessionId);
+      setParentSegmentSessionId(
+        typeof data.parentSegmentSessionId === 'string' && data.parentSegmentSessionId.trim().length > 0
+          ? data.parentSegmentSessionId.trim()
+          : null,
+      );
+      setContinuationPending(data.continuationPending === true);
+      setContinuationSourceSessionId(
+        typeof data.continuationSourceSessionId === 'string' && data.continuationSourceSessionId.trim().length > 0
+          ? data.continuationSourceSessionId.trim()
+          : null,
+      );
 
       updateMode(data.permissionMode, nextProvider);
 
@@ -187,6 +242,15 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         modelSource?: string;
         reasoningSource?: string;
       };
+      traceCodexRuntime('applyNewTabDefaults', {
+        provider: data.provider ?? null,
+        model: data.model ?? null,
+        permissionMode: data.permissionMode ?? null,
+        reasoningEffort: data.reasoningEffort ?? null,
+        codexProviderId: data.codexProviderId ?? null,
+        modelSource: data.modelSource ?? null,
+        reasoningSource: data.reasoningSource ?? null,
+      });
 
       const nextProvider = data.provider === 'codex' ? 'codex' : 'claude';
       setCurrentProvider(nextProvider);

@@ -5,6 +5,7 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.cache.SessionIndexCache;
 import com.github.claudecodegui.cache.SessionIndexManager;
+import com.github.claudecodegui.session.ConversationSegmentRecord;
 import com.github.claudecodegui.util.PathUtils;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
@@ -58,21 +59,29 @@ class HistoryDeleteService {
      * Deletes the .jsonl file for the specified sessionId and related agent-xxx.jsonl files.
      */
     void handleDeleteSession(String sessionId, String currentProvider) {
-        if (!isValidSessionId(sessionId)) {
+        DeleteRequest request = parseDeleteRequest(sessionId);
+        if (!isValidSessionId(request.getSessionId())) {
             LOG.warn("[HistoryHandler] Delete session rejected: invalid sessionId");
             return;
         }
+        String resolvedSessionId = request.getSessionId();
         CompletableFuture.runAsync(() -> {
             try {
                 LOG.info("[HistoryHandler] ========== Delete session start ==========");
-                LOG.info("[HistoryHandler] SessionId: " + sessionId + ", Provider: " + currentProvider);
+                LOG.info("[HistoryHandler] SessionId: " + resolvedSessionId
+                        + ", LogicalConversationId: " + request.getLogicalConversationId()
+                        + ", Provider: " + currentProvider);
 
-                DeleteResult result = deleteSessionFiles(sessionId, currentProvider);
+                DeleteResult result = deleteSessionFiles(
+                        resolvedSessionId,
+                        request.getLogicalConversationId(),
+                        currentProvider
+                );
 
                 LOG.info("[HistoryHandler] Delete completed - Main file: " + (result.mainDeleted ? "deleted" : "not found") + ", Agent files: " + result.agentFilesDeleted);
 
                 if (result.mainDeleted) {
-                    cleanupSessionMetadata(sessionId);
+                    cleanupSessionMetadata(resolvedSessionId, request.getLogicalConversationId());
                 }
                 cleanupCache(currentProvider);
 
@@ -89,8 +98,8 @@ class HistoryDeleteService {
      * Batch delete session history files in one backend request.
      */
     void handleDeleteSessions(String content, String currentProvider) {
-        List<String> sessionIds = parseSessionIds(content);
-        if (sessionIds.isEmpty()) {
+        List<DeleteRequest> requests = parseDeleteRequests(content);
+        if (requests.isEmpty()) {
             LOG.warn("[HistoryHandler] Batch delete failed: empty sessionIds");
             return;
         }
@@ -98,27 +107,32 @@ class HistoryDeleteService {
         CompletableFuture.runAsync(() -> {
             try {
                 LOG.info("[HistoryHandler] ========== Batch delete sessions start ==========");
-                LOG.info("[HistoryHandler] SessionIds: " + GSON.toJson(sessionIds) + ", Provider: " + currentProvider);
+                LOG.info("[HistoryHandler] Requests: " + GSON.toJson(requests) + ", Provider: " + currentProvider);
 
                 int mainDeletedCount = 0;
                 int agentFilesDeletedCount = 0;
 
-                for (String sessionId : sessionIds) {
+                for (DeleteRequest request : requests) {
                     try {
-                        DeleteResult result = deleteSessionFiles(sessionId, currentProvider);
+                        DeleteResult result = deleteSessionFiles(
+                                request.getSessionId(),
+                                request.getLogicalConversationId(),
+                                currentProvider
+                        );
                         if (result.mainDeleted) {
                             mainDeletedCount++;
-                            cleanupSessionMetadata(sessionId);
+                            cleanupSessionMetadata(request.getSessionId(), request.getLogicalConversationId());
                         }
                         agentFilesDeletedCount += result.agentFilesDeleted;
                     } catch (Exception e) {
-                        LOG.error("[HistoryHandler] Batch delete single session failed: " + sessionId + " - " + e.getMessage(), e);
+                        LOG.error("[HistoryHandler] Batch delete single session failed: "
+                                + request.getSessionId() + " - " + e.getMessage(), e);
                     }
                 }
 
                 cleanupCache(currentProvider);
 
-                LOG.info("[HistoryHandler] Batch delete completed - Main files: " + mainDeletedCount + "/" + sessionIds.size()
+                LOG.info("[HistoryHandler] Batch delete completed - Main files: " + mainDeletedCount + "/" + requests.size()
                         + ", Agent files: " + agentFilesDeletedCount);
                 LOG.info("[HistoryHandler] Reloading history data...");
                 historyLoadService.handleLoadHistoryData(currentProvider);
@@ -129,54 +143,158 @@ class HistoryDeleteService {
     }
 
     static List<String> parseSessionIds(String content) {
+        return parseDeleteRequests(content)
+                .stream()
+                .map(DeleteRequest::getSessionId)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 解析批量删除载荷，并尽量保留每个目标对应的 logicalConversationId。
+     * 旧版前端只会传纯 sessionId 数组；新版前端会传对象数组，从而让后端按逻辑会话语义级联删除。
+     *
+     * @param content 前端传入的批量删除载荷
+     * @return 去重且已做基础合法性校验的删除目标列表
+     */
+    static List<DeleteRequest> parseDeleteRequests(String content) {
+        LinkedHashSet<String> dedupKeys = new LinkedHashSet<>();
+        List<DeleteRequest> requests = new ArrayList<>();
         LinkedHashSet<String> sessionIds = new LinkedHashSet<>();
         if (content == null || content.trim().isEmpty()) {
-            return new ArrayList<>();
+            return requests;
         }
 
         try {
             JsonElement parsed = JsonParser.parseString(content);
             if (parsed.isJsonArray()) {
-                collectSessionIds(parsed.getAsJsonArray(), sessionIds);
+                collectDeleteRequests(parsed.getAsJsonArray(), dedupKeys, requests);
             } else if (parsed.isJsonObject()) {
                 JsonObject object = parsed.getAsJsonObject();
                 JsonElement sessionIdsElement = object.get("sessionIds");
                 if (sessionIdsElement != null && sessionIdsElement.isJsonArray()) {
-                    collectSessionIds(sessionIdsElement.getAsJsonArray(), sessionIds);
+                    collectDeleteRequests(sessionIdsElement.getAsJsonArray(), dedupKeys, requests);
                 }
             }
         } catch (Exception e) {
             LOG.warn("[HistoryHandler] Batch delete sessionIds parse failed: " + e.getMessage());
         }
 
-        return new ArrayList<>(sessionIds);
+        return requests;
     }
 
-    private static void collectSessionIds(JsonArray array, LinkedHashSet<String> sessionIds) {
+    /**
+     * 解析单条历史删除载荷。
+     * 该方法兼容旧版纯 sessionId 字符串和新版 JSON 对象，JSON 对象会额外保留 logicalConversationId，
+     * 以便删除链路可以从“单物理分段”升级到“整条逻辑会话”语义。
+     *
+     * @param content 前端传入的删除载荷
+     * @return 归一化后的删除请求；无法解析时返回空请求
+     */
+    static DeleteRequest parseDeleteRequest(String content) {
+        if (content == null || content.trim().isEmpty()) {
+            return DeleteRequest.empty();
+        }
+
+        String trimmedContent = content.trim();
+        try {
+            JsonElement parsed = JsonParser.parseString(trimmedContent);
+            if (parsed != null && parsed.isJsonObject()) {
+                JsonObject object = parsed.getAsJsonObject();
+                return new DeleteRequest(
+                        readString(object, "sessionId"),
+                        readString(object, "logicalConversationId")
+                );
+            }
+        } catch (Exception ignored) {
+            // 兼容旧入口：不是 JSON 时直接按物理 sessionId 处理。
+        }
+
+        return new DeleteRequest(trimmedContent, "");
+    }
+
+    /**
+     * 从 JSON 对象中读取可选字符串字段。
+     * 该方法只做轻量归一化，不承担业务校验；调用方仍需按 sessionId 与 logicalConversationId 的各自规则校验。
+     *
+     * @param object 来源 JSON 对象
+     * @param key 字段名
+     * @return 去除首尾空白后的字段值；不存在或非字符串时返回空串
+     */
+    private static String readString(JsonObject object, String key) {
+        if (object == null || key == null || !object.has(key) || object.get(key).isJsonNull()) {
+            return "";
+        }
+        JsonElement value = object.get(key);
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+            return "";
+        }
+        return value.getAsString() == null ? "" : value.getAsString().trim();
+    }
+
+    private static void collectDeleteRequests(
+            JsonArray array,
+            LinkedHashSet<String> dedupKeys,
+            List<DeleteRequest> requests
+    ) {
         for (JsonElement element : array) {
+            if (element.isJsonObject()) {
+                addDeleteRequest(
+                        new DeleteRequest(
+                                readString(element.getAsJsonObject(), "sessionId"),
+                                readString(element.getAsJsonObject(), "logicalConversationId")
+                        ),
+                        dedupKeys,
+                        requests
+                );
+                continue;
+            }
+
             if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
                 continue;
             }
 
-            String sessionId = element.getAsString().trim();
-            if (sessionId.isEmpty()) {
-                continue;
-            }
-            if (!isValidSessionId(sessionId)) {
-                LOG.warn("[HistoryHandler] Batch delete ignored invalid sessionId");
-                continue;
-            }
-            sessionIds.add(sessionId);
+            addDeleteRequest(new DeleteRequest(element.getAsString().trim(), ""), dedupKeys, requests);
         }
     }
 
-    private DeleteResult deleteSessionFiles(String sessionId, String currentProvider) throws java.io.IOException {
+    /**
+     * 把单个批量删除目标加入结果集，同时基于 logicalConversationId 优先去重。
+     * 对聚合后的 Codex 会话，同一个 logicalConversationId 下可能包含多个物理 sessionId，
+     * 批量删除时应视为同一条用户可见会话，避免重复删除同一逻辑会话。
+     *
+     * @param request 候选删除目标
+     * @param dedupKeys 去重键集合
+     * @param requests 输出列表
+     */
+    private static void addDeleteRequest(
+            DeleteRequest request,
+            LinkedHashSet<String> dedupKeys,
+            List<DeleteRequest> requests
+    ) {
+        if (request == null || !isValidSessionId(request.getSessionId())) {
+            LOG.warn("[HistoryHandler] Batch delete ignored invalid sessionId");
+            return;
+        }
+        String dedupKey = hasText(request.getLogicalConversationId())
+                ? "logical:" + request.getLogicalConversationId()
+                : "session:" + request.getSessionId();
+        if (!dedupKeys.add(dedupKey)) {
+            return;
+        }
+        requests.add(request);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    private DeleteResult deleteSessionFiles(String sessionId, String logicalConversationId, String currentProvider) throws java.io.IOException {
         if (!isValidSessionId(sessionId)) {
             LOG.warn("[HistoryHandler] Delete session rejected: invalid sessionId");
             return new DeleteResult(false, 0);
         }
         if ("codex".equals(currentProvider)) {
-            return new DeleteResult(deleteCodexSession(sessionId), 0);
+            return deleteCodexLogicalConversation(sessionId, logicalConversationId);
         }
 
         String projectPath = context.getProject().getBasePath();
@@ -187,6 +305,43 @@ class HistoryDeleteService {
 
         int[] result = deleteClaudeSession(sessionId, projectPath);
         return new DeleteResult(result[0] == 1, result[1]);
+    }
+
+    /**
+     * 以逻辑会话语义删除 Codex 历史。
+     * 当 logicalConversationId 存在时，展开删除该逻辑会话下的全部物理分段；否则退回旧的单 session 删除语义。
+     *
+     * @param sessionId 当前代表分段 sessionId
+     * @param logicalConversationId 目标逻辑会话 id
+     * @return 删除结果汇总
+     * @throws java.io.IOException 文件删除失败时抛出
+     */
+    private DeleteResult deleteCodexLogicalConversation(String sessionId, String logicalConversationId) throws java.io.IOException {
+        List<String> sessionIdsToDelete = new ArrayList<>();
+        if (logicalConversationId != null && !logicalConversationId.trim().isEmpty()) {
+            try {
+                sessionIdsToDelete.addAll(
+                        context.getSettingsService()
+                                .listConversationSegments(logicalConversationId)
+                                .stream()
+                                .map(ConversationSegmentRecord::getSessionId)
+                                .filter(HistoryDeleteService::isValidSessionId)
+                                .collect(Collectors.toList())
+                );
+            } catch (Exception e) {
+                LOG.warn("[HistoryHandler] Failed to expand logical conversation segments, fallback to representative session: "
+                        + logicalConversationId + " - " + e.getMessage());
+            }
+        }
+        if (sessionIdsToDelete.isEmpty()) {
+            sessionIdsToDelete.add(sessionId);
+        }
+
+        boolean deleted = false;
+        for (String sessionIdToDelete : sessionIdsToDelete) {
+            deleted = deleteCodexSession(sessionIdToDelete) || deleted;
+        }
+        return new DeleteResult(deleted, 0);
     }
 
     private boolean deleteCodexSession(String sessionId) throws java.io.IOException {
@@ -287,10 +442,16 @@ class HistoryDeleteService {
         return new int[]{mainDeleted ? 1 : 0, agentFilesDeleted};
     }
 
-    private void cleanupSessionMetadata(String sessionId) {
+    private void cleanupSessionMetadata(String sessionId, String logicalConversationId) {
         try {
             nodeJsServiceCaller.callNodeJsFavoritesService("removeFavorite", sessionId);
             nodeJsServiceCaller.callNodeJsDeleteTitle(sessionId);
+            if (logicalConversationId != null && !logicalConversationId.trim().isEmpty()) {
+                context.getSettingsService().deleteLogicalConversationCascade(logicalConversationId);
+            } else {
+                context.getSettingsService().deleteConversationSegmentRecord(sessionId);
+                context.getSettingsService().deleteCodexSessionBinding(sessionId);
+            }
             LOG.info("[HistoryHandler] Cleaned up session metadata");
         } catch (Exception e) {
             LOG.warn("[HistoryHandler] Failed to clean up metadata (does not affect deletion): " + e.getMessage());
@@ -343,6 +504,54 @@ class HistoryDeleteService {
         private DeleteResult(boolean mainDeleted, int agentFilesDeleted) {
             this.mainDeleted = mainDeleted;
             this.agentFilesDeleted = agentFilesDeleted;
+        }
+    }
+
+    /**
+     * 单条历史删除请求的归一化结果。
+     * sessionId 代表当前可直接删除的物理分段，logicalConversationId 代表上层希望删除的逻辑会话范围；
+     * 后续删除链路会基于这两个字段决定是否展开为多分段清理。
+     */
+    static final class DeleteRequest {
+        private final String sessionId;
+        private final String logicalConversationId;
+
+        /**
+         * 创建删除请求。
+         *
+         * @param sessionId 代表物理分段的 sessionId
+         * @param logicalConversationId 可选逻辑会话 id
+         */
+        private DeleteRequest(String sessionId, String logicalConversationId) {
+            this.sessionId = sessionId == null ? "" : sessionId.trim();
+            this.logicalConversationId = logicalConversationId == null ? "" : logicalConversationId.trim();
+        }
+
+        /**
+         * 返回空删除请求，用于解析失败或空载荷场景。
+         *
+         * @return 空请求
+         */
+        private static DeleteRequest empty() {
+            return new DeleteRequest("", "");
+        }
+
+        /**
+         * 获取代表物理分段的 sessionId。
+         *
+         * @return 物理分段 sessionId
+         */
+        String getSessionId() {
+            return sessionId;
+        }
+
+        /**
+         * 获取逻辑会话 id。
+         *
+         * @return 逻辑会话 id；未提供时为空串
+         */
+        String getLogicalConversationId() {
+            return logicalConversationId;
         }
     }
 }

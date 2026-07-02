@@ -169,6 +169,51 @@ public class SessionSendService {
     }
 
     /**
+     * 为 continued segment 的首条 Codex 输入构造上下文延续前缀。
+     * 当前实现只注入最小且稳定的会话延续信息，避免依赖尚未建立的新 sessionId，也避免把整段历史重复拼接进 prompt。
+     *
+     * @param state 当前会话状态
+     * @return 需要前置到用户输入前的 carryover 文本；若当前并非 continued segment 首发，则返回空串
+     */
+    public static String buildContinuationCarryoverPrefix(SessionState state) {
+        if (state == null || !state.isContinuationPending()) {
+            return "";
+        }
+
+        String logicalConversationId = safeTrim(state.getLogicalConversationId());
+        String sourceSessionId = safeTrim(state.getContinuationSourceSessionId());
+        String summary = safeTrim(state.getSummary());
+        if (logicalConversationId.isEmpty() && sourceSessionId.isEmpty() && summary.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder prefix = new StringBuilder();
+        prefix.append("## Conversation Continuation\n")
+                .append("You are continuing an existing conversation in a new runtime segment.\n");
+        if (!logicalConversationId.isEmpty()) {
+            prefix.append("Logical conversation id: ").append(logicalConversationId).append("\n");
+        }
+        if (!sourceSessionId.isEmpty()) {
+            prefix.append("Previous segment session id: ").append(sourceSessionId).append("\n");
+        }
+        if (!summary.isEmpty()) {
+            prefix.append("Previous conversation summary: ").append(summary).append("\n");
+        }
+        prefix.append("Preserve the user's intent and continue from that context unless the latest request overrides it.\n\n");
+        return prefix.toString();
+    }
+
+    /**
+     * 保持旧方法名兼容 Codex 专用调用点。
+     *
+     * @param state 当前会话状态
+     * @return 需要前置到输入前的 carryover 文本
+     */
+    public static String buildCodexContinuationCarryoverPrefix(SessionState state) {
+        return buildContinuationCarryoverPrefix(state);
+    }
+
+    /**
      * 统一格式化 Codex session binding 的诊断信息。
      * 该方法专门服务于运行时跟踪日志与测试断言，确保不同链路输出的字段名和顺序一致，
      * 便于在 debug 包日志里串联“选择 provider/model -> 新建 session -> 首次发送 -> provider 命中结果”的完整路径。
@@ -250,7 +295,8 @@ public class SessionSendService {
         }
 
         String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
-        String finalInput = (input != null ? input : "") + contextAppend;
+        String continuationCarryoverPrefix = buildContinuationCarryoverPrefix(state);
+        String finalInput = continuationCarryoverPrefix + (input != null ? input : "") + contextAppend;
         CodexRuntimeProfile runtimeProfile;
         try {
             LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendToCodex start sessionId="
@@ -405,6 +451,10 @@ public class SessionSendService {
         return value == null ? "" : value.trim();
     }
 
+    private static String safeTrim(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     private CompletableFuture<Void> sendToClaude(
             String channelId,
             String input,
@@ -430,9 +480,12 @@ public class SessionSendService {
                 + ", cwd=" + state.getCwd()
                 + ", model=" + currentModel);
 
+        String continuationCarryoverPrefix = buildContinuationCarryoverPrefix(state);
+        String finalInput = continuationCarryoverPrefix + (input != null ? input : "");
+
         return claudeSDKBridge.sendMessage(
                 channelId,
-                input,
+                finalInput,
                 state.getSessionId(),
                 runtimeSessionEpoch,
                 state.getCwd(),

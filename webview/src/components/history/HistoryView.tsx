@@ -61,13 +61,16 @@ const EMPTY_HINT_STYLE: React.CSSProperties = {
 interface HistoryViewProps {
   historyData: HistoryData | null;
   currentProvider?: string; // Current provider (claude or codex)
-  onLoadSession: (sessionId: string, provider?: string) => void;
-  onDeleteSession: (sessionId: string) => void; // Delete session callback
-  onDeleteSessions: (sessionIds: string[]) => void; // Batch delete sessions callback
-  onExportSession: (sessionId: string, title: string) => void; // Export session callback
-  onToggleFavorite: (sessionId: string) => void; // Toggle favorite callback
-  onUpdateTitle: (sessionId: string, newTitle: string) => void; // Update title callback
+  onLoadSession: (conversationKey: string, provider?: string) => void;
+  onDeleteSession: (conversationKey: string) => void; // Delete session callback
+  onDeleteSessions: (conversationKeys: string[]) => void; // Batch delete sessions callback
+  onExportSession: (conversationKey: string, title: string) => void; // Export session callback
+  onToggleFavorite: (conversationKey: string) => void; // Toggle favorite callback
+  onUpdateTitle: (conversationKey: string, newTitle: string) => void; // Update title callback
 }
+
+const getConversationKey = (session: HistorySessionSummary) =>
+  session.logicalConversationId?.trim() || session.sessionId;
 
 const getComparableTimestamp = (timestamp: string | undefined) => {
   if (!timestamp) {
@@ -81,13 +84,14 @@ const deduplicateHistorySessions = (sessions: HistorySessionSummary[]) => {
   const deduplicated = new Map<string, HistorySessionSummary>();
 
   for (const session of sessions) {
-    if (!session?.sessionId) {
+    const conversationKey = session ? getConversationKey(session) : '';
+    if (!session?.sessionId || !conversationKey) {
       continue;
     }
 
-    const existing = deduplicated.get(session.sessionId);
+    const existing = deduplicated.get(conversationKey);
     if (!existing) {
-      deduplicated.set(session.sessionId, session);
+      deduplicated.set(conversationKey, session);
       continue;
     }
 
@@ -96,13 +100,20 @@ const deduplicateHistorySessions = (sessions: HistorySessionSummary[]) => {
     const preferred = incomingTs >= existingTs ? session : existing;
     const fallback = preferred === session ? existing : session;
 
-    deduplicated.set(session.sessionId, {
+    deduplicated.set(conversationKey, {
       ...preferred,
+      logicalConversationId: preferred.logicalConversationId || fallback.logicalConversationId,
+      activeSegmentSessionId: preferred.activeSegmentSessionId || fallback.activeSegmentSessionId,
+      parentSegmentSessionId: preferred.parentSegmentSessionId || fallback.parentSegmentSessionId,
+      continuationSourceSessionId: preferred.continuationSourceSessionId || fallback.continuationSourceSessionId,
+      segmentCount: Math.max(preferred.segmentCount || 0, fallback.segmentCount || 0) || undefined,
+      continuationPending: preferred.continuationPending || fallback.continuationPending,
       title: preferred.title || fallback.title,
       messageCount: Math.max(preferred.messageCount || 0, fallback.messageCount || 0),
       isFavorited: preferred.isFavorited || fallback.isFavorited,
       favoritedAt: Math.max(preferred.favoritedAt || 0, fallback.favoritedAt || 0) || undefined,
       provider: preferred.provider || fallback.provider,
+      runtimeFamily: preferred.runtimeFamily || fallback.runtimeFamily,
     });
   }
 
@@ -112,16 +123,16 @@ const deduplicateHistorySessions = (sessions: HistorySessionSummary[]) => {
 const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSession, onDeleteSessions, onExportSession, onToggleFavorite, onUpdateTitle }: HistoryViewProps) => {
   const { t } = useTranslation();
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight || 600);
-  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null); // Session ID pending deletion
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null); // Pending conversation key for deletion
   const [inputValue, setInputValue] = useState(''); // Immediate value of search input
   const [searchQuery, setSearchQuery] = useState(''); // Actual search keyword (debounced)
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null); // Session ID being edited
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null); // Pending conversation key being edited
   const [editingTitle, setEditingTitle] = useState(''); // Title content being edited
   const [isDeepSearching, setIsDeepSearching] = useState(false); // Deep search in-progress state
   const deepSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Deep search timeout timer
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Copy status timeout timer
-  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null); // Last copied session ID
-  const [copyFailedSessionId, setCopyFailedSessionId] = useState<string | null>(null); // Last failed copy session ID
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null); // Last copied conversation key
+  const [copyFailedSessionId, setCopyFailedSessionId] = useState<string | null>(null); // Last failed copied conversation key
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
@@ -201,7 +212,7 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
   }, [historyData, sessions.length, t]);
 
   const selectedCount = selectedSessionIds.size;
-  const allVisibleSelected = sessions.length > 0 && sessions.every(session => selectedSessionIds.has(session.sessionId));
+  const allVisibleSelected = sessions.length > 0 && sessions.every(session => selectedSessionIds.has(getConversationKey(session)));
 
   useEffect(() => {
     setSelectedSessionIds(prev => {
@@ -209,7 +220,7 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
         return prev;
       }
 
-      const visibleSessionIds = new Set(sessions.map(session => session.sessionId));
+      const visibleSessionIds = new Set(sessions.map(session => getConversationKey(session)));
       const next = new Set(Array.from(prev).filter(sessionId => visibleSessionIds.has(sessionId)));
       return next.size === prev.size ? prev : next;
     });
@@ -239,10 +250,10 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
 
   const toggleSelectAllVisible = useCallback(() => {
     setSelectedSessionIds(prev => {
-      if (sessions.length > 0 && sessions.every(session => prev.has(session.sessionId))) {
+      if (sessions.length > 0 && sessions.every(session => prev.has(getConversationKey(session)))) {
         return new Set();
       }
-      return new Set(sessions.map(session => session.sessionId));
+      return new Set(sessions.map(session => getConversationKey(session)));
     });
   }, [sessions]);
 
@@ -326,12 +337,13 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
   }, []);
 
   const handleItemClick = useCallback((session: HistorySessionSummary, isEditing: boolean) => {
+    const conversationKey = getConversationKey(session);
     if (isSelectionMode) {
-      toggleSessionSelection(session.sessionId);
+      toggleSessionSelection(conversationKey);
       return;
     }
     if (!isEditing) {
-      onLoadSession(session.sessionId, session.provider);
+      onLoadSession(conversationKey, session.provider);
     }
   }, [isSelectionMode, toggleSessionSelection, onLoadSession]);
 
@@ -421,12 +433,13 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
     <HistoryListItem
       key={`${session.sessionId}-${session.lastTimestamp ?? '0'}`}
       session={session}
-      isEditing={editingSessionId === session.sessionId}
-      isSelected={selectedSessionIds.has(session.sessionId)}
+      conversationKey={getConversationKey(session)}
+      isEditing={editingSessionId === getConversationKey(session)}
+      isSelected={selectedSessionIds.has(getConversationKey(session))}
       isSelectionMode={isSelectionMode}
-      isCopied={copiedSessionId === session.sessionId}
-      isCopyFailed={copyFailedSessionId === session.sessionId}
-      editingTitle={editingSessionId === session.sessionId ? editingTitle : ''}
+      isCopied={copiedSessionId === getConversationKey(session)}
+      isCopyFailed={copyFailedSessionId === getConversationKey(session)}
+      editingTitle={editingSessionId === getConversationKey(session) ? editingTitle : ''}
       searchQuery={searchQuery}
       t={t}
       onItemClick={handleItemClick}
@@ -484,7 +497,7 @@ const HistoryView = ({ historyData, currentProvider, onLoadSession, onDeleteSess
             itemHeight={78}
             height={listHeight}
             renderItem={renderHistoryItem}
-            getItemKey={(session) => `${session.sessionId}-${session.lastTimestamp ?? '0'}`}
+            getItemKey={(session) => `${getConversationKey(session)}-${session.lastTimestamp ?? '0'}`}
             className="messages-container"
           />
         ) : (

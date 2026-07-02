@@ -123,4 +123,58 @@ public class SessionSendServiceTest {
                 SessionSendService.determineCodexRuntimeProfileTraceSource(null, profile)
         );
     }
+
+    /**
+     * 验证 continued segment 首发时会为 Codex 构造 carryover 前缀，
+     * 其中至少包含逻辑会话标识、来源分段和上一段摘要，供新 runtime segment 延续上下文。
+     */
+    @Test
+    public void buildCodexContinuationCarryoverPrefixShouldIncludeLogicalConversationSummary() {
+        SessionState state = new SessionState();
+        state.setContinuationPending(true);
+        state.setLogicalConversationId("logical-001");
+        state.setContinuationSourceSessionId("segment-001");
+        state.setSummary("继续修复历史会话跨模型切换后的上下文延续问题");
+
+        String prefix = SessionSendService.buildCodexContinuationCarryoverPrefix(state);
+
+        assertTrue(prefix.contains("Conversation Continuation"));
+        assertTrue(prefix.contains("logical-001"));
+        assertTrue(prefix.contains("segment-001"));
+        assertTrue(prefix.contains("继续修复历史会话跨模型切换后的上下文延续问题"));
+    }
+
+    /**
+     * 验证普通发送不会平白注入 carryover 前缀，避免污染非 continued segment 的首条输入。
+     */
+    @Test
+    public void buildCodexContinuationCarryoverPrefixShouldBeEmptyForRegularSessions() {
+        SessionState state = new SessionState();
+        state.setContinuationPending(false);
+        state.setLogicalConversationId("logical-001");
+        state.setContinuationSourceSessionId("segment-001");
+        state.setSummary("should not be used");
+
+        assertEquals("", SessionSendService.buildCodexContinuationCarryoverPrefix(state));
+    }
+
+    /**
+     * 验证 continued segment 的上下文延续前缀构造不应依赖具体 provider。
+     * 该约束用于覆盖“切换到 Claude 运行时后没有 carryover，导致继续会话首条消息冷启动”的回归场景。
+     */
+    @Test
+    public void buildContinuationCarryoverPrefixShouldAlsoSupportClaudeRuntime() {
+        SessionState state = new SessionState();
+        state.setContinuationPending(true);
+        state.setLogicalConversationId("logical-claude-001");
+        state.setContinuationSourceSessionId("segment-claude-001");
+        state.setSummary("继续整理上一次 Claude 会话里的修复结论");
+
+        String prefix = SessionSendService.buildContinuationCarryoverPrefix(state);
+
+        assertTrue(prefix.contains("Conversation Continuation"));
+        assertTrue(prefix.contains("logical-claude-001"));
+        assertTrue(prefix.contains("segment-claude-001"));
+        assertTrue(prefix.contains("继续整理上一次 Claude 会话里的修复结论"));
+    }
 }

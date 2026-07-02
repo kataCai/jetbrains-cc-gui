@@ -88,6 +88,12 @@ export interface TodoItem {
 
 export interface HistorySessionSummary {
   sessionId: string;
+  logicalConversationId?: string;
+  activeSegmentSessionId?: string;
+  parentSegmentSessionId?: string;
+  continuationSourceSessionId?: string;
+  segmentCount?: number;
+  continuationPending?: boolean;
   title: string;
   messageCount: number;
   lastTimestamp?: string;

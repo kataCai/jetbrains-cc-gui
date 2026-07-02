@@ -170,8 +170,12 @@ describe('useSessionManagement', () => {
 
     expect(historyData.sessions).toEqual([]);
     expect(historyData.total).toBe(0);
-    expect(window.sendToJava).toHaveBeenCalledWith('delete_session:history-1');
-    expect(window.sendToJava).toHaveBeenCalledWith('delete_session:history-2');
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_session:{"sessionId":"history-1","logicalConversationId":null}'
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_session:{"sessionId":"history-2","logicalConversationId":null}'
+    );
   });
 
   it('sends one backend request when deleting multiple history sessions', () => {
@@ -221,7 +225,9 @@ describe('useSessionManagement', () => {
     expect(historyData.sessions).toEqual([]);
     expect(historyData.total).toBe(0);
     expect(window.sendToJava).toHaveBeenCalledTimes(1);
-    expect(window.sendToJava).toHaveBeenCalledWith('delete_sessions:["history-1","history-2"]');
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_sessions:[{"sessionId":"history-1","logicalConversationId":null},{"sessionId":"history-2","logicalConversationId":null}]'
+    );
     expect(mocks.addToast).toHaveBeenCalledWith('history.sessionDeleted', 'success');
   });
 
@@ -243,7 +249,9 @@ describe('useSessionManagement', () => {
       result.current.deleteHistorySessions(['history-1', 'history-2', 'history-1']);
     });
 
-    expect(window.sendToJava).toHaveBeenCalledWith('delete_sessions:["history-1","history-2"]');
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_sessions:[{"sessionId":"history-1","logicalConversationId":null},{"sessionId":"history-2","logicalConversationId":null}]'
+    );
     expect(mocks.addToast).toHaveBeenCalledWith('history.sessionDeleted', 'success');
   });
 
@@ -291,7 +299,9 @@ describe('useSessionManagement', () => {
       result.current.deleteHistorySessions(['history-1', 'history-2']);
     });
 
-    expect(window.sendToJava).toHaveBeenCalledWith('delete_sessions:["history-1","history-2"]');
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_sessions:[{"sessionId":"history-1","logicalConversationId":null},{"sessionId":"history-2","logicalConversationId":null}]'
+    );
     expect(window.sendToJava).toHaveBeenCalledWith('create_new_session:');
     expect(mocks.addToast).not.toHaveBeenCalledWith('history.sessionDeleted', 'success');
     expect(window.__pendingSessionTransitionToast).toEqual({
@@ -352,6 +362,88 @@ describe('useSessionManagement', () => {
     expect(window.__sessionTransitioning).toBe(true);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+  });
+
+  it('createContinuedSegment keeps current messages and sends runtime switch payload instead of creating a blank session', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [{ type: 'assistant', content: 'existing context', timestamp: new Date().toISOString() }],
+        loading: false,
+        historyData: null,
+        currentSessionId: 'codex-session-1',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.createContinuedSegment({
+        switchReason: 'model',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: 'gpt-5.4',
+        targetReasoningEffort: 'medium',
+        targetCodexProviderId: 'managed-buycode',
+      });
+    });
+
+    expect(window.__sessionTransitioning).toBe(true);
+    expect(window.__sessionTransitionToken).toBeTruthy();
+    expect(mocks.setMessages).not.toHaveBeenCalledWith([]);
+    expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'create_continued_segment:{"sourceSessionId":"codex-session-1","targetProvider":"codex","targetRuntimeFamily":"codex","targetModel":"gpt-5.4","targetReasoningEffort":"medium","targetCodexProviderId":"managed-buycode","switchReason":"model"}'
+    );
+    expect(window.sendToJava).not.toHaveBeenCalledWith('create_new_session:');
+  });
+
+  it('loadHistorySession writes codex runtime trace with logical conversation context', () => {
+    const historyData = {
+      success: true,
+      sessions: [
+        {
+          sessionId: 'segment-001',
+          logicalConversationId: 'logical-001',
+          activeSegmentSessionId: 'segment-002',
+          title: 'Continued Session',
+          provider: 'codex',
+          runtimeFamily: 'codex',
+          messageCount: 5,
+          lastTimestamp: Date.now(),
+        },
+      ],
+      total: 5,
+    } as unknown as HistoryData;
+
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [],
+        loading: false,
+        historyData,
+        currentSessionId: 'active-session',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.loadHistorySession('logical-001');
+    });
+
+    expect(debugLog).toHaveBeenCalledWith(
+      '[CODEX_RUNTIME_TRACE][Webview] loadHistorySession',
+      expect.objectContaining({
+        requestedConversationKey: 'logical-001',
+        resolvedSessionId: 'segment-002',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'segment-002',
+        restoreSource: 'history_switch',
+      })
+    );
   });
 
   it('writes trace logs when forcing a new session because codex runtime changed', () => {
@@ -617,6 +709,124 @@ describe('useSessionManagement', () => {
     expect(window.sendToJava).toHaveBeenCalledWith(
       expect.stringContaining('"restoreSource":"history_switch"')
     );
+  });
+
+  it('loadHistorySession resolves logical conversation key to active segment payload', () => {
+    const historyData = {
+      success: true,
+      sessions: [
+        {
+          sessionId: 'segment-001',
+          logicalConversationId: 'logical-001',
+          activeSegmentSessionId: 'segment-002',
+          title: 'Continued Session',
+          provider: 'codex',
+          runtimeFamily: 'codex',
+          messageCount: 5,
+          lastTimestamp: Date.now() - 1000,
+        },
+        {
+          sessionId: 'segment-002',
+          logicalConversationId: 'logical-001',
+          activeSegmentSessionId: 'segment-002',
+          title: 'Continued Session',
+          provider: 'codex',
+          runtimeFamily: 'codex',
+          messageCount: 7,
+          lastTimestamp: Date.now(),
+        },
+      ],
+      total: 12,
+    } as unknown as HistoryData;
+
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [],
+        loading: false,
+        historyData,
+        currentSessionId: null,
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.loadHistorySession('logical-001');
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('load_conversation:')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"sessionId":"segment-002"')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"logicalConversationId":"logical-001"')
+    );
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      expect.stringContaining('"activeSegmentSessionId":"segment-002"')
+    );
+    expect(mocks.setCurrentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(mocks.setCustomSessionTitle).toHaveBeenCalledWith('Continued Session');
+  });
+
+  it('deleteHistorySession expands logical conversation key to aggregated bridge payload', () => {
+    let historyData = {
+      success: true,
+      sessions: [
+        {
+          sessionId: 'segment-001',
+          logicalConversationId: 'logical-001',
+          activeSegmentSessionId: 'segment-002',
+          title: 'Continued Session',
+          provider: 'codex',
+          runtimeFamily: 'codex',
+          messageCount: 5,
+          lastTimestamp: Date.now() - 1000,
+        },
+        {
+          sessionId: 'segment-002',
+          logicalConversationId: 'logical-001',
+          activeSegmentSessionId: 'segment-002',
+          title: 'Continued Session',
+          provider: 'codex',
+          runtimeFamily: 'codex',
+          messageCount: 7,
+          lastTimestamp: Date.now(),
+        },
+      ],
+      total: 12,
+    } as unknown as HistoryData;
+
+    const mocks = {
+      ...createMocks(),
+      setHistoryData: vi.fn((next: HistoryData | null | ((current: HistoryData | null) => HistoryData | null)) => {
+        historyData = typeof next === 'function' ? next(historyData) as HistoryData : next as HistoryData;
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [],
+        loading: false,
+        historyData,
+        currentSessionId: null,
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.deleteHistorySession('logical-001');
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_session:{"sessionId":"segment-002","logicalConversationId":"logical-001"}'
+    );
+    expect(historyData.sessions).toEqual([]);
+    expect(historyData.total).toBe(0);
   });
 
   it('all transition paths reset usage tokens', () => {

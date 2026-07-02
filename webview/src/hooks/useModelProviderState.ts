@@ -90,7 +90,14 @@ function resolveRestorableModelId(
 export interface UseModelProviderStateOptions {
   addToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   t: TFunction;
-  onCodexConversationConfigChanged?: (reason: 'provider' | 'model' | 'activeProvider') => void;
+  onCodexConversationConfigChanged?: (request: {
+    switchReason: 'provider' | 'model' | 'activeProvider';
+    targetProvider: string;
+    targetRuntimeFamily: 'claude' | 'codex';
+    targetModel: string;
+    targetReasoningEffort?: string;
+    targetCodexProviderId?: string;
+  }) => void;
 }
 
 /**
@@ -321,7 +328,14 @@ export function useModelProviderState({
         modelId: resolvedCodexModelId,
       }));
       // Codex 运行时模型改变后必须丢弃当前 threadId，避免继续复用旧会话。
-      onCodexConversationConfigChanged?.('model');
+      onCodexConversationConfigChanged?.({
+        switchReason: 'model',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: resolvedCodexModelId,
+        targetReasoningEffort: reasoningEffort,
+        targetCodexProviderId: targetProviderId,
+      });
     }
   }, [
     activeCodexProviderId,
@@ -329,6 +343,7 @@ export function useModelProviderState({
     defaultCodexModelFromConfig,
     longContextEnabled,
     onCodexConversationConfigChanged,
+    reasoningEffort,
     selectedCodexModel,
     setSelectedCodexSelectionKey,
     setSelectedClaudeModel,
@@ -369,7 +384,14 @@ export function useModelProviderState({
     sendBridgeEvent('set_model', newModel);
 
     if (providerId === 'codex' || currentProvider === 'codex') {
-      onCodexConversationConfigChanged?.('provider');
+      onCodexConversationConfigChanged?.({
+        switchReason: 'provider',
+        targetProvider: providerId,
+        targetRuntimeFamily: providerId === 'codex' ? 'codex' : 'claude',
+        targetModel: providerId === 'codex' ? selectedCodexModel : selectedClaudeModel,
+        targetReasoningEffort: providerId === 'codex' ? reasoningEffort : undefined,
+        targetCodexProviderId: providerId === 'codex' ? activeCodexProviderId : undefined,
+      });
     }
 
     if (shouldNotifyPlanDowngrade) {
@@ -383,6 +405,7 @@ export function useModelProviderState({
     notifyCodexPlanDowngrade,
     onCodexConversationConfigChanged,
     permissionMode,
+    reasoningEffort,
     selectedClaudeModel,
     selectedCodexModel,
     traceCodexRuntime,

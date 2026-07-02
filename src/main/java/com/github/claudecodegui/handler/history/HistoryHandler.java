@@ -17,6 +17,7 @@ public class HistoryHandler extends BaseMessageHandler {
     private static final String[] SUPPORTED_TYPES = {
             "load_history_data",
             "load_session",
+            "load_conversation", // Load logical conversation with aggregated segments
             "delete_session",  // Delete session
             "delete_sessions", // Batch delete sessions
             "export_session",  // Export session
@@ -79,6 +80,10 @@ public class HistoryHandler extends BaseMessageHandler {
                 return true;
             case "load_session":
                 LOG.debug("[HistoryHandler] 处理: load_session");
+                historyMessageInjector.handleLoadSession(content, currentProvider, sessionLoadCallback);
+                return true;
+            case "load_conversation":
+                LOG.debug("[HistoryHandler] 处理: load_conversation");
                 historyMessageInjector.handleLoadSession(content, currentProvider, sessionLoadCallback);
                 return true;
             case "delete_session":

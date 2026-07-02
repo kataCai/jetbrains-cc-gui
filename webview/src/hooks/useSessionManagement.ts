@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
-import type { ClaudeMessage, HistoryData } from '../types';
+import type { ClaudeMessage, HistoryData, HistorySessionSummary } from '../types';
 import { sendBridgeEvent } from '../utils/bridge';
 import { debugLog } from '../utils/debug';
 
@@ -10,6 +10,88 @@ type ToastType = 'info' | 'success' | 'warning' | 'error';
 
 const createSessionTransitionToken = () =>
   `transition-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+/**
+ * 统一计算历史列表项在前端侧的“会话操作键”。
+ * 对已聚合的 Codex continued conversation 优先使用 logicalConversationId，
+ * 老数据和 Claude 会话则继续回退到物理 sessionId。
+ *
+ * @param session 历史会话摘要
+ * @return 可用于加载/删除/收藏等操作的稳定键
+ */
+const getConversationKey = (session: HistorySessionSummary): string =>
+  session.logicalConversationId?.trim() || session.sessionId;
+
+interface ResolvedHistoryTarget {
+  summary: HistorySessionSummary | null;
+  logicalConversationId: string | null;
+  representativeSessionId: string | null;
+  relatedSessionIds: string[];
+}
+
+/**
+ * 统一解析前端历史列表里某个操作键对应的真实会话目标。
+ * 该解析兼容三种数据形态：
+ * 1. 老数据：只有物理 sessionId；
+ * 2. 前端本地聚合：historyData 里仍保留多条物理分段；
+ * 3. 后端已聚合：historyData 里直接返回带 logicalConversationId 的单条摘要。
+ *
+ * @param historyData 当前历史数据快照
+ * @param conversationKey 历史列表点击或批量操作传入的键
+ * @return 包含逻辑会话 id、代表分段 id 与关联物理分段 id 集合的解析结果
+ */
+function resolveHistoryTarget(
+  historyData: HistoryData | null,
+  conversationKey: string,
+): ResolvedHistoryTarget {
+  const normalizedKey = (conversationKey || '').trim();
+  if (!normalizedKey || !historyData?.sessions?.length) {
+    return {
+      summary: null,
+      logicalConversationId: null,
+      representativeSessionId: normalizedKey || null,
+      relatedSessionIds: normalizedKey ? [normalizedKey] : [],
+    };
+  }
+
+  const matches = historyData.sessions.filter((session) => {
+    const logicalConversationId = session.logicalConversationId?.trim();
+    return session.sessionId === normalizedKey || logicalConversationId === normalizedKey;
+  });
+
+  if (matches.length === 0) {
+    return {
+      summary: null,
+      logicalConversationId: null,
+      representativeSessionId: normalizedKey,
+      relatedSessionIds: [normalizedKey],
+    };
+  }
+
+  const representative = matches.reduce<HistorySessionSummary>((best, current) => {
+    if (current.activeSegmentSessionId && current.sessionId === current.activeSegmentSessionId) {
+      return current;
+    }
+    if (best.activeSegmentSessionId && best.sessionId === best.activeSegmentSessionId) {
+      return best;
+    }
+    const bestTs = best.lastTimestamp ? new Date(best.lastTimestamp).getTime() : 0;
+    const currentTs = current.lastTimestamp ? new Date(current.lastTimestamp).getTime() : 0;
+    return currentTs >= bestTs ? current : best;
+  }, matches[0]);
+
+  const logicalConversationId = representative.logicalConversationId?.trim() || null;
+  const representativeSessionId = representative.activeSegmentSessionId?.trim()
+    || representative.sessionId
+    || normalizedKey;
+
+  return {
+    summary: representative,
+    logicalConversationId,
+    representativeSessionId,
+    relatedSessionIds: Array.from(new Set(matches.map((session) => session.sessionId).filter(Boolean))),
+  };
+}
 
 interface UseSessionManagementOptions {
   messages: ClaudeMessage[];
@@ -33,6 +115,16 @@ interface UseSessionManagementOptions {
   t: TFunction;
 }
 
+export interface ContinuedSegmentRequest {
+  switchReason: 'provider' | 'model' | 'activeProvider';
+  targetProvider: string;
+  targetRuntimeFamily: 'claude' | 'codex';
+  targetModel: string;
+  targetReasoningEffort?: string;
+  targetCodexProviderId?: string;
+  logicalConversationId?: string;
+}
+
 interface UseSessionManagementReturn {
   showNewSessionConfirm: boolean;
   showInterruptConfirm: boolean;
@@ -40,6 +132,7 @@ interface UseSessionManagementReturn {
   createNewSession: () => void;
   forceCreateNewSession: () => void;
   forceCreateNewSessionWithProvider: (providerId: string) => void;
+  createContinuedSegment: (request: ContinuedSegmentRequest) => void;
   handleConfirmNewSession: () => void;
   handleCancelNewSession: () => void;
   handleConfirmInterrupt: () => void;
@@ -216,6 +309,79 @@ export function useSessionManagement({
     sendBridgeEvent('create_new_session');
   }, [beginSessionTransition, currentSessionId, loading, messages.length, traceCodexRuntime]);
 
+  /**
+   * 在当前逻辑会话内创建一个新的继续分段。
+   * 该入口用于切模型或切供应商时保留当前消息上下文，只切换后端运行段，
+   * 避免继续沿用旧 thread，也避免直接清空前端会话记录。
+   *
+   * @param request 继续分段所需的目标运行时信息
+   * @return 无返回值
+   */
+  const createContinuedSegment = useCallback((request: ContinuedSegmentRequest) => {
+    const payload = {
+      sourceSessionId: currentSessionId,
+      logicalConversationId: request.logicalConversationId,
+      targetProvider: request.targetProvider,
+      targetRuntimeFamily: request.targetRuntimeFamily,
+      targetModel: request.targetModel,
+      targetReasoningEffort: request.targetReasoningEffort,
+      targetCodexProviderId: request.targetCodexProviderId,
+      switchReason: request.switchReason,
+    };
+
+    traceCodexRuntime('createContinuedSegment', payload);
+
+    if (loading) {
+      sendBridgeEvent('interrupt_session');
+    }
+
+    // 中文注释：继续分段只需要重置瞬时运行态，不应像“新建空会话”那样清空历史消息，
+    // 否则用户在切模型/切供应商后会立刻丢失当前上下文展示。
+    window.__sessionTransitioning = true;
+    window.__sessionTransitionToken = createSessionTransitionToken();
+    if (typeof window.__resetTransientUiState === 'function') {
+      window.__resetTransientUiState();
+    } else {
+      clearToasts();
+      setStatus('');
+      setLoadingState(false);
+      setIsThinking(false);
+      setStreamingActive(false);
+    }
+    setCurrentSessionId(null);
+    setUsagePercentage(0);
+    setUsageUsedTokens(undefined);
+    setUsageMaxTokens(undefined);
+
+    if (transitionTimeoutRef.current !== null) {
+      clearTimeout(transitionTimeoutRef.current);
+    }
+    const token = window.__sessionTransitionToken;
+    transitionTimeoutRef.current = setTimeout(() => {
+      transitionTimeoutRef.current = null;
+      if (window.__sessionTransitioning && window.__sessionTransitionToken === token) {
+        console.warn('[SessionManagement] Continued segment transition guard timed out - auto-releasing');
+        window.__sessionTransitioning = false;
+        window.__sessionTransitionToken = null;
+      }
+    }, 15_000);
+
+    sendBridgeEvent('create_continued_segment', JSON.stringify(payload));
+  }, [
+    clearToasts,
+    currentSessionId,
+    loading,
+    setCurrentSessionId,
+    setIsThinking,
+    setLoadingState,
+    setStatus,
+    setStreamingActive,
+    setUsageMaxTokens,
+    setUsagePercentage,
+    setUsageUsedTokens,
+    traceCodexRuntime,
+  ]);
+
   const handleConfirmNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);
     if (loading) {
@@ -249,11 +415,26 @@ export function useSessionManagement({
       sendBridgeEvent('interrupt_session');
     }
 
-    const session = historyDataRef.current?.sessions?.find((item) => item.sessionId === sessionId);
-    beginSessionTransition(sessionId, session?.title ?? null);
+    const target = resolveHistoryTarget(historyDataRef.current, sessionId);
+    const session = target.summary;
+    const resolvedSessionId = target.representativeSessionId || sessionId;
+    beginSessionTransition(resolvedSessionId, session?.title ?? null);
     const transitionToken = window.__sessionTransitionToken ?? null;
-    sendBridgeEvent('load_session', JSON.stringify({
-      sessionId,
+    traceCodexRuntime('loadHistorySession', {
+      requestedConversationKey: sessionId,
+      resolvedSessionId,
+      logicalConversationId: target.logicalConversationId,
+      activeSegmentSessionId: session?.activeSegmentSessionId || resolvedSessionId,
+      provider: provider || session?.provider || 'claude',
+      runtimeFamily: session?.runtimeFamily || null,
+      restoreSource: 'history_switch',
+      transitionToken,
+      relatedSessionIds: target.relatedSessionIds,
+    });
+    sendBridgeEvent(target.logicalConversationId ? 'load_conversation' : 'load_session', JSON.stringify({
+      sessionId: resolvedSessionId,
+      logicalConversationId: target.logicalConversationId,
+      activeSegmentSessionId: session?.activeSegmentSessionId || resolvedSessionId,
       provider: provider || session?.provider || 'claude',
       runtimeFamily: session?.runtimeFamily,
       restoreSource: 'history_switch',
@@ -263,24 +444,35 @@ export function useSessionManagement({
   }, [beginSessionTransition, loading, setCurrentView]);
 
   const deleteHistorySession = useCallback((sessionId: string) => {
-    sendBridgeEvent('delete_session', sessionId);
+    const target = resolveHistoryTarget(historyDataRef.current, sessionId);
+    sendBridgeEvent('delete_session', JSON.stringify({
+      sessionId: target.representativeSessionId || sessionId,
+      logicalConversationId: target.logicalConversationId,
+    }));
     let startedSessionTransition = false;
 
     if (historyData && historyData.sessions) {
+      const deletedConversationKey = sessionId;
+      const deletedSessionIds = new Set(target.relatedSessionIds);
       setHistoryData((prevHistoryData) => {
         if (!prevHistoryData?.sessions) {
           return prevHistoryData;
         }
 
-        const deletedSession = prevHistoryData.sessions.find((session) => session.sessionId === sessionId);
+        const deletedSessions = prevHistoryData.sessions.filter((session) => (
+          getConversationKey(session) === deletedConversationKey || deletedSessionIds.has(session.sessionId)
+        ));
+        const deletedMessageCount = deletedSessions.reduce((sum, session) => sum + (session.messageCount || 0), 0);
         return {
           ...prevHistoryData,
-          sessions: prevHistoryData.sessions.filter((session) => session.sessionId !== sessionId),
-          total: Math.max(0, (prevHistoryData.total || 0) - (deletedSession?.messageCount || 0)),
+          sessions: prevHistoryData.sessions.filter((session) => (
+            getConversationKey(session) !== deletedConversationKey && !deletedSessionIds.has(session.sessionId)
+          )),
+          total: Math.max(0, (prevHistoryData.total || 0) - deletedMessageCount),
         };
       });
 
-      if (sessionId === currentSessionId) {
+      if (currentSessionId && deletedSessionIds.has(currentSessionId)) {
         if (loading) {
           sendBridgeEvent('interrupt_session');
         }
@@ -300,23 +492,32 @@ export function useSessionManagement({
       return;
     }
 
-    sendBridgeEvent('delete_sessions', JSON.stringify(uniqueSessionIds));
+    const targets = uniqueSessionIds.map((sessionId) => resolveHistoryTarget(historyDataRef.current, sessionId));
+    sendBridgeEvent('delete_sessions', JSON.stringify(targets.map((target, index) => ({
+      sessionId: target.representativeSessionId || uniqueSessionIds[index],
+      logicalConversationId: target.logicalConversationId,
+    }))));
     let startedSessionTransition = false;
 
     if (historyData && historyData.sessions) {
-      const deletedSessionIds = new Set(uniqueSessionIds);
+      const deletedConversationKeys = new Set(uniqueSessionIds);
+      const deletedSessionIds = new Set(targets.flatMap((target) => target.relatedSessionIds));
       setHistoryData((prevHistoryData) => {
         if (!prevHistoryData?.sessions) {
           return prevHistoryData;
         }
 
         const deletedMessageCount = prevHistoryData.sessions.reduce((sum, session) => (
-          deletedSessionIds.has(session.sessionId) ? sum + (session.messageCount || 0) : sum
+          deletedConversationKeys.has(getConversationKey(session)) || deletedSessionIds.has(session.sessionId)
+            ? sum + (session.messageCount || 0)
+            : sum
         ), 0);
 
         return {
           ...prevHistoryData,
-          sessions: prevHistoryData.sessions.filter((session) => !deletedSessionIds.has(session.sessionId)),
+          sessions: prevHistoryData.sessions.filter((session) => (
+            !deletedConversationKeys.has(getConversationKey(session)) && !deletedSessionIds.has(session.sessionId)
+          )),
           total: Math.max(0, (prevHistoryData.total || 0) - deletedMessageCount),
         };
       });
@@ -336,16 +537,25 @@ export function useSessionManagement({
   }, [historyData, currentSessionId, loading, setHistoryData, beginSessionTransition, showSessionDeletedToast]);
 
   const exportHistorySession = useCallback((sessionId: string, title: string) => {
-    const exportData = JSON.stringify({ sessionId, title });
+    const target = resolveHistoryTarget(historyDataRef.current, sessionId);
+    const exportData = JSON.stringify({
+      sessionId: target.representativeSessionId || sessionId,
+      logicalConversationId: target.logicalConversationId,
+      title,
+    });
     sendBridgeEvent('export_session', exportData);
-  }, []);
+  }, [historyDataRef]);
 
   const toggleFavoriteSession = useCallback((sessionId: string) => {
-    sendBridgeEvent('toggle_favorite', sessionId);
+    const target = resolveHistoryTarget(historyDataRef.current, sessionId);
+    sendBridgeEvent('toggle_favorite', JSON.stringify({
+      sessionId: target.representativeSessionId || sessionId,
+      logicalConversationId: target.logicalConversationId,
+    }));
 
     if (historyData && historyData.sessions) {
       const updatedSessions = historyData.sessions.map((session) => {
-        if (session.sessionId === sessionId) {
+        if (getConversationKey(session) === sessionId || target.relatedSessionIds.includes(session.sessionId)) {
           const isFavorited = !session.isFavorited;
           return {
             ...session,
@@ -361,7 +571,8 @@ export function useSessionManagement({
         sessions: updatedSessions,
       });
 
-      const session = historyData.sessions.find((item) => item.sessionId === sessionId);
+      const session = historyData.sessions.find((item) =>
+        getConversationKey(item) === sessionId || target.relatedSessionIds.includes(item.sessionId));
       if (session?.isFavorited) {
         addToast(t('history.unfavorited'), 'success');
       } else {
@@ -379,13 +590,18 @@ export function useSessionManagement({
    * @return 无返回值
    */
   const updateHistoryTitle = useCallback((sessionId: string, newTitle: string) => {
-    const updateData = JSON.stringify({ sessionId, customTitle: newTitle });
+    const target = resolveHistoryTarget(historyDataRef.current, sessionId);
+    const updateData = JSON.stringify({
+      sessionId: target.representativeSessionId || sessionId,
+      logicalConversationId: target.logicalConversationId,
+      customTitle: newTitle,
+    });
     console.warn('[HistoryTitleSync][Frontend] send update_title', updateData);
     sendBridgeEvent('update_title', updateData);
 
     if (historyData && historyData.sessions) {
       const updatedSessions = historyData.sessions.map((session) => {
-        if (session.sessionId === sessionId) {
+        if (getConversationKey(session) === sessionId || target.relatedSessionIds.includes(session.sessionId)) {
           return {
             ...session,
             title: newTitle,
@@ -427,8 +643,11 @@ export function useSessionManagement({
    */
   const applyHistoryTitleLocal = useCallback((sessionId: string, newTitle: string) => {
     if (historyData && historyData.sessions) {
+      const target = resolveHistoryTarget(historyData, sessionId);
       const updatedSessions = historyData.sessions.map((session) => (
-        session.sessionId === sessionId ? { ...session, title: newTitle } : session
+        getConversationKey(session) === sessionId || target.relatedSessionIds.includes(session.sessionId)
+          ? { ...session, title: newTitle }
+          : session
       ));
       setHistoryData({
         ...historyData,
@@ -444,6 +663,7 @@ export function useSessionManagement({
     createNewSession,
     forceCreateNewSession,
     forceCreateNewSessionWithProvider,
+    createContinuedSegment,
     handleConfirmNewSession,
     handleCancelNewSession,
     handleConfirmInterrupt,

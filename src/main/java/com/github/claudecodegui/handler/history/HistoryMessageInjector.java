@@ -4,9 +4,12 @@ import com.github.claudecodegui.handler.CodexMessageConverter;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
 import com.github.claudecodegui.session.ClaudeSession;
-import com.github.claudecodegui.session.SessionRuntimeFamily;
+import com.github.claudecodegui.session.ConversationSegmentRecord;
 import com.github.claudecodegui.session.CodexSessionBinding;
+import com.github.claudecodegui.session.LogicalConversationRecord;
+import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.github.claudecodegui.session.SessionState;
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.util.JsUtils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -20,6 +23,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -42,34 +47,12 @@ public class HistoryMessageInjector {
      * Load a history session.
      */
     void handleLoadSession(String sessionId, String currentProvider, HistoryHandler.SessionLoadCallback sessionLoadCallback) {
-        String provider = currentProvider;
-        String runtimeFamily = null;
-        String restoreSource = "history_switch";
-        String transitionToken = null;
-        String resolvedSessionId = sessionId;
-
-        try {
-            JsonObject payload = new Gson().fromJson(sessionId, JsonObject.class);
-            if (payload != null) {
-                if (payload.has("sessionId") && !payload.get("sessionId").isJsonNull()) {
-                    resolvedSessionId = payload.get("sessionId").getAsString();
-                }
-                if (payload.has("provider") && !payload.get("provider").isJsonNull()) {
-                    provider = payload.get("provider").getAsString();
-                }
-                if (payload.has("runtimeFamily") && !payload.get("runtimeFamily").isJsonNull()) {
-                    runtimeFamily = payload.get("runtimeFamily").getAsString();
-                }
-                if (payload.has("restoreSource") && !payload.get("restoreSource").isJsonNull()) {
-                    restoreSource = payload.get("restoreSource").getAsString();
-                }
-                if (payload.has("transitionToken") && !payload.get("transitionToken").isJsonNull()) {
-                    transitionToken = payload.get("transitionToken").getAsString();
-                }
-            }
-        } catch (Exception ignored) {
-            // Backward compatible: legacy payload is the raw sessionId string.
-        }
+        SessionLoadRequest request = parseSessionLoadRequest(sessionId, currentProvider);
+        String provider = request.getProvider();
+        String runtimeFamily = request.getRuntimeFamily();
+        String restoreSource = request.getRestoreSource();
+        String transitionToken = request.getTransitionToken();
+        String resolvedSessionId = request.getRequestedSessionId();
 
         String projectPath = context.getProject().getBasePath();
         if (projectPath == null) {
@@ -87,10 +70,19 @@ public class HistoryMessageInjector {
                 + ", restoreSource=" + restoreSource
                 + ", transitionToken=" + transitionToken
                 + ", currentProvider=" + currentProvider);
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.handleLoadSession request="
+                + request.toTraceString()
+                + ", resolvedRuntimeFamily=" + resolvedRuntimeFamily
+                + ", currentProvider=" + firstNonBlank(currentProvider));
 
         if (SessionRuntimeFamily.CODEX.equals(resolvedRuntimeFamily)) {
             // Codex session: read session info and restore session state
-            loadCodexSession(resolvedSessionId);
+            CodexRestorePlan restorePlan = buildCodexRestorePlan(request, context.getSettingsService());
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.handleLoadSession codexRestorePlan="
+                    + describeRestorePlanForTrace(restorePlan)
+                    + ", restoreSource=" + restoreSource
+                    + ", transitionToken=" + transitionToken);
+            loadCodexSession(restorePlan);
         } else {
             // Claude session: use existing callback mechanism
             if (sessionLoadCallback != null) {
@@ -170,7 +162,7 @@ public class HistoryMessageInjector {
      *
      * @return String[2]: [0]=actualThreadId, [1]=cwd
      */
-    private String[] extractSessionMeta(JsonArray messages) {
+    private static String[] extractSessionMeta(JsonArray messages) {
         String cwd = null;
         String actualThreadId = null;
 
@@ -207,6 +199,75 @@ public class HistoryMessageInjector {
             }
         }
         return frontendMessages;
+    }
+
+    /**
+     * 按逻辑会话分段顺序把多段 Codex 原始历史转换为前端消息列表，并在分段边界插入系统提示。
+     * 该入口服务于“跨模型/跨供应商继续”的聚合恢复场景，显式提示用户当前消息已切换到新的运行分段，
+     * 避免多段消息无缝拼接后误以为底层一直复用同一个 provider thread。
+     *
+     * @param segmentMessagesList 按分段顺序排列的原始历史消息数组列表
+     * @param segmentRecords 与消息列表一一对应的分段元数据列表
+     * @return 供前端直接渲染的聚合消息列表
+     */
+    public static List<JsonObject> convertCodexMessagesToFrontendBatch(
+            List<JsonArray> segmentMessagesList,
+            List<ConversationSegmentRecord> segmentRecords
+    ) {
+        List<JsonObject> frontendMessages = new ArrayList<>();
+        if (segmentMessagesList == null || segmentMessagesList.isEmpty()) {
+            return frontendMessages;
+        }
+
+        for (int segmentIndex = 0; segmentIndex < segmentMessagesList.size(); segmentIndex++) {
+            JsonArray segmentMessages = segmentMessagesList.get(segmentIndex);
+            if (segmentMessages == null) {
+                continue;
+            }
+
+            if (segmentIndex > 0) {
+                ConversationSegmentRecord currentSegment = segmentRecords != null && segmentIndex < segmentRecords.size()
+                        ? segmentRecords.get(segmentIndex)
+                        : null;
+                JsonObject boundaryMessage = buildContinuationBoundarySystemMessage(currentSegment);
+                if (boundaryMessage != null) {
+                    frontendMessages.add(boundaryMessage);
+                }
+            }
+
+            List<JsonObject> convertedSegmentMessages = convertCodexMessagesToFrontendBatch(segmentMessages);
+            frontendMessages.addAll(convertedSegmentMessages);
+        }
+        return frontendMessages;
+    }
+
+    /**
+     * 构造 continued segment 边界系统提示消息。
+     * 当前提示文本以 provider/model 为核心，后续如需补充 switchReason 或父分段信息，可继续在该方法内扩展。
+     *
+     * @param segmentRecord 当前即将进入的分段元数据
+     * @return 可插入前端消息流的系统消息；缺少有效元数据时返回 null
+     */
+    private static JsonObject buildContinuationBoundarySystemMessage(ConversationSegmentRecord segmentRecord) {
+        if (segmentRecord == null) {
+            return null;
+        }
+
+        String provider = firstNonBlank(segmentRecord.getProvider(), segmentRecord.getRuntimeFamily());
+        String model = firstNonBlank(segmentRecord.getModel());
+        if (!hasText(provider) && !hasText(model)) {
+            return null;
+        }
+
+        JsonObject systemMessage = new JsonObject();
+        systemMessage.addProperty("type", "system");
+        systemMessage.addProperty(
+                "content",
+                "已切换到 " + firstNonBlank(provider, "unknown-provider")
+                        + (hasText(model) ? " / " + model : "")
+                        + " 继续当前会话。"
+        );
+        return systemMessage;
     }
 
     private static void addCodexFrontendMessage(List<JsonObject> frontendMessages, JsonObject incoming) {
@@ -290,8 +351,22 @@ public class HistoryMessageInjector {
      * 后端内存态与前端显示态使用同一份消息基线。
      */
     static void restoreCodexMessagesToSessionState(SessionState state, JsonArray messages) {
-        state.clearMessages();
         List<JsonObject> frontendMessages = convertCodexMessagesToFrontendBatch(messages);
+        restoreCodexMessagesToSessionState(state, frontendMessages);
+    }
+
+    /**
+     * 将已转换好的前端消息列表回写到 SessionState。
+     * 该重载服务于逻辑会话聚合恢复场景，允许把跨分段边界系统消息一并写回会话内存态。
+     *
+     * @param state 当前会话状态
+     * @param frontendMessages 已按前端协议转换完成的消息列表
+     */
+    static void restoreCodexMessagesToSessionState(SessionState state, List<JsonObject> frontendMessages) {
+        state.clearMessages();
+        if (frontendMessages == null) {
+            return;
+        }
         for (JsonObject frontendMsg : frontendMessages) {
             ClaudeSession.Message restoredMessage = toSessionMessage(frontendMsg);
             if (restoredMessage != null) {
@@ -577,5 +652,567 @@ public class HistoryMessageInjector {
                                     "if (window.historyLoadComplete) { window.historyLoadComplete(); }";
             context.executeJavaScriptOnEDT(jsCode);
         });
+    }
+
+    /**
+     * 按逻辑会话恢复计划加载 Codex 历史。
+     * 与旧的单物理 sessionId 恢复相比，该入口会优先恢复最新活动分段，并顺序拼接整条逻辑会话的所有分段消息。
+     *
+     * @param restorePlan 已解析的 Codex 恢复计划
+     */
+    private void loadCodexSession(CodexRestorePlan restorePlan) {
+        if (restorePlan == null || !hasText(restorePlan.getRequestedSessionId())) {
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.loadCodexSession restorePlan invalid, fallback=single_session");
+            loadCodexSession("");
+            return;
+        }
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.loadCodexSession start restorePlan="
+                        + describeRestorePlanForTrace(restorePlan));
+                CodexSegmentBundle segmentBundle = loadCodexSegmentBundle(restorePlan);
+                JsonArray messages = flattenSegmentMessages(segmentBundle.getSegmentMessagesList());
+                String[] sessionMeta = extractSessionMeta(segmentBundle, restorePlan.getActiveSegmentSessionId());
+                String threadIdToUse = firstNonBlank(
+                        restorePlan.getActiveSegmentSessionId(),
+                        sessionMeta[0],
+                        restorePlan.getRequestedSessionId()
+                );
+                String cwd = sessionMeta[1];
+
+                context.getSession().setSessionInfo(threadIdToUse, cwd);
+                applyCodexSessionBinding(threadIdToUse);
+                applyCodexContinuationState(context.getSession().getState(), restorePlan);
+                List<JsonObject> frontendMessages = convertCodexMessagesToFrontendBatch(
+                        segmentBundle.getSegmentMessagesList(),
+                        segmentBundle.getSegmentRecords()
+                );
+                restoreCodexMessagesToSessionState(context.getSession().getState(), frontendMessages);
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.loadCodexSession restored threadId="
+                        + threadIdToUse
+                        + ", cwd=" + firstNonBlank(cwd)
+                        + ", messageCount=" + messages.size()
+                        + ", restorePlan=" + describeRestorePlanForTrace(restorePlan));
+
+                injectBatchToFrontend(frontendMessages);
+            } catch (Exception e) {
+                LOG.warn("[HistoryHandler] Failed logical Codex restore, fallback to requested session: "
+                        + restorePlan.getRequestedSessionId(), e);
+                LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.loadCodexSession fallback requestedSessionId="
+                        + restorePlan.getRequestedSessionId()
+                        + ", error=" + e.getMessage()
+                        + ", restorePlan=" + describeRestorePlanForTrace(restorePlan), e);
+                loadCodexSession(restorePlan.getRequestedSessionId());
+            }
+        });
+    }
+
+    /**
+     * 解析前端传入的历史恢复 payload。
+     * 兼容旧的纯 sessionId 字符串与新的逻辑会话 JSON 结构。
+     *
+     * @param payloadString 前端传入的原始 payload
+     * @param currentProvider 当前 provider
+     * @return 归一化后的恢复请求
+     */
+    static SessionLoadRequest parseSessionLoadRequest(String payloadString, String currentProvider) {
+        String provider = currentProvider;
+        String runtimeFamily = null;
+        String restoreSource = "history_switch";
+        String transitionToken = null;
+        String resolvedSessionId = payloadString;
+        String logicalConversationId = null;
+        String activeSegmentSessionId = null;
+
+        try {
+            JsonObject payload = new Gson().fromJson(payloadString, JsonObject.class);
+            if (payload != null) {
+                if (payload.has("sessionId") && !payload.get("sessionId").isJsonNull()) {
+                    resolvedSessionId = payload.get("sessionId").getAsString();
+                }
+                if (payload.has("logicalConversationId") && !payload.get("logicalConversationId").isJsonNull()) {
+                    logicalConversationId = payload.get("logicalConversationId").getAsString();
+                }
+                if (payload.has("activeSegmentSessionId") && !payload.get("activeSegmentSessionId").isJsonNull()) {
+                    activeSegmentSessionId = payload.get("activeSegmentSessionId").getAsString();
+                }
+                if (payload.has("provider") && !payload.get("provider").isJsonNull()) {
+                    provider = payload.get("provider").getAsString();
+                }
+                if (payload.has("runtimeFamily") && !payload.get("runtimeFamily").isJsonNull()) {
+                    runtimeFamily = payload.get("runtimeFamily").getAsString();
+                }
+                if (payload.has("restoreSource") && !payload.get("restoreSource").isJsonNull()) {
+                    restoreSource = payload.get("restoreSource").getAsString();
+                }
+                if (payload.has("transitionToken") && !payload.get("transitionToken").isJsonNull()) {
+                    transitionToken = payload.get("transitionToken").getAsString();
+                }
+            }
+        } catch (Exception ignored) {
+            // 兼容旧 payload：直接把字符串当作物理 sessionId。
+        }
+
+        return new SessionLoadRequest(
+                firstNonBlank(resolvedSessionId),
+                firstNonBlank(logicalConversationId),
+                firstNonBlank(activeSegmentSessionId),
+                firstNonBlank(provider, currentProvider),
+                firstNonBlank(runtimeFamily),
+                firstNonBlank(restoreSource, "history_switch"),
+                firstNonBlank(transitionToken)
+        );
+    }
+
+    /**
+     * 基于逻辑会话元数据构造 Codex 恢复计划。
+     * 若 payload 仍是旧的物理 sessionId，也会先回溯到所属逻辑会话，再恢复最新活动分段。
+     *
+     * @param request 恢复请求
+     * @param settingsService 元数据读取服务
+     * @return 供历史恢复与继续发送共用的恢复计划
+     */
+    static CodexRestorePlan buildCodexRestorePlan(
+            SessionLoadRequest request,
+            CodemossSettingsService settingsService
+    ) {
+        if (request == null) {
+            return CodexRestorePlan.forSingleSession("");
+        }
+
+        String requestedSessionId = firstNonBlank(request.getRequestedSessionId());
+        String logicalConversationId = firstNonBlank(request.getLogicalConversationId());
+        String activeSegmentSessionId = firstNonBlank(request.getActiveSegmentSessionId());
+        String parentSegmentSessionId = "";
+        List<String> segmentSessionIds = new ArrayList<>();
+
+        try {
+            if (!hasText(logicalConversationId) && hasText(requestedSessionId) && settingsService != null) {
+                ConversationSegmentRecord requestedSegment = settingsService.getConversationSegmentRecord(requestedSessionId);
+                if (requestedSegment != null && requestedSegment.isMeaningful()) {
+                    logicalConversationId = firstNonBlank(requestedSegment.getLogicalConversationId());
+                }
+            }
+
+            if (hasText(logicalConversationId) && settingsService != null) {
+                List<ConversationSegmentRecord> segments = new ArrayList<>(settingsService.listConversationSegments(logicalConversationId));
+                segments.sort(Comparator.comparingInt(ConversationSegmentRecord::getSegmentIndex));
+                for (ConversationSegmentRecord segment : segments) {
+                    if (segment != null && hasText(segment.getSessionId())) {
+                        segmentSessionIds.add(segment.getSessionId());
+                    }
+                }
+
+                LogicalConversationRecord logicalRecord = settingsService.getLogicalConversationRecord(logicalConversationId);
+                if (!hasText(activeSegmentSessionId) && logicalRecord != null && logicalRecord.isMeaningful()) {
+                    activeSegmentSessionId = firstNonBlank(logicalRecord.getLatestSessionId());
+                }
+                if (!hasText(activeSegmentSessionId) && !segmentSessionIds.isEmpty()) {
+                    activeSegmentSessionId = segmentSessionIds.get(segmentSessionIds.size() - 1);
+                }
+                if (hasText(activeSegmentSessionId)) {
+                    ConversationSegmentRecord activeSegment = settingsService.getConversationSegmentRecord(activeSegmentSessionId);
+                    if (activeSegment != null && activeSegment.isMeaningful()) {
+                        parentSegmentSessionId = firstNonBlank(activeSegment.getParentSessionId());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("[HistoryHandler] Failed to build Codex restore plan: " + e.getMessage(), e);
+        }
+
+        if (segmentSessionIds.isEmpty() && hasText(requestedSessionId)) {
+            segmentSessionIds.add(requestedSessionId);
+        }
+        if (!hasText(activeSegmentSessionId)) {
+            activeSegmentSessionId = firstNonBlank(requestedSessionId);
+        }
+        if (hasText(activeSegmentSessionId) && !segmentSessionIds.contains(activeSegmentSessionId)) {
+            segmentSessionIds.add(activeSegmentSessionId);
+        }
+
+        return new CodexRestorePlan(
+                requestedSessionId,
+                logicalConversationId,
+                activeSegmentSessionId,
+                parentSegmentSessionId,
+                segmentSessionIds
+        );
+    }
+
+    /**
+     * 统一输出逻辑会话恢复计划的 trace 摘要。
+     * 该摘要只保留用于串联日志的稳定字段，避免把整段消息或大对象直接写入日志。
+     *
+     * @param restorePlan 当前恢复计划
+     * @return 适合直接输出到 trace 日志中的固定摘要
+     */
+    static String describeRestorePlanForTrace(CodexRestorePlan restorePlan) {
+        if (restorePlan == null) {
+            return "(null)";
+        }
+        return "{requestedSessionId=" + restorePlan.getRequestedSessionId()
+                + ", logicalConversationId=" + restorePlan.getLogicalConversationId()
+                + ", activeSegmentSessionId=" + restorePlan.getActiveSegmentSessionId()
+                + ", parentSegmentSessionId=" + restorePlan.getParentSegmentSessionId()
+                + ", segmentCount=" + restorePlan.getSegmentSessionIds().size()
+                + ", segmentSessionIds=" + restorePlan.getSegmentSessionIds()
+                + "}";
+    }
+
+    /**
+     * 顺序读取恢复计划中的所有物理分段消息，并拼接成单个消息数组。
+     *
+     * @param restorePlan 当前逻辑会话恢复计划
+     * @return 拼接后的 Codex 原始历史消息
+     */
+    private CodexSegmentBundle loadCodexSegmentBundle(CodexRestorePlan restorePlan) {
+        List<JsonArray> segmentMessagesList = new ArrayList<>();
+        List<ConversationSegmentRecord> segmentRecords = new ArrayList<>();
+        CodexHistoryReader codexReader = new CodexHistoryReader();
+        for (String segmentSessionId : restorePlan.getSegmentSessionIds()) {
+            if (!hasText(segmentSessionId)) {
+                continue;
+            }
+            String messagesJson = codexReader.getSessionMessagesAsJson(segmentSessionId);
+            JsonArray segmentMessages = JsonParser.parseString(messagesJson).getAsJsonArray();
+            segmentMessagesList.add(segmentMessages);
+            segmentRecords.add(resolveSegmentRecord(segmentSessionId));
+        }
+        return new CodexSegmentBundle(
+                segmentMessagesList,
+                segmentRecords,
+                restorePlan.getLogicalConversationId(),
+                restorePlan.getActiveSegmentSessionId(),
+                restorePlan.getParentSegmentSessionId()
+        );
+    }
+
+    /**
+     * 将分段消息列表按原始顺序拍平，供日志统计和旧的 state 恢复逻辑复用。
+     *
+     * @param segmentMessagesList 分段消息列表
+     * @return 拍平后的原始消息数组
+     */
+    private JsonArray flattenSegmentMessages(List<JsonArray> segmentMessagesList) {
+        JsonArray combinedMessages = new JsonArray();
+        if (segmentMessagesList == null) {
+            return combinedMessages;
+        }
+        for (JsonArray segmentMessages : segmentMessagesList) {
+            if (segmentMessages == null) {
+                continue;
+            }
+            for (JsonElement message : segmentMessages) {
+                combinedMessages.add(message);
+            }
+        }
+        return combinedMessages;
+    }
+
+    /**
+     * 读取指定物理分段对应的元数据记录。
+     * 若配置里尚未找到记录，则返回空语义记录，避免恢复流程因单条缺失元数据而中断。
+     *
+     * @param sessionId 物理分段 sessionId
+     * @return 对应分段元数据；缺失时返回空语义记录
+     */
+    private ConversationSegmentRecord resolveSegmentRecord(String sessionId) {
+        try {
+            CodemossSettingsService settingsService = context.getSettingsService();
+            ConversationSegmentRecord record = settingsService != null
+                    ? settingsService.getConversationSegmentRecord(sessionId)
+                    : null;
+            if (record != null) {
+                return record;
+            }
+        } catch (Exception e) {
+            LOG.debug(CODEX_RUNTIME_TRACE_PREFIX + " resolveSegmentRecord failed: " + e.getMessage());
+        }
+        return new ConversationSegmentRecord(firstNonBlank(sessionId), "", "", 0, "", "", "", "", "", "", 0L);
+    }
+
+    /**
+     * 把逻辑会话 continuation 运行态写回当前 SessionState。
+     * 历史恢复后继续发送仍然依赖这些字段，否则会退回旧分段或旧供应商绑定。
+     *
+     * @param state 当前会话状态
+     * @param restorePlan 已完成解析的恢复计划
+     */
+    protected static void applyCodexContinuationState(SessionState state, CodexRestorePlan restorePlan) {
+        if (state == null || restorePlan == null) {
+            return;
+        }
+        state.setLogicalConversationId(emptyToNull(restorePlan.getLogicalConversationId()));
+        state.setActiveSegmentSessionId(emptyToNull(restorePlan.getActiveSegmentSessionId()));
+        state.setParentSegmentSessionId(emptyToNull(restorePlan.getParentSegmentSessionId()));
+        state.setContinuationPending(false);
+        state.setContinuationSourceSessionId(null);
+    }
+
+    /**
+     * 按活动分段优先级提取恢复所需的 session_meta。
+     * 先在活动分段中查找 threadId/cwd，再按分段顺序向前回退，避免跨分段恢复时误用首段 cwd。
+     *
+     * @param segmentBundle 分段消息与元数据集合
+     * @param preferredSegmentSessionId 期望优先读取 meta 的活动分段 sessionId
+     * @return String[2]: [0]=actualThreadId, [1]=cwd
+     */
+    static String[] extractSessionMeta(CodexSegmentBundle segmentBundle, String preferredSegmentSessionId) {
+        if (segmentBundle == null || segmentBundle.getSegmentMessagesList().isEmpty()) {
+            return new String[]{null, null};
+        }
+
+        int preferredIndex = -1;
+        if (hasText(preferredSegmentSessionId)) {
+            for (int i = 0; i < segmentBundle.getSegmentRecords().size(); i++) {
+                ConversationSegmentRecord record = segmentBundle.getSegmentRecords().get(i);
+                if (record != null && preferredSegmentSessionId.equals(firstNonBlank(record.getSessionId()))) {
+                    preferredIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (preferredIndex >= 0) {
+            String[] preferredMeta = extractSessionMeta(segmentBundle.getSegmentMessagesList().get(preferredIndex));
+            if (preferredMeta[0] != null || preferredMeta[1] != null) {
+                return preferredMeta;
+            }
+        }
+
+        for (JsonArray segmentMessages : segmentBundle.getSegmentMessagesList()) {
+            String[] meta = extractSessionMeta(segmentMessages);
+            if (meta[0] != null || meta[1] != null) {
+                return meta;
+            }
+        }
+        return new String[]{null, null};
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    private static String emptyToNull(String value) {
+        return hasText(value) ? value.trim() : null;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 历史恢复载荷的归一化结果。
+     * 避免后续链路重复解析前端传入的 JSON 字符串。
+     */
+    static final class SessionLoadRequest {
+        private final String requestedSessionId;
+        private final String logicalConversationId;
+        private final String activeSegmentSessionId;
+        private final String provider;
+        private final String runtimeFamily;
+        private final String restoreSource;
+        private final String transitionToken;
+
+        /**
+         * 创建归一化后的历史恢复请求。
+         *
+         * @param requestedSessionId 前端显式传入的 sessionId
+         * @param logicalConversationId 逻辑会话 id
+         * @param activeSegmentSessionId 活动分段 sessionId
+         * @param provider 历史项 provider
+         * @param runtimeFamily 历史项运行时家族
+         * @param restoreSource 恢复来源标记
+         * @param transitionToken 恢复链路 token
+         */
+        SessionLoadRequest(
+                String requestedSessionId,
+                String logicalConversationId,
+                String activeSegmentSessionId,
+                String provider,
+                String runtimeFamily,
+                String restoreSource,
+                String transitionToken
+        ) {
+            this.requestedSessionId = firstNonBlank(requestedSessionId);
+            this.logicalConversationId = firstNonBlank(logicalConversationId);
+            this.activeSegmentSessionId = firstNonBlank(activeSegmentSessionId);
+            this.provider = firstNonBlank(provider);
+            this.runtimeFamily = firstNonBlank(runtimeFamily);
+            this.restoreSource = firstNonBlank(restoreSource, "history_switch");
+            this.transitionToken = firstNonBlank(transitionToken);
+        }
+
+        public String getRequestedSessionId() {
+            return requestedSessionId;
+        }
+
+        public String getLogicalConversationId() {
+            return logicalConversationId;
+        }
+
+        public String getActiveSegmentSessionId() {
+            return activeSegmentSessionId;
+        }
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public String getRuntimeFamily() {
+            return runtimeFamily;
+        }
+
+        public String getRestoreSource() {
+            return restoreSource;
+        }
+
+        public String getTransitionToken() {
+            return transitionToken;
+        }
+
+        /**
+         * 输出前端历史恢复请求在后端归一化后的稳定摘要。
+         *
+         * @return 适合运行时 trace 的请求摘要
+         */
+        public String toTraceString() {
+            return "{requestedSessionId=" + requestedSessionId
+                    + ", logicalConversationId=" + logicalConversationId
+                    + ", activeSegmentSessionId=" + activeSegmentSessionId
+                    + ", provider=" + provider
+                    + ", runtimeFamily=" + runtimeFamily
+                    + ", restoreSource=" + restoreSource
+                    + ", transitionToken=" + transitionToken
+                    + "}";
+        }
+    }
+
+    /**
+     * Codex 逻辑会话恢复计划。
+     * 该对象统一描述本次恢复应使用的最新活动分段、父分段以及需要拼接的物理分段列表。
+     */
+    static final class CodexRestorePlan {
+        private final String requestedSessionId;
+        private final String logicalConversationId;
+        private final String activeSegmentSessionId;
+        private final String parentSegmentSessionId;
+        private final List<String> segmentSessionIds;
+
+        /**
+         * 创建 Codex 恢复计划。
+         *
+         * @param requestedSessionId 恢复入口传入的 sessionId
+         * @param logicalConversationId 逻辑会话 id
+         * @param activeSegmentSessionId 最新活动分段 sessionId
+         * @param parentSegmentSessionId 最新活动分段的父分段 sessionId
+         * @param segmentSessionIds 需要顺序恢复的全部物理分段 sessionId
+         */
+        CodexRestorePlan(
+                String requestedSessionId,
+                String logicalConversationId,
+                String activeSegmentSessionId,
+                String parentSegmentSessionId,
+                List<String> segmentSessionIds
+        ) {
+            this.requestedSessionId = firstNonBlank(requestedSessionId);
+            this.logicalConversationId = firstNonBlank(logicalConversationId);
+            this.activeSegmentSessionId = firstNonBlank(activeSegmentSessionId);
+            this.parentSegmentSessionId = firstNonBlank(parentSegmentSessionId);
+            this.segmentSessionIds = Collections.unmodifiableList(new ArrayList<>(segmentSessionIds));
+        }
+
+        static CodexRestorePlan forSingleSession(String sessionId) {
+            List<String> segmentSessionIds = new ArrayList<>();
+            if (hasText(sessionId)) {
+                segmentSessionIds.add(sessionId.trim());
+            }
+            return new CodexRestorePlan(sessionId, "", sessionId, "", segmentSessionIds);
+        }
+
+        public String getRequestedSessionId() {
+            return requestedSessionId;
+        }
+
+        public String getLogicalConversationId() {
+            return logicalConversationId;
+        }
+
+        public String getActiveSegmentSessionId() {
+            return activeSegmentSessionId;
+        }
+
+        public String getParentSegmentSessionId() {
+            return parentSegmentSessionId;
+        }
+
+        public List<String> getSegmentSessionIds() {
+            return segmentSessionIds;
+        }
+    }
+
+    /**
+     * Codex 逻辑会话的分段消息与元数据集合。
+     * 该对象保留“按分段组织”的历史结构，供恢复链路同时完成活动分段 meta 选择与边界系统消息注入。
+     */
+    static final class CodexSegmentBundle {
+        private final List<JsonArray> segmentMessagesList;
+        private final List<ConversationSegmentRecord> segmentRecords;
+        private final String logicalConversationId;
+        private final String activeSegmentSessionId;
+        private final String parentSegmentSessionId;
+
+        /**
+         * 创建分段消息集合。
+         *
+         * @param segmentMessagesList 按分段顺序排列的消息数组
+         * @param segmentRecords 与消息数组一一对应的分段元数据
+         * @param logicalConversationId 所属逻辑会话 id
+         * @param activeSegmentSessionId 当前活动分段 sessionId
+         * @param parentSegmentSessionId 当前活动分段父分段 sessionId
+         */
+        CodexSegmentBundle(
+                List<JsonArray> segmentMessagesList,
+                List<ConversationSegmentRecord> segmentRecords,
+                String logicalConversationId,
+                String activeSegmentSessionId,
+                String parentSegmentSessionId
+        ) {
+            this.segmentMessagesList = Collections.unmodifiableList(new ArrayList<>(segmentMessagesList));
+            this.segmentRecords = Collections.unmodifiableList(new ArrayList<>(segmentRecords));
+            this.logicalConversationId = firstNonBlank(logicalConversationId);
+            this.activeSegmentSessionId = firstNonBlank(activeSegmentSessionId);
+            this.parentSegmentSessionId = firstNonBlank(parentSegmentSessionId);
+        }
+
+        public List<JsonArray> getSegmentMessagesList() {
+            return segmentMessagesList;
+        }
+
+        public List<ConversationSegmentRecord> getSegmentRecords() {
+            return segmentRecords;
+        }
+
+        public String getLogicalConversationId() {
+            return logicalConversationId;
+        }
+
+        public String getActiveSegmentSessionId() {
+            return activeSegmentSessionId;
+        }
+
+        public String getParentSegmentSessionId() {
+            return parentSegmentSessionId;
+        }
     }
 }

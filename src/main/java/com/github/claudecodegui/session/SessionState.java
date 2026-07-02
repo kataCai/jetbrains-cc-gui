@@ -69,6 +69,31 @@ public class SessionState {
      * 避免继续同一条会话时被当前 active provider 污染。
      */
     private volatile CodexSessionBinding codexSessionBinding = null;
+    /**
+     * 当前会话所属的逻辑会话标识。
+     * 该字段把“用户看到的一条连续会话”与底层物理 session 解耦，供跨模型/跨供应商继续场景复用。
+     */
+    private volatile String logicalConversationId = null;
+    /**
+     * 当前会话视角下的活动分段 sessionId。
+     * 对于普通单段会话它通常等于当前 sessionId；对继续分段创建中的过渡态允许暂时为空。
+     */
+    private volatile String activeSegmentSessionId = null;
+    /**
+     * 当前活动分段的父分段 sessionId。
+     * 仅在线性继续链路中使用，用于在新分段建成后补齐父子关系与调试信息。
+     */
+    private volatile String parentSegmentSessionId = null;
+    /**
+     * 标记当前会话是否正处于“等待新分段拿到真实 sessionId”的过渡态。
+     * 该标记为 true 时，上层应在拿到真实 sessionId 后尽快补齐逻辑会话和分段索引。
+     */
+    private volatile boolean continuationPending = false;
+    /**
+     * 当前继续分段操作的来源分段 sessionId。
+     * 该字段在过渡态下用于识别应从哪一段迁移上下文、并在拿到新 sessionId 后补写元数据。
+     */
+    private volatile String continuationSourceSessionId = null;
     private volatile boolean lastRecovered = false;
     private volatile String lastRecoveryCategory = null;
     private volatile String lastRecoveryAction = null;
@@ -143,6 +168,26 @@ public class SessionState {
      */
     public CodexSessionBinding getCodexSessionBinding() {
         return codexSessionBinding;
+    }
+
+    public String getLogicalConversationId() {
+        return logicalConversationId;
+    }
+
+    public String getActiveSegmentSessionId() {
+        return activeSegmentSessionId;
+    }
+
+    public String getParentSegmentSessionId() {
+        return parentSegmentSessionId;
+    }
+
+    public boolean isContinuationPending() {
+        return continuationPending;
+    }
+
+    public String getContinuationSourceSessionId() {
+        return continuationSourceSessionId;
     }
 
     /**
@@ -249,6 +294,51 @@ public class SessionState {
      */
     public void setCodexSessionBinding(CodexSessionBinding codexSessionBinding) {
         this.codexSessionBinding = codexSessionBinding;
+    }
+
+    /**
+     * 设置当前会话所属的逻辑会话 id。
+     *
+     * @param logicalConversationId 逻辑会话标识；传入 null 表示清空
+     */
+    public void setLogicalConversationId(String logicalConversationId) {
+        this.logicalConversationId = logicalConversationId;
+    }
+
+    /**
+     * 设置当前活动分段 sessionId。
+     *
+     * @param activeSegmentSessionId 当前活动分段 id；传入 null 表示待后续补齐
+     */
+    public void setActiveSegmentSessionId(String activeSegmentSessionId) {
+        this.activeSegmentSessionId = activeSegmentSessionId;
+    }
+
+    /**
+     * 设置当前活动分段的父分段 sessionId。
+     *
+     * @param parentSegmentSessionId 父分段 sessionId；首段或未知时可为 null
+     */
+    public void setParentSegmentSessionId(String parentSegmentSessionId) {
+        this.parentSegmentSessionId = parentSegmentSessionId;
+    }
+
+    /**
+     * 设置当前继续分段是否仍处于待完成状态。
+     *
+     * @param continuationPending true 表示仍待拿到真实 sessionId；false 表示已完成补齐
+     */
+    public void setContinuationPending(boolean continuationPending) {
+        this.continuationPending = continuationPending;
+    }
+
+    /**
+     * 设置当前继续分段的来源 sessionId。
+     *
+     * @param continuationSourceSessionId 来源分段 sessionId；传入 null 表示清空
+     */
+    public void setContinuationSourceSessionId(String continuationSourceSessionId) {
+        this.continuationSourceSessionId = continuationSourceSessionId;
     }
 
     /**

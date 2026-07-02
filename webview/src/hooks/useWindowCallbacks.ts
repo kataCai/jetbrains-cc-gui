@@ -39,6 +39,11 @@ export interface UseWindowCallbacksOptions {
   setUsagePercentage: React.Dispatch<React.SetStateAction<number>>;
   setUsageUsedTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
   setUsageMaxTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
+  setLogicalConversationId: React.Dispatch<React.SetStateAction<string | null>>;
+  setActiveSegmentSessionId: React.Dispatch<React.SetStateAction<string | null>>;
+  setParentSegmentSessionId: React.Dispatch<React.SetStateAction<string | null>>;
+  setContinuationPending: React.Dispatch<React.SetStateAction<boolean>>;
+  setContinuationSourceSessionId: React.Dispatch<React.SetStateAction<string | null>>;
   setCurrentProvider: React.Dispatch<React.SetStateAction<string>>;
   setPermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
   setClaudePermissionMode: React.Dispatch<React.SetStateAction<PermissionMode>>;
@@ -114,6 +119,9 @@ export interface UseWindowCallbacksOptions {
   // B-011: Title migration on session ID change
   customSessionTitleRef: MutableRefObject<string | null>;
   currentSessionIdRef: MutableRefObject<string | null>;
+  logicalConversationIdRef: MutableRefObject<string | null>;
+  activeSegmentSessionIdRef: MutableRefObject<string | null>;
+  continuationPendingRef: MutableRefObject<boolean>;
   updateHistoryTitle: (sessionId: string, newTitle: string) => void;
   applyHistoryTitleLocal: (sessionId: string, newTitle: string) => void;
 

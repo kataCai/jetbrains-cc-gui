@@ -71,6 +71,7 @@ import java.util.concurrent.TimeUnit;
 public class ChatWindowDelegate {
 
     private static final Logger LOG = Logger.getInstance(ChatWindowDelegate.class);
+    private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
     private static final String NODE_PATH_PROPERTY_KEY = "claude.code.node.path";
     private static final String PERMISSION_MODE_PROPERTY_KEY = "claude.code.permission.mode";
     private static final int STATUS_RESET_DELAY_SECONDS = 5;
@@ -328,6 +329,9 @@ public class ChatWindowDelegate {
             @Override public void onCreateNewSession() {
                 host.getSessionLifecycleManager().createNewSession();
             }
+            @Override public void onCreateContinuedSegment(String payloadJson) {
+                host.getSessionLifecycleManager().createContinuedSessionWithRuntimeSwitch(payloadJson);
+            }
             @Override public void onFrontendReady() { handleFrontendReady(); }
             @Override public void onRefreshSlashCommands() {
                 host.getSessionLifecycleManager().fetchSlashCommandsOnStartup();
@@ -347,14 +351,23 @@ public class ChatWindowDelegate {
 
         HistoryHandler historyHandler = new HistoryHandler(handlerContext);
         historyHandler.setSessionLoadCallback((sessionId, projectPath, provider, runtimeFamily, restoreSource, transitionToken) ->
+        {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " ChatWindowDelegate.sessionLoadCallback sessionId="
+                    + (sessionId != null ? sessionId : "")
+                    + ", projectPath=" + (projectPath != null ? projectPath : "")
+                    + ", provider=" + (provider != null ? provider : "")
+                    + ", runtimeFamily=" + (runtimeFamily != null ? runtimeFamily : "")
+                    + ", restoreSource=" + (restoreSource != null ? restoreSource : "")
+                    + ", transitionToken=" + (transitionToken != null ? transitionToken : ""));
             host.getSessionLifecycleManager().loadHistorySession(
-                sessionId,
-                projectPath,
-                provider,
-                runtimeFamily,
-                restoreSource,
-                transitionToken
-            ));
+                    sessionId,
+                    projectPath,
+                    provider,
+                    runtimeFamily,
+                    restoreSource,
+                    transitionToken
+            );
+        });
         host.setHistoryHandler(historyHandler);
         messageDispatcher.registerHandler(historyHandler);
 
@@ -590,6 +603,15 @@ public class ChatWindowDelegate {
             runtimePayload.addProperty("model", hasText(session.getModel()) ? session.getModel() : "");
             runtimePayload.addProperty("permissionMode", hasText(session.getPermissionMode()) ? session.getPermissionMode() : "");
             runtimePayload.addProperty("reasoningEffort", hasText(session.getReasoningEffort()) ? session.getReasoningEffort() : "");
+            runtimePayload.addProperty("logicalConversationId",
+                    hasText(session.getState().getLogicalConversationId()) ? session.getState().getLogicalConversationId() : "");
+            runtimePayload.addProperty("activeSegmentSessionId",
+                    hasText(session.getState().getActiveSegmentSessionId()) ? session.getState().getActiveSegmentSessionId() : "");
+            runtimePayload.addProperty("parentSegmentSessionId",
+                    hasText(session.getState().getParentSegmentSessionId()) ? session.getState().getParentSegmentSessionId() : "");
+            runtimePayload.addProperty("continuationPending", session.getState().isContinuationPending());
+            runtimePayload.addProperty("continuationSourceSessionId",
+                    hasText(session.getState().getContinuationSourceSessionId()) ? session.getState().getContinuationSourceSessionId() : "");
             CodexSessionBinding codexBinding = session.getState().getCodexSessionBinding();
             runtimePayload.addProperty("codexProviderId",
                     codexBinding != null && hasText(codexBinding.getProviderId()) ? codexBinding.getProviderId() : "");

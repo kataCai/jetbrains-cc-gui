@@ -209,6 +209,31 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
          */
         public String runtimeFamily;
         public String sessionId;
+        /**
+         * 当前 Tab 所属的逻辑会话标识。
+         * 该字段把“用户看到的一条连续会话”与底层物理 session 解耦，供历史恢复和跨模型继续场景定位主干使用。
+         */
+        public String logicalConversationId;
+        /**
+         * 当前 Tab 恢复后应优先绑定的活动分段 sessionId。
+         * 当逻辑会话存在多个运行段时，该字段用于恢复“当前继续点”，而不是退回到首段或任意旧段。
+         */
+        public String activeSegmentSessionId;
+        /**
+         * 当前活动分段的父分段 sessionId。
+         * 该字段主要用于恢复链路和调试链路定位分段继承关系，缺失时允许兼容回退。
+         */
+        public String parentSegmentSessionId;
+        /**
+         * 标记当前 Tab 是否正处于“等待继续分段创建完成”的过渡态。
+         * 旧快照未携带该字段时默认视为 false，避免无意义地阻塞正常恢复流程。
+         */
+        public boolean continuationPending;
+        /**
+         * 当前继续分段操作的来源分段 sessionId。
+         * 该字段用于在恢复或异常诊断时识别上下文迁移来源，不参与普通单段会话的运行。
+         */
+        public String continuationSourceSessionId;
         public String cwd;
         public String model;
         public String permissionMode;
@@ -240,6 +265,11 @@ public final class TabStateService implements PersistentStateComponent<TabStateS
             copy.provider = this.provider;
             copy.runtimeFamily = getEffectiveRuntimeFamily();
             copy.sessionId = this.sessionId;
+            copy.logicalConversationId = this.logicalConversationId;
+            copy.activeSegmentSessionId = this.activeSegmentSessionId;
+            copy.parentSegmentSessionId = this.parentSegmentSessionId;
+            copy.continuationPending = this.continuationPending;
+            copy.continuationSourceSessionId = this.continuationSourceSessionId;
             copy.cwd = this.cwd;
             copy.model = this.model;
             copy.permissionMode = this.permissionMode;

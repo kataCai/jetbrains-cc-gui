@@ -90,6 +90,77 @@ public class HistoryConversationAggregatorTest {
     }
 
     /**
+     * 验证 legacy 旧会话在首次创建 continued segment 后，只要源分段和新分段都已写入 segment 索引，
+     * 历史聚合层就必须把两条物理 session 合并成单条逻辑会话。
+     * 该用例直接覆盖“旧分段缺失索引会导致历史列表拆成两条记录”的回归场景。
+     */
+    @Test
+    public void shouldAggregateLegacyRootSessionAfterFirstContinuationWhenSourceSegmentMetadataExists() throws Exception {
+        JsonObject history = new JsonObject();
+        history.addProperty("success", true);
+        history.addProperty("total", 9);
+
+        JsonArray sessions = new JsonArray();
+        sessions.add(createSession("legacy-root-001", "Legacy Root", 4, 1719655200000L));
+        sessions.add(createSession("continued-002", "Continued Title", 5, 1719658800000L));
+        history.add("sessions", sessions);
+
+        StubSettingsService settingsService = new StubSettingsService();
+        settingsService.logicalConversationRecord = new LogicalConversationRecord(
+                "logical-legacy-001",
+                "legacy-root-001",
+                "continued-002",
+                "Merged Legacy Title",
+                "codex",
+                "codex",
+                "gpt-5.4",
+                2,
+                1719655200000L,
+                1719658800000L,
+                false,
+                0L
+        );
+        settingsService.segment001 = new ConversationSegmentRecord(
+                "legacy-root-001",
+                "logical-legacy-001",
+                "",
+                0,
+                "codex",
+                "codex",
+                "gpt-5.4",
+                "medium",
+                "initial",
+                "none",
+                1719655200000L
+        );
+        settingsService.segment002 = new ConversationSegmentRecord(
+                "continued-002",
+                "logical-legacy-001",
+                "legacy-root-001",
+                1,
+                "codex",
+                "codex",
+                "gpt-5.4",
+                "medium",
+                "runtime_switch:model",
+                "session_summary",
+                1719658800000L
+        );
+
+        JsonObject aggregated = HistoryConversationAggregator.aggregateCodexHistory(history, settingsService);
+
+        JsonArray aggregatedSessions = aggregated.getAsJsonArray("sessions");
+        assertEquals(1, aggregatedSessions.size());
+
+        JsonObject session = aggregatedSessions.get(0).getAsJsonObject();
+        assertEquals("logical-legacy-001", session.get("logicalConversationId").getAsString());
+        assertEquals("continued-002", session.get("activeSegmentSessionId").getAsString());
+        assertEquals(2, session.get("segmentCount").getAsInt());
+        assertEquals(9, session.get("messageCount").getAsInt());
+        assertEquals("Merged Legacy Title", session.get("title").getAsString());
+    }
+
+    /**
      * 构造最小可用的历史摘要对象。
      *
      * @param sessionId 物理分段 sessionId
@@ -140,10 +211,10 @@ public class HistoryConversationAggregatorTest {
          */
         @Override
         public ConversationSegmentRecord getConversationSegmentRecord(String sessionId) {
-            if ("segment-001".equals(sessionId)) {
+            if ("segment-001".equals(sessionId) || "legacy-root-001".equals(sessionId)) {
                 return segment001;
             }
-            if ("segment-002".equals(sessionId)) {
+            if ("segment-002".equals(sessionId) || "continued-002".equals(sessionId)) {
                 return segment002;
             }
             return null;

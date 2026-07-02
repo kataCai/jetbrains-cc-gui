@@ -6,7 +6,9 @@ import com.github.claudecodegui.model.ConflictStrategy;
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.model.PromptScope;
 import com.github.claudecodegui.dependency.DependencyManager;
+import com.github.claudecodegui.session.ConversationSegmentRecord;
 import com.github.claudecodegui.session.CodexSessionBinding;
+import com.github.claudecodegui.session.LogicalConversationRecord;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -69,6 +71,8 @@ public class CodemossSettingsService {
     private static final String CODEX_MODEL_DISPLAY_VISIBLE_KEY = "visible";
     private static final String CODEX_MODEL_DISPLAY_CATALOG_KEY = "catalog";
     private static final String CODEX_MODEL_DISPLAY_VISIBILITY_KEY = "visibility";
+    private static final String CODEX_LOGICAL_CONVERSATIONS_KEY = "logicalConversations";
+    private static final String CODEX_CONVERSATION_SEGMENTS_KEY = "conversationSegments";
     private static final String CODEX_MODEL_DESCRIPTION_KEY = "description";
     private static final String CODEX_MODEL_REASONING_EFFORT_KEY = "reasoningEffort";
     private static final String CODEX_LAST_REASONING_EFFORT_KEY = "lastReasoningEffort";
@@ -2386,6 +2390,257 @@ public class CodemossSettingsService {
     }
 
     /**
+     * 保存逻辑会话元数据。
+     * 该记录用于给历史列表、Tab 恢复和继续分段逻辑提供统一的“用户会话身份”，
+     * 避免不同物理 session 在切模型或切供应商后被历史层误判为互不相关的新会话。
+     *
+     * @param record 待保存的逻辑会话记录；传入 null 或无效记录时会忽略
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void saveLogicalConversationRecord(LogicalConversationRecord record) throws IOException {
+        if (record == null || !record.isMeaningful()) {
+            return;
+        }
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject logicalConversations = ensureCodexLogicalConversationsObject(codex);
+        logicalConversations.add(record.getLogicalConversationId(), record.toJson());
+        writeConfig(config);
+    }
+
+    /**
+     * 读取指定逻辑会话元数据。
+     *
+     * @param logicalConversationId 逻辑会话唯一标识
+     * @return 已保存的逻辑会话记录；不存在时返回 null
+     * @throws IOException 配置读取失败时抛出
+     */
+    public LogicalConversationRecord getLogicalConversationRecord(String logicalConversationId) throws IOException {
+        String normalizedConversationId = normalizeConversationMetadataId(logicalConversationId);
+        if (normalizedConversationId == null) {
+            return null;
+        }
+        JsonObject config = readConfig();
+        if (!config.has("codex") || !config.get("codex").isJsonObject()) {
+            return null;
+        }
+        JsonObject codex = config.getAsJsonObject("codex");
+        if (!codex.has(CODEX_LOGICAL_CONVERSATIONS_KEY) || !codex.get(CODEX_LOGICAL_CONVERSATIONS_KEY).isJsonObject()) {
+            return null;
+        }
+        JsonObject logicalConversations = codex.getAsJsonObject(CODEX_LOGICAL_CONVERSATIONS_KEY);
+        if (!logicalConversations.has(normalizedConversationId)
+                || !logicalConversations.get(normalizedConversationId).isJsonObject()) {
+            return null;
+        }
+        return LogicalConversationRecord.fromJson(logicalConversations.getAsJsonObject(normalizedConversationId));
+    }
+
+    /**
+     * 删除指定逻辑会话元数据。
+     *
+     * @param logicalConversationId 逻辑会话唯一标识
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void deleteLogicalConversationRecord(String logicalConversationId) throws IOException {
+        String normalizedConversationId = normalizeConversationMetadataId(logicalConversationId);
+        if (normalizedConversationId == null) {
+            return;
+        }
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject logicalConversations = ensureCodexLogicalConversationsObject(codex);
+        logicalConversations.remove(normalizedConversationId);
+        writeConfig(config);
+    }
+
+    /**
+     * 保存运行时分段元数据。
+     * 该索引用于表达逻辑会话主干下的物理分段列表，后续历史聚合和上下文迁移都依赖它恢复顺序与父子关系。
+     *
+     * @param record 待保存的分段记录；传入 null 或无效记录时会忽略
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void saveConversationSegmentRecord(ConversationSegmentRecord record) throws IOException {
+        if (record == null || !record.isMeaningful()) {
+            return;
+        }
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject conversationSegments = ensureCodexConversationSegmentsObject(codex);
+        conversationSegments.add(record.getSessionId(), record.toJson());
+        writeConfig(config);
+    }
+
+    /**
+     * 读取指定物理分段元数据。
+     *
+     * @param sessionId 物理分段 sessionId/threadId
+     * @return 已保存的分段记录；不存在时返回 null
+     * @throws IOException 配置读取失败时抛出
+     */
+    public ConversationSegmentRecord getConversationSegmentRecord(String sessionId) throws IOException {
+        String normalizedSessionId = normalizeSessionBindingSessionId(sessionId);
+        if (normalizedSessionId == null) {
+            return null;
+        }
+        JsonObject config = readConfig();
+        if (!config.has("codex") || !config.get("codex").isJsonObject()) {
+            return null;
+        }
+        JsonObject codex = config.getAsJsonObject("codex");
+        if (!codex.has(CODEX_CONVERSATION_SEGMENTS_KEY) || !codex.get(CODEX_CONVERSATION_SEGMENTS_KEY).isJsonObject()) {
+            return null;
+        }
+        JsonObject conversationSegments = codex.getAsJsonObject(CODEX_CONVERSATION_SEGMENTS_KEY);
+        if (!conversationSegments.has(normalizedSessionId)
+                || !conversationSegments.get(normalizedSessionId).isJsonObject()) {
+            return null;
+        }
+        return ConversationSegmentRecord.fromJson(conversationSegments.getAsJsonObject(normalizedSessionId));
+    }
+
+    /**
+     * 列出指定逻辑会话下的全部分段记录，并按分段序号稳定排序。
+     * 之所以在服务层完成排序，是为了避免上层历史聚合和恢复链路在多个入口重复实现顺序规则。
+     *
+     * @param logicalConversationId 逻辑会话唯一标识
+     * @return 该逻辑会话下的分段列表；不存在时返回空列表
+     * @throws IOException 配置读取失败时抛出
+     */
+    public List<ConversationSegmentRecord> listConversationSegments(String logicalConversationId) throws IOException {
+        String normalizedConversationId = normalizeConversationMetadataId(logicalConversationId);
+        List<ConversationSegmentRecord> result = new ArrayList<>();
+        if (normalizedConversationId == null) {
+            return result;
+        }
+        JsonObject config = readConfig();
+        if (!config.has("codex") || !config.get("codex").isJsonObject()) {
+            return result;
+        }
+        JsonObject codex = config.getAsJsonObject("codex");
+        if (!codex.has(CODEX_CONVERSATION_SEGMENTS_KEY) || !codex.get(CODEX_CONVERSATION_SEGMENTS_KEY).isJsonObject()) {
+            return result;
+        }
+        JsonObject conversationSegments = codex.getAsJsonObject(CODEX_CONVERSATION_SEGMENTS_KEY);
+        for (Map.Entry<String, JsonElement> entry : conversationSegments.entrySet()) {
+            if (entry.getValue() == null || !entry.getValue().isJsonObject()) {
+                continue;
+            }
+            ConversationSegmentRecord record = ConversationSegmentRecord.fromJson(entry.getValue().getAsJsonObject());
+            if (normalizedConversationId.equals(record.getLogicalConversationId())) {
+                result.add(record);
+            }
+        }
+        result.sort((left, right) -> Integer.compare(left.getSegmentIndex(), right.getSegmentIndex()));
+        return result;
+    }
+
+    /**
+     * 删除指定分段元数据。
+     *
+     * @param sessionId 物理分段 sessionId/threadId
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void deleteConversationSegmentRecord(String sessionId) throws IOException {
+        String normalizedSessionId = normalizeSessionBindingSessionId(sessionId);
+        if (normalizedSessionId == null) {
+            return;
+        }
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject conversationSegments = ensureCodexConversationSegmentsObject(codex);
+        conversationSegments.remove(normalizedSessionId);
+        writeConfig(config);
+    }
+
+    /**
+     * 级联删除整条逻辑会话及其全部分段索引与会话绑定。
+     * 该入口服务于“删除一条历史会话”升级为逻辑会话语义后的清理链路，避免只删除最新分段而残留悬空索引。
+     *
+     * @param logicalConversationId 目标逻辑会话 id
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void deleteLogicalConversationCascade(String logicalConversationId) throws IOException {
+        String normalizedConversationId = normalizeConversationMetadataId(logicalConversationId);
+        if (normalizedConversationId == null) {
+            return;
+        }
+
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonObject logicalConversations = ensureCodexLogicalConversationsObject(codex);
+        JsonObject conversationSegments = ensureCodexConversationSegmentsObject(codex);
+        JsonObject sessionBindings = ensureCodexSessionBindingsObject(codex);
+
+        List<String> sessionIdsToDelete = new ArrayList<>();
+        for (Map.Entry<String, JsonElement> entry : conversationSegments.entrySet()) {
+            if (entry.getValue() == null || !entry.getValue().isJsonObject()) {
+                continue;
+            }
+            ConversationSegmentRecord record = ConversationSegmentRecord.fromJson(entry.getValue().getAsJsonObject());
+            if (normalizedConversationId.equals(record.getLogicalConversationId())
+                    && record.isMeaningful()) {
+                sessionIdsToDelete.add(record.getSessionId());
+            }
+        }
+
+        for (String sessionId : sessionIdsToDelete) {
+            conversationSegments.remove(sessionId);
+            sessionBindings.remove(sessionId);
+        }
+        logicalConversations.remove(normalizedConversationId);
+        writeConfig(config);
+    }
+
+    /**
+     * 更新逻辑会话层的标题与收藏元数据。
+     * 该方法保留 root/latest/segmentCount 等结构化字段，仅覆写当前调用明确指定的聚合元信息。
+     *
+     * @param logicalConversationId 目标逻辑会话 id
+     * @param title 新标题；传入 null 表示保持原值
+     * @param favorited 新收藏状态；传入 null 表示保持原值
+     * @param favoritedAt 收藏时间；仅在 favorited 非 null 时生效
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void updateLogicalConversationMetadata(
+            String logicalConversationId,
+            String title,
+            Boolean favorited,
+            Long favoritedAt
+    ) throws IOException {
+        LogicalConversationRecord existingRecord = getLogicalConversationRecord(logicalConversationId);
+        if (existingRecord == null || !existingRecord.isMeaningful()) {
+            return;
+        }
+
+        boolean nextFavorited = favorited != null ? favorited : existingRecord.isFavorited();
+        long nextFavoritedAt;
+        if (favorited != null) {
+            nextFavoritedAt = nextFavorited
+                    ? Math.max(0L, favoritedAt != null ? favoritedAt : System.currentTimeMillis())
+                    : 0L;
+        } else {
+            nextFavoritedAt = existingRecord.getFavoritedAt();
+        }
+
+        saveLogicalConversationRecord(new LogicalConversationRecord(
+                existingRecord.getLogicalConversationId(),
+                existingRecord.getRootSessionId(),
+                existingRecord.getLatestSessionId(),
+                title != null ? title : existingRecord.getTitle(),
+                existingRecord.getRuntimeFamily(),
+                existingRecord.getProvider(),
+                existingRecord.getLastModel(),
+                existingRecord.getSegmentCount(),
+                existingRecord.getCreatedAt(),
+                System.currentTimeMillis(),
+                nextFavorited,
+                nextFavoritedAt
+        ));
+    }
+
+    /**
      * 规范化 Codex 会话绑定使用的 sessionId。
      *
      * @param sessionId 原始 sessionId
@@ -2396,6 +2651,20 @@ public class CodemossSettingsService {
             return null;
         }
         return sessionId.trim();
+    }
+
+    /**
+     * 规范化逻辑会话相关元数据使用的标识。
+     * 该方法与 sessionId 规范化规则保持一致，统一收口空串与首尾空白，避免产生重复 key。
+     *
+     * @param metadataId 原始逻辑会话标识
+     * @return 去空白后的标识；为空时返回 null
+     */
+    private String normalizeConversationMetadataId(String metadataId) {
+        if (metadataId == null || metadataId.trim().isEmpty()) {
+            return null;
+        }
+        return metadataId.trim();
     }
 
     /**
@@ -2935,6 +3204,38 @@ public class CodemossSettingsService {
         JsonObject sessionBindings = new JsonObject();
         codex.add("sessionBindings", sessionBindings);
         return sessionBindings;
+    }
+
+    /**
+     * 确保 codex.logicalConversations 为对象节点。
+     * 该节点用于保存逻辑会话主记录，旧配置缺失该字段时这里统一补齐为空对象。
+     *
+     * @param codex codex 根配置对象
+     * @return 可直接写入的 logicalConversations 对象
+     */
+    private JsonObject ensureCodexLogicalConversationsObject(JsonObject codex) {
+        if (codex.has(CODEX_LOGICAL_CONVERSATIONS_KEY) && codex.get(CODEX_LOGICAL_CONVERSATIONS_KEY).isJsonObject()) {
+            return codex.getAsJsonObject(CODEX_LOGICAL_CONVERSATIONS_KEY);
+        }
+        JsonObject logicalConversations = new JsonObject();
+        codex.add(CODEX_LOGICAL_CONVERSATIONS_KEY, logicalConversations);
+        return logicalConversations;
+    }
+
+    /**
+     * 确保 codex.conversationSegments 为对象节点。
+     * 该节点用于保存逻辑会话主干下的物理分段索引，缺失时统一补齐为空对象。
+     *
+     * @param codex codex 根配置对象
+     * @return 可直接写入的 conversationSegments 对象
+     */
+    private JsonObject ensureCodexConversationSegmentsObject(JsonObject codex) {
+        if (codex.has(CODEX_CONVERSATION_SEGMENTS_KEY) && codex.get(CODEX_CONVERSATION_SEGMENTS_KEY).isJsonObject()) {
+            return codex.getAsJsonObject(CODEX_CONVERSATION_SEGMENTS_KEY);
+        }
+        JsonObject conversationSegments = new JsonObject();
+        codex.add(CODEX_CONVERSATION_SEGMENTS_KEY, conversationSegments);
+        return conversationSegments;
     }
 
     private JsonObject ensureRemoteCollabConfig(JsonObject config) {

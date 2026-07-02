@@ -4,7 +4,9 @@ import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.provider.claude.ClaudeHistoryReader;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
+import com.github.claudecodegui.session.ConversationSegmentRecord;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.intellij.openapi.application.ApplicationManager;
@@ -40,6 +42,10 @@ class HistoryExportService {
                 JsonObject exportRequest = new Gson().fromJson(content, JsonObject.class);
                 String sessionId = exportRequest.get("sessionId").getAsString();
                 String title = exportRequest.get("title").getAsString();
+                String logicalConversationId = exportRequest.has("logicalConversationId")
+                        && !exportRequest.get("logicalConversationId").isJsonNull()
+                        ? exportRequest.get("logicalConversationId").getAsString()
+                        : "";
 
                 String projectPath = context.getProject().getBasePath();
                 if (projectPath == null) {
@@ -55,8 +61,7 @@ class HistoryExportService {
                 String messagesJson;
                 if ("codex".equals(currentProvider)) {
                     LOG.info("[HistoryHandler] 使用 CodexHistoryReader 读取 Codex 会话消息");
-                    CodexHistoryReader codexReader = new CodexHistoryReader();
-                    messagesJson = codexReader.getSessionMessagesAsJson(sessionId);
+                    messagesJson = exportCodexConversationMessages(sessionId, logicalConversationId);
                 } else {
                     LOG.info("[HistoryHandler] 使用 ClaudeHistoryReader 读取 Claude 会话消息");
                     ClaudeHistoryReader historyReader = new ClaudeHistoryReader();
@@ -66,6 +71,9 @@ class HistoryExportService {
                 // Wrap messages into an object containing sessionId and title
                 JsonObject exportData = new JsonObject();
                 exportData.addProperty("sessionId", sessionId);
+                if (logicalConversationId != null && !logicalConversationId.trim().isEmpty()) {
+                    exportData.addProperty("logicalConversationId", logicalConversationId.trim());
+                }
                 exportData.addProperty("title", title);
                 exportData.add("messages", JsonParser.parseString(messagesJson));
 
@@ -111,5 +119,39 @@ class HistoryExportService {
                 });
             }
         });
+    }
+
+    /**
+     * 以逻辑会话语义导出 Codex 历史消息。
+     * 当 logicalConversationId 存在时，按分段顺序拼接整条会话；否则退回旧的单 session 导出语义。
+     *
+     * @param sessionId 代表分段 sessionId
+     * @param logicalConversationId 逻辑会话 id
+     * @return 可直接序列化的消息数组 JSON
+     */
+    private String exportCodexConversationMessages(String sessionId, String logicalConversationId) {
+        CodexHistoryReader codexReader = new CodexHistoryReader();
+        if (logicalConversationId == null || logicalConversationId.trim().isEmpty()) {
+            return codexReader.getSessionMessagesAsJson(sessionId);
+        }
+
+        JsonArray combinedMessages = new JsonArray();
+        try {
+            for (ConversationSegmentRecord segmentRecord
+                    : context.getSettingsService().listConversationSegments(logicalConversationId)) {
+                if (segmentRecord == null || segmentRecord.getSessionId().isEmpty()) {
+                    continue;
+                }
+                JsonArray segmentMessages = JsonParser
+                        .parseString(codexReader.getSessionMessagesAsJson(segmentRecord.getSessionId()))
+                        .getAsJsonArray();
+                segmentMessages.forEach(combinedMessages::add);
+            }
+        } catch (Exception e) {
+            LOG.warn("[HistoryHandler] Failed to export logical Codex conversation, fallback to representative session: "
+                    + logicalConversationId + " - " + e.getMessage());
+            return codexReader.getSessionMessagesAsJson(sessionId);
+        }
+        return new Gson().toJson(combinedMessages);
     }
 }

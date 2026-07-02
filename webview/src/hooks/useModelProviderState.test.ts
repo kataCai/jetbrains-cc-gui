@@ -242,7 +242,7 @@ describe('useModelProviderState', () => {
     expect(sendBridgeEvent).toHaveBeenCalledWith('set_model', 'gpt-5.5');
   });
 
-  it('requests a new codex conversation when switching provider or model', () => {
+  it('requests a continued codex segment payload when switching provider or model', () => {
     const onCodexConversationConfigChanged = vi.fn();
     const { result } = renderHook(() => useModelProviderState({
       addToast: vi.fn(),
@@ -255,11 +255,25 @@ describe('useModelProviderState', () => {
     });
 
     act(() => {
+      result.current.setActiveCodexProviderId('managed-buycode');
       result.current.handleModelSelect('gpt-5.4');
     });
 
-    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
-    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('model');
+    const calls = onCodexConversationConfigChanged.mock.calls.map(([payload]) => payload);
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        switchReason: 'provider',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: expect.any(String),
+      }),
+      expect.objectContaining({
+        switchReason: 'model',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: 'gpt-5.4',
+      }),
+    ]));
   });
 
   it('does not reset the current codex tab when global active provider changes elsewhere', () => {
@@ -308,12 +322,26 @@ describe('useModelProviderState', () => {
     });
 
     expect(tabA.result.current.currentProvider).toBe('codex');
-    expect(tabAConversationChanged).toHaveBeenCalledWith('provider');
-    expect(tabAConversationChanged).toHaveBeenCalledWith('model');
+    expect(tabAConversationChanged).toHaveBeenCalledWith(expect.objectContaining({
+      switchReason: 'provider',
+      targetProvider: 'codex',
+    }));
+    expect(tabAConversationChanged).toHaveBeenCalledWith(expect.objectContaining({
+      switchReason: 'model',
+      targetCodexProviderId: 'managed-openai',
+      targetModel: 'gpt-5.4',
+    }));
 
     expect(tabB.result.current.currentProvider).toBe('codex');
-    expect(tabBConversationChanged).toHaveBeenCalledWith('provider');
-    expect(tabBConversationChanged).toHaveBeenCalledWith('model');
+    expect(tabBConversationChanged).toHaveBeenCalledWith(expect.objectContaining({
+      switchReason: 'provider',
+      targetProvider: 'codex',
+    }));
+    expect(tabBConversationChanged).toHaveBeenCalledWith(expect.objectContaining({
+      switchReason: 'model',
+      targetCodexProviderId: 'managed-minimax',
+      targetModel: 'MiniMax-M3',
+    }));
 
     expect(sendBridgeEvent).toHaveBeenCalledWith(
       'select_codex_model',
@@ -366,7 +394,14 @@ describe('useModelProviderState', () => {
         targetModelId: 'MiniMax-M3',
       }),
     );
-    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('provider');
-    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith('model');
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith(expect.objectContaining({
+      switchReason: 'provider',
+      targetProvider: 'codex',
+    }));
+    expect(onCodexConversationConfigChanged).toHaveBeenCalledWith(expect.objectContaining({
+      switchReason: 'model',
+      targetCodexProviderId: 'managed-minimax',
+      targetModel: 'MiniMax-M3',
+    }));
   });
 });

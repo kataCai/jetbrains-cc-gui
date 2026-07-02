@@ -760,6 +760,7 @@ public class ClaudeChatWindow {
             public void onSessionIdReceived(String newSessionId) {
                 super.onSessionIdReceived(newSessionId);
                 sessionId = newSessionId;
+                sessionLifecycleManager.onSessionIdAssigned(newSessionId);
                 tabSessionRestoreState.markRestoreFinished(newSessionId);
                 persistTabSessionState();
             }
@@ -865,6 +866,11 @@ public class ClaudeChatWindow {
                 session.getState().getCodexSessionBinding()
         );
         snapshot.sessionId = session.getSessionId();
+        snapshot.logicalConversationId = session.getState().getLogicalConversationId();
+        snapshot.activeSegmentSessionId = session.getState().getActiveSegmentSessionId();
+        snapshot.parentSegmentSessionId = session.getState().getParentSegmentSessionId();
+        snapshot.continuationPending = session.getState().isContinuationPending();
+        snapshot.continuationSourceSessionId = session.getState().getContinuationSourceSessionId();
         snapshot.cwd = session.getCwd();
         snapshot.model = session.getModel();
         snapshot.permissionMode = session.getPermissionMode();
@@ -950,6 +956,11 @@ public class ClaudeChatWindow {
         return Objects.equals(normalizeValue(persistedState.provider), normalizeValue(snapshot.provider))
                 && Objects.equals(normalizeValue(persistedState.getEffectiveRuntimeFamily()), normalizeValue(snapshot.getEffectiveRuntimeFamily()))
                 && Objects.equals(normalizeValue(persistedState.sessionId), normalizeValue(snapshot.sessionId))
+                && Objects.equals(normalizeValue(persistedState.logicalConversationId), normalizeValue(snapshot.logicalConversationId))
+                && Objects.equals(normalizeValue(persistedState.activeSegmentSessionId), normalizeValue(snapshot.activeSegmentSessionId))
+                && Objects.equals(normalizeValue(persistedState.parentSegmentSessionId), normalizeValue(snapshot.parentSegmentSessionId))
+                && persistedState.continuationPending == snapshot.continuationPending
+                && Objects.equals(normalizeValue(persistedState.continuationSourceSessionId), normalizeValue(snapshot.continuationSourceSessionId))
                 && Objects.equals(normalizeValue(persistedState.cwd), normalizeValue(snapshot.cwd))
                 && Objects.equals(normalizeValue(persistedState.model), normalizeValue(snapshot.model))
                 && Objects.equals(normalizeValue(persistedState.permissionMode), normalizeValue(snapshot.permissionMode))

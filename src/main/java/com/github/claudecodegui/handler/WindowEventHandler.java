@@ -16,7 +16,7 @@ public class WindowEventHandler extends BaseMessageHandler {
     private static final Logger LOG = Logger.getInstance(WindowEventHandler.class);
     private static final String[] SUPPORTED_TYPES = {
         "heartbeat", "tab_loading_changed", "tab_status_changed",
-        "create_new_session", "frontend_ready", "refresh_slash_commands"
+        "create_new_session", "create_continued_segment", "frontend_ready", "refresh_slash_commands"
     };
 
     /**
@@ -27,6 +27,7 @@ public class WindowEventHandler extends BaseMessageHandler {
         void onTabLoadingChanged(boolean loading);
         void onTabStatusChanged(String status);
         void onCreateNewSession();
+        void onCreateContinuedSegment(String payloadJson);
         void onFrontendReady();
         void onRefreshSlashCommands();
     }
@@ -52,6 +53,9 @@ public class WindowEventHandler extends BaseMessageHandler {
                 return true;
             case "create_new_session":
                 callback.onCreateNewSession();
+                return true;
+            case "create_continued_segment":
+                callback.onCreateContinuedSegment(content);
                 return true;
             case "frontend_ready":
                 callback.onFrontendReady();
