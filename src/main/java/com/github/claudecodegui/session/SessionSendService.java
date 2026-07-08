@@ -189,6 +189,71 @@ public class SessionSendService {
     }
 
     /**
+     * 统一格式化当前全局 active Codex provider 的摘要，便于和 session binding 做并排对比。
+     * 这里只输出排查分叉所需的最小字段，避免日志误打出敏感凭据。
+     *
+     * @param activeProvider 当前全局 active Codex provider，允许为 null
+     * @return 适合直接拼接到 trace 日志里的稳定文本
+     */
+    public static String describeActiveCodexProviderForTrace(JsonObject activeProvider) {
+        if (activeProvider == null || activeProvider.size() == 0) {
+            return "(null)";
+        }
+        return "{providerId=" + readJsonString(activeProvider, "id")
+                + ", authMode=" + readJsonString(activeProvider, "authMode")
+                + ", requestMode=" + readJsonString(activeProvider, "requestMode")
+                + ", isCliLoginProvider=" + activeProvider.has("isCodexCliLoginProvider")
+                + "}";
+    }
+
+    /**
+     * 判断当前全局 active provider 与会话 binding 是否一致。
+     * 该结论仅用于回归排查日志，帮助确认“全局状态”和“请求级绑定”是否已经出现分叉。
+     *
+     * @param binding 当前会话绑定
+     * @param activeProvider 当前全局 active provider
+     * @return `matched`、`binding_missing`、`active_provider_missing` 或 `diverged`
+     */
+    public static String determineCodexProviderConsistencyForTrace(
+            CodexSessionBinding binding,
+            JsonObject activeProvider
+    ) {
+        String bindingProviderId = binding == null ? "" : safeTrim(binding.getProviderId());
+        String activeProviderId = readJsonString(activeProvider, "id");
+        if (bindingProviderId.isEmpty()) {
+            return "binding_missing";
+        }
+        if (activeProviderId.isEmpty()) {
+            return "active_provider_missing";
+        }
+        return bindingProviderId.equals(activeProviderId) ? "matched" : "diverged";
+    }
+
+    /**
+     * 读取 JsonObject 中的字符串字段并统一做空白归一化，供 trace 工具方法复用。
+     *
+     * @param object 待读取的 JsonObject，允许为 null
+     * @param key 目标字段名
+     * @return 去首尾空白后的字段值；字段不存在时返回空串
+     */
+    private static String readJsonString(JsonObject object, String key) {
+        if (object == null || key == null || !object.has(key) || object.get(key).isJsonNull()) {
+            return "";
+        }
+        return safeTrim(object.get(key).getAsString());
+    }
+
+    /**
+     * 统一裁剪 trace 使用的可空字符串，避免日志中出现 null 干扰排查。
+     *
+     * @param value 原始字符串
+     * @return 去首尾空白后的值；为 null 时返回空串
+     */
+    private static String safeTrim(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    /**
      * 归一化判定当前运行时 profile 的来源，用于日志与测试共享同一套语义。
      * 当 session binding 中存在有效 providerId，且解析后的 profile 也命中同一 provider 时，
      * 视为“命中 session_binding”；其余场景统一视为“回退 active_provider”。
@@ -253,13 +318,21 @@ public class SessionSendService {
         String finalInput = (input != null ? input : "") + contextAppend;
         CodexRuntimeProfile runtimeProfile;
         try {
+            CodemossSettingsService traceSettingsService = new CodemossSettingsService();
+            JsonObject activeCodexProviderForTrace = traceSettingsService.getActiveCodexProvider();
+            String providerConsistency = determineCodexProviderConsistencyForTrace(
+                    state.getCodexSessionBinding(),
+                    activeCodexProviderForTrace
+            );
             LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendToCodex start sessionId="
                     + safe(state.getSessionId())
                     + ", provider=" + safe(state.getProvider())
                     + ", model=" + safe(state.getModel())
                     + ", reasoningEffort=" + safe(state.getReasoningEffort())
                     + ", permissionMode=" + safe(effectivePermissionMode)
-                    + ", binding=" + describeCodexBindingForTrace(state.getCodexSessionBinding()));
+                    + ", binding=" + describeCodexBindingForTrace(state.getCodexSessionBinding())
+                    + ", activeProvider=" + describeActiveCodexProviderForTrace(activeCodexProviderForTrace)
+                    + ", providerConsistency=" + providerConsistency);
             // 每次发送前都重新解析运行时 profile，避免切换 provider 后继续复用旧配置。
             // 如果当前会话已经绑定过特定 Codex provider，则优先命中该绑定。
             runtimeProfile = resolveCodexRuntimeProfile();

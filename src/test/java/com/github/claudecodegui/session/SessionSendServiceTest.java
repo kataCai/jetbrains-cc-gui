@@ -123,4 +123,30 @@ public class SessionSendServiceTest {
                 SessionSendService.determineCodexRuntimeProfileTraceSource(null, profile)
         );
     }
+
+    /**
+     * 验证全局 active provider 与会话 binding 分叉时，trace 工具方法会明确返回 `diverged`。
+     * 该断言用于保护后续诊断日志，确保排查时能够一眼看出“全局状态”和“请求级绑定”是否已经不一致。
+     */
+    @Test
+    public void shouldMarkProviderConsistencyAsDivergedWhenBindingAndActiveProviderDiffer() {
+        CodexSessionBinding binding = new CodexSessionBinding(
+                "managed-minimax",
+                "MiniMax-M3",
+                "codex_sdk",
+                "provider",
+                "managed_provider"
+        );
+        com.google.gson.JsonObject activeProvider = new com.google.gson.JsonObject();
+        activeProvider.addProperty("id", "__codex_cli_login__");
+        activeProvider.addProperty("authMode", CodexRuntimeProfile.AUTH_MODE_CLI_LOGIN);
+        activeProvider.addProperty("requestMode", "codex_sdk");
+        activeProvider.addProperty("isCodexCliLoginProvider", true);
+
+        assertEquals(
+                "diverged",
+                SessionSendService.determineCodexProviderConsistencyForTrace(binding, activeProvider)
+        );
+        assertTrue(SessionSendService.describeActiveCodexProviderForTrace(activeProvider).contains("providerId=__codex_cli_login__"));
+    }
 }
