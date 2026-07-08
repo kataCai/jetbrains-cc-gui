@@ -1098,6 +1098,20 @@ public class CodexSDKBridge extends BaseSDKBridge {
         return value == null ? "" : value.trim();
     }
 
+    /**
+     * 基于当前请求解析出的运行时 profile 构建写给 Node bridge 的 stdin 载荷。
+     * 这里必须始终以请求级 `effectiveProfile` 为准决定是否清空 `apiKey/baseUrl`，
+     * 不能复用全局 active provider 的 CLI Login 状态，否则历史会话绑定到托管 provider 时，
+     * 会被错误清空 request-scoped 凭据并再次触发 `Missing environment variable: CODEX_API_KEY`。
+     *
+     * @param finalMessage 当前要发送给 Codex 的最终消息体
+     * @param threadId 当前会话 threadId，首条消息阶段允许为空
+     * @param cwd 当前请求工作目录
+     * @param permissionMode 当前请求生效的权限模式
+     * @param effectiveProfile 当前请求真正命中的运行时 profile
+     * @param globalCliLoginActive 当前全局 active provider 是否仍是 CLI Login；仅用于诊断日志，不参与凭据清空判断
+     * @return 可直接写入 Node stdin 的请求级 JSON 载荷
+     */
     JsonObject buildStdinInput(
             String finalMessage,
             String threadId,
@@ -1126,16 +1140,30 @@ public class CodexSDKBridge extends BaseSDKBridge {
         stdinInput.addProperty("localCodexModelProvider", effectiveProfile.getLocalCodexModelProvider());
         stdinInput.addProperty("localConfigConflictDetected", effectiveProfile.isLocalConfigConflictDetected());
         stdinInput.addProperty("finalModelProvider", effectiveProfile.getFinalModelProvider());
+        boolean hasApiKeyBeforeMask = !safe(effectiveProfile.getApiKey()).isEmpty();
+        boolean hasBaseUrlBeforeMask = !safe(effectiveProfile.getBaseUrl()).isEmpty();
+        // 中文注释：是否清空 stdin 中的凭据只能看当前请求命中的 runtime profile，
+        // 不能因为全局 active provider 恰好停留在 CLI Login，就把历史会话绑定的托管 provider 凭据一并清掉。
+        boolean requestScopedCliLogin = effectiveProfile.isCodexCliLogin();
+        String maskReason = requestScopedCliLogin ? "request_scoped_cli_login" : "keep_request_scoped_credentials";
 
-        // CLI Login 使用 SDK 原生 OAuth，必须清空请求级 endpoint 和 key，避免继承 managed provider 凭据。
-        boolean isCodexCliLogin = effectiveProfile.isCodexCliLogin() || globalCliLoginActive;
-        if (isCodexCliLogin) {
+        // CLI Login 请求仍然需要清空请求级 endpoint 和 key，交给 SDK 原生 OAuth 处理。
+        if (requestScopedCliLogin) {
             stdinInput.addProperty("baseUrl", "");
             stdinInput.addProperty("apiKey", "");
         } else {
             stdinInput.addProperty("baseUrl", effectiveProfile.getBaseUrl());
             stdinInput.addProperty("apiKey", effectiveProfile.getApiKey());
         }
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " CodexSDKBridge.buildStdinInput"
+                + " requestScopedCliLogin=" + requestScopedCliLogin
+                + ", globalCliLoginActive=" + globalCliLoginActive
+                + ", effectiveConfigSource=" + safe(effectiveProfile.getEffectiveConfigSource())
+                + ", hasApiKeyBeforeMask=" + hasApiKeyBeforeMask
+                + ", hasApiKeyAfterMask=" + !safe(stdinInput.get("apiKey").getAsString()).isEmpty()
+                + ", hasBaseUrlBeforeMask=" + hasBaseUrlBeforeMask
+                + ", hasBaseUrlAfterMask=" + !safe(stdinInput.get("baseUrl").getAsString()).isEmpty()
+                + ", maskReason=" + maskReason);
         return stdinInput;
     }
 }
