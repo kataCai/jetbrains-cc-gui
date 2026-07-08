@@ -1,10 +1,11 @@
 import { act, renderHook } from '@testing-library/react';
 import { useSessionManagement } from './useSessionManagement.js';
 import type { HistoryData } from '../types/index.js';
-import { debugLog } from '../utils/debug.js';
+import { debugLog, emitFrontendDiagnosticLog } from '../utils/debug.js';
 
 vi.mock('../utils/debug.js', () => ({
   debugLog: vi.fn(),
+  emitFrontendDiagnosticLog: vi.fn(),
 }));
 
 describe('useSessionManagement', () => {
@@ -15,6 +16,8 @@ describe('useSessionManagement', () => {
     setMessages: vi.fn(),
     setCurrentView: vi.fn(),
     setCurrentSessionId: vi.fn(),
+    setContinuationPending: vi.fn(),
+    setContinuationSourceSessionId: vi.fn(),
     setCustomSessionTitle: vi.fn(),
     setUsagePercentage: vi.fn(),
     setUsageUsedTokens: vi.fn(),
@@ -32,6 +35,11 @@ describe('useSessionManagement', () => {
     window.__sessionTransitioning = false;
     window.__sessionTransitionToken = null;
     window.__pendingSessionTransitionToast = undefined;
+    window.__resetTransientUiState = undefined;
+    window.__continuedSegmentFirstSnapshotSessionId = null;
+    window.__continuedSegmentHistoryPrefixMessages = null;
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingTailMessages = null;
     window.sendToJava = vi.fn();
   });
 
@@ -62,6 +70,8 @@ describe('useSessionManagement', () => {
     expect(mocks.setStreamingActive).toHaveBeenCalledWith(false);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
     expect(mocks.setCustomSessionTitle).toHaveBeenCalledWith(null);
     expect(mocks.setUsagePercentage).toHaveBeenCalledWith(0);
     expect(mocks.setUsageUsedTokens).toHaveBeenCalledWith(undefined);
@@ -335,6 +345,8 @@ describe('useSessionManagement', () => {
     expect(mocks.clearToasts).toHaveBeenCalledTimes(1);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
     expect(mocks.setUsagePercentage).toHaveBeenCalledWith(0);
     expect(mocks.setUsageUsedTokens).toHaveBeenCalledWith(undefined);
   });
@@ -362,6 +374,8 @@ describe('useSessionManagement', () => {
     expect(window.__sessionTransitioning).toBe(true);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
   });
 
   it('createContinuedSegment keeps current messages and sends runtime switch payload instead of creating a blank session', () => {
@@ -393,10 +407,157 @@ describe('useSessionManagement', () => {
     expect(window.__sessionTransitionToken).toBeTruthy();
     expect(mocks.setMessages).not.toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(true);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith('codex-session-1');
     expect(window.sendToJava).toHaveBeenCalledWith(
       'create_continued_segment:{"sourceSessionId":"codex-session-1","targetProvider":"codex","targetRuntimeFamily":"codex","targetModel":"gpt-5.4","targetReasoningEffort":"medium","targetCodexProviderId":"managed-buycode","switchReason":"model"}'
     );
     expect(window.sendToJava).not.toHaveBeenCalledWith('create_new_session:');
+  });
+
+  it('createContinuedSegment preserves visible history prefix after transient reset', () => {
+    const mocks = createMocks();
+    const visibleMessages = [
+      { type: 'user' as const, content: '1+1=？', timestamp: '2026-07-03T10:00:00.000Z' },
+      { type: 'assistant' as const, content: '2', timestamp: '2026-07-03T10:00:01.000Z' },
+    ];
+    const resetTransientUiState = vi.fn(() => {
+      // 中文注释：模拟真实 reset 会清理 continued prefix cache 的旧行为；
+      // 测试目标是确认 createContinuedSegment 会在 reset 之后重新写入前缀。
+      window.__continuedSegmentFirstSnapshotSessionId = null;
+      window.__continuedSegmentHistoryPrefixMessages = null;
+      window.__continuedSegmentHistoryPrefixSessionId = null;
+    });
+    window.__resetTransientUiState = resetTransientUiState;
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: visibleMessages,
+        loading: false,
+        historyData: null,
+        currentSessionId: 'codex-session-1',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.createContinuedSegment({
+        switchReason: 'model',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: 'gpt-5.4',
+      });
+    });
+
+    expect(resetTransientUiState).toHaveBeenCalledWith({ preserveContinuedPrefix: true });
+    expect(window.__continuedSegmentHistoryPrefixMessages).toEqual(visibleMessages);
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBeNull();
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBeNull();
+  });
+
+  it('createContinuedSegment prefers active segment anchors over the transient currentSessionId', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [{ type: 'assistant', content: 'existing context', timestamp: new Date().toISOString() }],
+        loading: false,
+        historyData: null,
+        currentSessionId: 'stale-segment-001',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.createContinuedSegment({
+        switchReason: 'provider',
+        targetProvider: 'claude',
+        targetRuntimeFamily: 'claude',
+        targetModel: 'claude-sonnet-4-6',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'active-segment-002',
+        continuationSourceSessionId: 'source-segment-001',
+        sourceSessionId: 'stale-segment-001',
+      });
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'create_continued_segment:{"sourceSessionId":"active-segment-002","logicalConversationId":"logical-001","targetProvider":"claude","targetRuntimeFamily":"claude","targetModel":"claude-sonnet-4-6","switchReason":"provider"}'
+    );
+  });
+
+  it('createContinuedSegment emits diagnostic trace with resolved continuation anchors', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [{ type: 'assistant', content: 'existing context', timestamp: new Date().toISOString() }],
+        loading: false,
+        historyData: null,
+        currentSessionId: 'stale-segment-001',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.createContinuedSegment({
+        switchReason: 'provider',
+        targetProvider: 'claude',
+        targetRuntimeFamily: 'claude',
+        targetModel: 'claude-sonnet-4-6',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'active-segment-002',
+        continuationSourceSessionId: 'source-segment-001',
+        sourceSessionId: 'stale-segment-001',
+      });
+    });
+
+    expect(emitFrontendDiagnosticLog).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'createContinuedSegment request',
+      expect.objectContaining({
+        switchReason: 'provider',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'active-segment-002',
+        continuationSourceSessionId: 'source-segment-001',
+        requestSourceSessionId: 'stale-segment-001',
+        currentSessionId: 'stale-segment-001',
+        resolvedSourceSessionId: 'active-segment-002',
+      }),
+    );
+  });
+
+  it('createContinuedSegment immediately primes local continuation metadata from the resolved source anchor', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [{ type: 'assistant', content: 'existing context', timestamp: new Date().toISOString() }],
+        loading: false,
+        historyData: null,
+        currentSessionId: 'stale-segment-001',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.createContinuedSegment({
+        switchReason: 'provider',
+        targetProvider: 'claude',
+        targetRuntimeFamily: 'claude',
+        targetModel: 'claude-sonnet-4-6',
+        activeSegmentSessionId: 'active-segment-002',
+        continuationSourceSessionId: 'source-segment-001',
+        sourceSessionId: 'stale-segment-001',
+      });
+    });
+
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(true);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith('active-segment-002');
   });
 
   it('loadHistorySession writes codex runtime trace with logical conversation context', () => {
@@ -534,6 +695,8 @@ describe('useSessionManagement', () => {
     expect(mocks.clearToasts).toHaveBeenCalledTimes(1);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
     expect(window.sendToJava).toHaveBeenCalledWith('create_new_session:');
     expect(result.current.showNewSessionConfirm).toBe(false);
   });
@@ -569,6 +732,8 @@ describe('useSessionManagement', () => {
     expect(mocks.clearToasts).toHaveBeenCalledTimes(1);
     expect(mocks.setMessages).toHaveBeenCalledWith([]);
     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
   });
 
   it('loadHistorySession without loading state does not send interrupt', () => {
@@ -873,6 +1038,30 @@ describe('useSessionManagement', () => {
 
     expect(window.sendToJava).toHaveBeenCalledWith(
       'sync_current_tab_title:{"title":"临时标题"}'
+    );
+  });
+
+  it('updateHistoryTitle forwards the current logicalConversationId when history list has not caught up yet', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [],
+        loading: false,
+        historyData: null,
+        currentSessionId: 'segment-002',
+        logicalConversationId: 'logical-001',
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.updateHistoryTitle('segment-002', '继续后的新标题');
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'update_title:{"sessionId":"segment-002","logicalConversationId":"logical-001","customTitle":"继续后的新标题"}'
     );
   });
 

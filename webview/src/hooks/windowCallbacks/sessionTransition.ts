@@ -31,12 +31,24 @@ export interface ResetTransientUiStateOptions {
 }
 
 /**
- * Clear all transient UI state (streaming refs + React state flags).
- * Called on clearMessages and exposed as window.__resetTransientUiState so
- * useSessionManagement can invoke it synchronously during session transitions.
+ * 单次 transient reset 的运行选项。
+ * 目前仅 continued 切段会要求保留前缀缓存；普通新建、历史恢复和删除重建仍应清理缓存，
+ * 避免旧逻辑会话前缀跨会话误拼接。
+ */
+export interface ResetTransientUiStateRunOptions {
+  preserveContinuedPrefix?: boolean;
+}
+
+/**
+ * 清理瞬时 UI 状态与流式渲染引用。
+ * 调用方可在 continued 切段场景通过 `preserveContinuedPrefix` 保留前缀缓存；
+ * 其他会话切换路径默认清理 continued 缓存，避免 stale prefix 污染独立会话。
+ *
+ * @param opts React setter 与流式状态引用
+ * @return 可挂载到 window 上的同步 reset 函数
  */
 export const buildResetTransientUiState = (opts: ResetTransientUiStateOptions) => {
-  return () => {
+  return (runOptions: ResetTransientUiStateRunOptions = {}) => {
     opts.clearToasts();
     opts.setStatus('');
     opts.setLoading(false);
@@ -59,6 +71,19 @@ export const buildResetTransientUiState = (opts: ResetTransientUiStateOptions) =
     // 清理尚未消费的历史恢复快照上下文，避免跨会话误复用。
     window.__preparedHistoryRestoreKey = null;
     window.__preparedHistoryRestoreSignature = null;
+    if (!runOptions.preserveContinuedPrefix) {
+      // 中文注释：普通 session transition 复位时必须同时清掉 continued segment 的前缀缓存，
+      // 否则旧分段消息可能在后续独立会话或历史恢复里被错误拼回界面。
+      window.__continuedSegmentFirstSnapshotSessionId = null;
+      window.__continuedSegmentHistoryPrefixMessages = null;
+      window.__continuedSegmentHistoryPrefixSessionId = null;
+      window.__continuedSegmentPendingTailMessages = null;
+      window.__continuedSegmentPendingSourceSessionId = null;
+      window.__continuedSegmentPendingLogicalConversationId = null;
+      window.__continuedSegmentPendingCreatedAt = null;
+      window.__continuedSegmentPendingReason = null;
+      window.__continuedSegmentAwaitingFirstSessionId = false;
+    }
     if (opts.contentUpdateTimeoutRef.current != null) {
       cancelAnimationFrame(opts.contentUpdateTimeoutRef.current);
       opts.contentUpdateTimeoutRef.current = null;

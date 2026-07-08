@@ -168,6 +168,26 @@ public class HistoryMessageInjectorTest {
     }
 
     /**
+     * 验证 provider 双录用户消息在时间戳不完全一致时，也会优先按稳定 source identity 去重。
+     * 这样 continued authoritative restore 回刷时，就不会因为前后端时间源不同而把同一条用户消息重复显示两次。
+     */
+    @Test
+    public void convertCodexMessagesDeduplicatesAdjacentUserMessagesByStableSourceIdentity() {
+        JsonArray messages = new JsonArray();
+        messages.add(responseItemUserMessage("2026-04-30T09:40:26.701Z", "hello", "msg-001"));
+        messages.add(eventUserMessageWithSourceId("2026-04-30T09:40:27.701Z", "hello", "msg-001"));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+
+        assertEquals(1, result.size());
+        assertEquals("hello", result.get(0).get("content").getAsString());
+        assertEquals("user|source=msg-001", result.get(0)
+                .getAsJsonObject("messageIdentity")
+                .get("key")
+                .getAsString());
+    }
+
+    /**
      * 验证恢复逻辑会话时，会在跨分段边界处插入系统提示消息。
      * 该提示用于向用户明确说明当前上下文已经从旧 provider/model 继续到了新的运行分段，避免误以为底层 thread 从未变化。
      */
@@ -181,16 +201,117 @@ public class HistoryMessageInjectorTest {
         List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(
                 List.of(firstSegment, secondSegment),
                 List.of(
-                        new ConversationSegmentRecord("segment-001", "logical-001", "", 0, "codex-cli-login", "codex", "gpt-5.4", "medium", "initial", "none", 1714460426701L),
-                        new ConversationSegmentRecord("segment-002", "logical-001", "segment-001", 1, "buycode", "codex", "gpt-5.4", "medium", "runtime_switch:provider", "session_summary", 1714460486701L)
+                        new ConversationSegmentRecord(
+                                "segment-001", "logical-001", "", 0, "codex-cli-login", "codex", "gpt-5.4",
+                                "medium", "initial", "none", 1714460426701L, "codex-cli-login", "官方 CLI 登录"
+                        ),
+                        new ConversationSegmentRecord(
+                                "segment-002", "logical-001", "segment-001", 1, "buycode", "codex", "gpt-5.4",
+                                "medium", "runtime_switch:provider", "session_summary", 1714460486701L, "managed-buycode", "BuyCode"
+                        )
                 )
         );
 
         assertEquals(3, result.size());
         assertEquals("user", result.get(0).get("type").getAsString());
         assertEquals("system", result.get(1).get("type").getAsString());
-        assertTrue(result.get(1).get("content").getAsString().contains("buycode"));
+        assertEquals("已切换到 codex / BuyCode / gpt-5.4 继续当前会话。", result.get(1).get("content").getAsString());
         assertEquals("user", result.get(2).get("type").getAsString());
+    }
+
+    /**
+     * 验证跨多个 continued 分段聚合历史时，后端会为每条消息补齐稳定顺序与分段元数据，
+     * 让前端 authoritative restore 直接按后端数组顺序渲染，而不是再次依赖 timestamp 重排。
+     */
+    @Test
+    public void convertCodexMessagesShouldAnnotateStableMetadataAcrossMultipleSegments() {
+        JsonArray firstSegment = new JsonArray();
+        firstSegment.add(eventUserMessageWithSourceId("2026-04-30T09:40:26.701Z", "first user", "msg-001"));
+        JsonArray secondSegment = new JsonArray();
+        secondSegment.add(eventUserMessageWithSourceId("2026-04-30T09:41:26.701Z", "second user", "msg-002"));
+        JsonArray thirdSegment = new JsonArray();
+        thirdSegment.add(eventUserMessageWithSourceId("2026-04-30T09:42:26.701Z", "third user", "msg-003"));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(
+                List.of(firstSegment, secondSegment, thirdSegment),
+                List.of(
+                        new ConversationSegmentRecord(
+                                "segment-001", "logical-001", "", 0, "codex-cli-login", "codex", "gpt-5.4",
+                                "medium", "initial", "none", 1714460426701L, "codex-cli-login", "Official CLI"
+                        ),
+                        new ConversationSegmentRecord(
+                                "segment-002", "logical-001", "segment-001", 1, "buycode", "codex", "gpt-5.4",
+                                "medium", "runtime_switch:provider", "session_summary", 1714460486701L, "managed-buycode", "BuyCode"
+                        ),
+                        new ConversationSegmentRecord(
+                                "segment-003", "logical-001", "segment-002", 2, "buycode", "codex", "gpt-5.5",
+                                "medium", "runtime_switch:model", "session_summary", 1714460546701L, "managed-buycode", "BuyCode"
+                        )
+                )
+        );
+
+        assertEquals(5, result.size());
+
+        JsonObject firstUser = result.get(0);
+        assertEquals("user", firstUser.get("type").getAsString());
+        assertEquals(0, firstUser.get("logicalOrder").getAsInt());
+        assertEquals(0, firstUser.get("segmentIndex").getAsInt());
+        assertEquals("segment-001", firstUser.get("segmentSessionId").getAsString());
+        assertEquals(0, firstUser.get("segmentLocalIndex").getAsInt());
+        assertEquals(0, firstUser.getAsJsonObject("raw").get("logicalOrder").getAsInt());
+        assertEquals("user|source=msg-001", firstUser.getAsJsonObject("messageIdentity").get("key").getAsString());
+
+        JsonObject firstBoundary = result.get(1);
+        assertEquals("system", firstBoundary.get("type").getAsString());
+        assertEquals(1, firstBoundary.get("logicalOrder").getAsInt());
+        assertEquals(1, firstBoundary.get("segmentIndex").getAsInt());
+        assertEquals("segment-002", firstBoundary.get("segmentSessionId").getAsString());
+        assertEquals("system", firstBoundary.getAsJsonObject("messageIdentity").get("role").getAsString());
+
+        JsonObject secondUser = result.get(2);
+        assertEquals("user", secondUser.get("type").getAsString());
+        assertEquals(2, secondUser.get("logicalOrder").getAsInt());
+        assertEquals(1, secondUser.get("segmentIndex").getAsInt());
+        assertEquals("segment-002", secondUser.get("segmentSessionId").getAsString());
+        assertEquals(0, secondUser.get("segmentLocalIndex").getAsInt());
+        assertEquals("user|source=msg-002", secondUser.getAsJsonObject("messageIdentity").get("key").getAsString());
+
+        JsonObject secondBoundary = result.get(3);
+        assertEquals("system", secondBoundary.get("type").getAsString());
+        assertEquals(3, secondBoundary.get("logicalOrder").getAsInt());
+        assertEquals(2, secondBoundary.get("segmentIndex").getAsInt());
+        assertEquals("segment-003", secondBoundary.get("segmentSessionId").getAsString());
+
+        JsonObject thirdUser = result.get(4);
+        assertEquals("user", thirdUser.get("type").getAsString());
+        assertEquals(4, thirdUser.get("logicalOrder").getAsInt());
+        assertEquals(2, thirdUser.get("segmentIndex").getAsInt());
+        assertEquals("segment-003", thirdUser.get("segmentSessionId").getAsString());
+        assertEquals(0, thirdUser.get("segmentLocalIndex").getAsInt());
+        assertEquals("user|source=msg-003", thirdUser.getAsJsonObject("messageIdentity").get("key").getAsString());
+    }
+
+    /**
+     * 验证旧分段记录缺失 Codex provider 扩展字段时，边界提示仍会回退到旧的 provider/model 语义。
+     * 该测试用于约束历史兼容性，避免升级后旧数据恢复直接失去边界提示。
+     */
+    @Test
+    public void convertCodexMessagesShouldFallbackBoundaryMessageForLegacySegmentRecord() {
+        JsonArray firstSegment = new JsonArray();
+        firstSegment.add(eventUserMessage("2026-04-30T09:40:26.701Z", "first user"));
+        JsonArray secondSegment = new JsonArray();
+        secondSegment.add(eventUserMessage("2026-04-30T09:41:26.701Z", "second user"));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(
+                List.of(firstSegment, secondSegment),
+                List.of(
+                        new ConversationSegmentRecord("segment-001", "logical-001", "", 0, "codex", "codex", "gpt-5.4", "medium", "initial", "none", 1714460426701L),
+                        new ConversationSegmentRecord("segment-002", "logical-001", "segment-001", 1, "codex", "codex", "gpt-5.4", "medium", "runtime_switch:provider", "session_summary", 1714460486701L)
+                )
+        );
+
+        assertEquals(3, result.size());
+        assertEquals("已切换到 codex / gpt-5.4 继续当前会话。", result.get(1).get("content").getAsString());
     }
 
     /**
@@ -362,7 +483,60 @@ public class HistoryMessageInjectorTest {
         assertEquals("只保留用户输入", contentBlocks.get(0).getAsJsonObject().get("text").getAsString());
     }
 
+    /**
+     * 验证 continued segment 首条用户消息在聚合回刷后只保留真实提问正文，
+     * 不会把发送层拼接的 Conversation Continuation 内部提示块重新渲染到聊天窗口。
+     * 该测试直接对应用户可见的“蓝色大块消息回显”回归问题。
+     */
+    @Test
+    public void convertCodexMessagesShouldStripContinuationCarryoverAndKeepRealQuestion() {
+        JsonArray messages = new JsonArray();
+        messages.add(eventUserMessage(
+                "2026-07-03T09:03:20.861Z",
+                "## Conversation Continuation\n"
+                        + "You are continuing an existing conversation in a new runtime segment.\n"
+                        + "Logical conversation id: logical-001\n"
+                        + "Previous segment session id: segment-001\n"
+                        + "Previous conversation summary: continue from summary\n"
+                        + "Preserve the user's intent and continue from that context unless the latest request overrides it.\n\n"
+                        + "现在中东局势怎么样了？"
+        ));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+
+        assertEquals(1, result.size());
+        assertEquals("现在中东局势怎么样了？", result.get(0).get("content").getAsString());
+        assertEquals("现在中东局势怎么样了？", result.get(0)
+                .getAsJsonObject("raw")
+                .getAsJsonArray("content")
+                .get(0)
+                .getAsJsonObject()
+                .get("text")
+                .getAsString());
+    }
+
+    /**
+     * 构造一条最小可用的 response_item/user 历史消息。
+     * 默认不注入稳定 sourceId，用于普通时间戳与文本去重场景。
+     *
+     * @param timestamp 原始时间戳
+     * @param text 用户文本
+     * @return response_item 结构
+     */
     private static JsonObject responseItemUserMessage(String timestamp, String text) {
+        return responseItemUserMessage(timestamp, text, null);
+    }
+
+    /**
+     * 构造一条带稳定 sourceId 的 response_item/user 历史消息。
+     * 该 helper 用于模拟 provider 已经持久化 message id 的双录场景，验证 identity 优先去重路径。
+     *
+     * @param timestamp 原始时间戳
+     * @param text 用户文本
+     * @param sourceId provider 侧稳定消息标识；为空时不写入
+     * @return response_item 结构
+     */
+    private static JsonObject responseItemUserMessage(String timestamp, String text, String sourceId) {
         JsonObject line = new JsonObject();
         line.addProperty("timestamp", timestamp);
         line.addProperty("type", "response_item");
@@ -370,6 +544,9 @@ public class HistoryMessageInjectorTest {
         JsonObject payload = new JsonObject();
         payload.addProperty("type", "message");
         payload.addProperty("role", "user");
+        if (sourceId != null && !sourceId.isEmpty()) {
+            payload.addProperty("id", sourceId);
+        }
 
         JsonArray content = new JsonArray();
         JsonObject block = new JsonObject();
@@ -382,6 +559,13 @@ public class HistoryMessageInjectorTest {
         return line;
     }
 
+    /**
+     * 构造一条最小可用的 event_msg/user_message 历史消息。
+     *
+     * @param timestamp 原始时间戳
+     * @param text 用户文本
+     * @return event_msg 结构
+     */
     private static JsonObject eventUserMessage(String timestamp, String text) {
         JsonObject line = new JsonObject();
         line.addProperty("timestamp", timestamp);
@@ -391,6 +575,22 @@ public class HistoryMessageInjectorTest {
         payload.addProperty("type", "user_message");
         payload.addProperty("message", text);
         line.add("payload", payload);
+        return line;
+    }
+
+    /**
+     * 构造一条带稳定 sourceId 的 event_msg/user_message 历史消息。
+     *
+     * @param timestamp 原始时间戳
+     * @param text 用户文本
+     * @param sourceId provider 侧稳定消息标识；为空时不写入
+     * @return event_msg 结构
+     */
+    private static JsonObject eventUserMessageWithSourceId(String timestamp, String text, String sourceId) {
+        JsonObject line = eventUserMessage(timestamp, text);
+        if (sourceId != null && !sourceId.isEmpty()) {
+            line.getAsJsonObject("payload").addProperty("id", sourceId);
+        }
         return line;
     }
 
@@ -632,6 +832,44 @@ public class HistoryMessageInjectorTest {
      *
      * @return 仅实现必要方法的 Project 动态代理
      */
+    /**
+     * 验证当 provider 历史里的 user_message.message 混入内部 permissions/skills 前缀时，
+     * 历史恢复只向前台输出清洗后的真实用户文本，并同步用该文本重建 raw text block。
+     * 该断言用于防止 content 已清洗但 raw 仍残留污染文本，导致前台消息解析后再次露出内部上下文。
+     */
+    @Test
+    public void convertCodexMessagesShouldRebuildRawTextBlockFromSanitizedUserMessage() {
+        String polluted = "<permissions instructions>\n"
+                + "Filesystem sandboxing defines which files can be read or written.\n"
+                + "</permissions instructions>\n\n"
+                + "## Skills\n\n"
+                + "### Skill roots\n\n"
+                + "- `r0` = `D:/Users/example/.agents/skills`\n\n"
+                + "### Available skills\n\n"
+                + "- `firecrawl-search`: Search the web. (file: r0/firecrawl-search/SKILL.md)\n\n"
+                + "### How to use skills\n\n"
+                + "1. Read the skill before doing work.\n\n"
+                + "按照计划继续改造当前工作区";
+        JsonArray messages = new JsonArray();
+        messages.add(eventUserMessage("2026-07-08T15:00:00.000Z", polluted));
+
+        List<JsonObject> result = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+
+        assertEquals(1, result.size());
+        JsonObject frontendMessage = result.get(0);
+        assertEquals("user", frontendMessage.get("type").getAsString());
+        assertEquals("按照计划继续改造当前工作区", frontendMessage.get("content").getAsString());
+        assertEquals(
+                "按照计划继续改造当前工作区",
+                frontendMessage.getAsJsonObject("raw")
+                        .getAsJsonArray("content")
+                        .get(0)
+                        .getAsJsonObject()
+                        .get("text")
+                        .getAsString()
+        );
+    }
+
     private static Project createProject() {
         return (Project) Proxy.newProxyInstance(
                 Project.class.getClassLoader(),

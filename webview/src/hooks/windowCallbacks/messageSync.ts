@@ -95,9 +95,14 @@ export const appendOptimisticMessageIfMissing = (
   const optimisticMsg = lastPrev;
   const optimisticText = getUserMessageComparableContent(optimisticMsg);
   const optimisticTime = getMessageTimestampMs(optimisticMsg) ?? Number.NaN;
+  const optimisticIdentityKey = getMessageIdentityKey(optimisticMsg);
 
   const matchFn = (m: ClaudeMessage) => {
     if (m.type !== 'user') return false;
+    const candidateIdentityKey = getMessageIdentityKey(m);
+    if (optimisticIdentityKey && candidateIdentityKey) {
+      return optimisticIdentityKey === candidateIdentityKey;
+    }
     if (getUserMessageComparableContent(m) !== optimisticText) return false;
     const candidateTime = getMessageTimestampMs(m) ?? Number.NaN;
     if (!Number.isFinite(candidateTime) || !Number.isFinite(optimisticTime)) return false;
@@ -109,6 +114,14 @@ export const appendOptimisticMessageIfMissing = (
     for (let i = nextList.length - 1; i >= 0; i -= 1) {
       const candidate = nextList[i];
       if (candidate?.type !== 'user') continue;
+      const candidateIdentityKey = getMessageIdentityKey(candidate);
+      if (optimisticIdentityKey && candidateIdentityKey) {
+        if (optimisticIdentityKey === candidateIdentityKey) {
+          matchedIndex = i;
+          break;
+        }
+        continue;
+      }
       if (getUserMessageComparableContent(candidate) !== optimisticText) continue;
       const candidateTime = getMessageTimestampMs(candidate) ?? Number.NaN;
       // Allow match when candidate is within time window (even if older than optimistic).
@@ -191,6 +204,16 @@ const getUserMessageComparableContent = (message: ClaudeMessage): string => {
     .map((block: any) => block.text)
     .join('\n');
   return rawText || message.content || '';
+};
+
+/**
+ * 提取消息的稳定 identity key。
+ * 该字段由后端在历史恢复/聚合快照中下发；当 optimistic user 也带上同一 identity 时，
+ * 前端应优先按 identity 对齐，而不是继续依赖时间窗和文本匹配。
+ */
+const getMessageIdentityKey = (message: ClaudeMessage | undefined): string => {
+  const key = message?.messageIdentity?.key;
+  return typeof key === 'string' && key.trim().length > 0 ? key : '';
 };
 
 /**

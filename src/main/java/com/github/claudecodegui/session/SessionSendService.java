@@ -169,8 +169,9 @@ public class SessionSendService {
     }
 
     /**
-     * 为 continued segment 的首条 Codex 输入构造上下文延续前缀。
-     * 当前实现只注入最小且稳定的会话延续信息，避免依赖尚未建立的新 sessionId，也避免把整段历史重复拼接进 prompt。
+     * 为 continued segment 的首条输入构造上下文延续前缀。
+     * 优先使用生命周期阶段预构建的最近对话快照；仅当快照缺失时才回退到旧的 summary，
+     * 从而避免多次切换 runtime/model 后仍反复沿用首轮摘要导致上下文回退。
      *
      * @param state 当前会话状态
      * @return 需要前置到用户输入前的 carryover 文本；若当前并非 continued segment 首发，则返回空串
@@ -182,8 +183,10 @@ public class SessionSendService {
 
         String logicalConversationId = safeTrim(state.getLogicalConversationId());
         String sourceSessionId = safeTrim(state.getContinuationSourceSessionId());
+        String continuationCarryoverText = safeTrim(state.getContinuationCarryoverText());
         String summary = safeTrim(state.getSummary());
-        if (logicalConversationId.isEmpty() && sourceSessionId.isEmpty() && summary.isEmpty()) {
+        if (logicalConversationId.isEmpty() && sourceSessionId.isEmpty()
+                && continuationCarryoverText.isEmpty() && summary.isEmpty()) {
             return "";
         }
 
@@ -196,7 +199,11 @@ public class SessionSendService {
         if (!sourceSessionId.isEmpty()) {
             prefix.append("Previous segment session id: ").append(sourceSessionId).append("\n");
         }
-        if (!summary.isEmpty()) {
+        if (!continuationCarryoverText.isEmpty()) {
+            prefix.append("Recent conversation turns:\n")
+                    .append(continuationCarryoverText)
+                    .append("\n");
+        } else if (!summary.isEmpty()) {
             prefix.append("Previous conversation summary: ").append(summary).append("\n");
         }
         prefix.append("Preserve the user's intent and continue from that context unless the latest request overrides it.\n\n");
@@ -305,7 +312,27 @@ public class SessionSendService {
                     + ", model=" + safe(state.getModel())
                     + ", reasoningEffort=" + safe(state.getReasoningEffort())
                     + ", permissionMode=" + safe(effectivePermissionMode)
+                    + ", logicalConversationId=" + safe(state.getLogicalConversationId())
+                    + ", activeSegmentSessionId=" + safe(state.getActiveSegmentSessionId())
+                    + ", parentSegmentSessionId=" + safe(state.getParentSegmentSessionId())
+                    + ", continuationPending=" + state.isContinuationPending()
+                    + ", continuationSourceSessionId=" + safe(state.getContinuationSourceSessionId())
                     + ", binding=" + describeCodexBindingForTrace(state.getCodexSessionBinding()));
+            if ((state.getSessionId() == null || state.getSessionId().trim().isEmpty())
+                    && (state.isContinuationPending()
+                    || (state.getLogicalConversationId() != null && !state.getLogicalConversationId().trim().isEmpty()))) {
+                // 中文注释：这里额外记录 continued conversation 在首条发送前是否仍未拿到真实 sessionId，
+                // 便于和 onSessionIdAssigned / setSessionId / 首帧 updateMessages 的先后顺序做闭环对照。
+                LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " sendToCodex start_with_empty_session_id"
+                        + ", provider=" + safe(state.getProvider())
+                        + ", model=" + safe(state.getModel())
+                        + ", logicalConversationId=" + safe(state.getLogicalConversationId())
+                        + ", activeSegmentSessionId=" + safe(state.getActiveSegmentSessionId())
+                        + ", parentSegmentSessionId=" + safe(state.getParentSegmentSessionId())
+                        + ", continuationPending=" + state.isContinuationPending()
+                        + ", continuationSourceSessionId=" + safe(state.getContinuationSourceSessionId())
+                        + ", binding=" + describeCodexBindingForTrace(state.getCodexSessionBinding()));
+            }
             // 每次发送前都重新解析运行时 profile，避免切换 provider 后继续复用旧配置。
             // 如果当前会话已经绑定过特定 Codex provider，则优先命中该绑定。
             runtimeProfile = resolveCodexRuntimeProfile();

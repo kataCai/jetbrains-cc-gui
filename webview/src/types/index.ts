@@ -62,6 +62,31 @@ export interface ClaudeRawMessage {
   [key: string]: unknown;
 }
 
+/**
+ * 描述一条前端消息在跨快照、跨分段恢复场景下的稳定语义身份。
+ * 该字段由后端在历史恢复链路中写入，前端优先据此判断两条消息是否属于同一条逻辑消息，
+ * 避免 continued prefix merge、optimistic reconcile 和 authoritative restore 仅依赖 timestamp。
+ */
+export interface MessageIdentity {
+  key: string;
+  role?: string;
+  sourceId?: string;
+  segmentSessionId?: string;
+  segmentIndex?: number;
+  segmentLocalIndex?: number;
+  logicalOrder?: number;
+}
+
+/**
+ * 标记当前 `prepareHistoryRestoreSnapshot -> updateMessages` 对应的是哪一类历史回放。
+ * 其中 `runtime_continue_authoritative` 表示后端已经生成完整 logical conversation 快照，
+ * 前端必须直接用该快照接管当前消息列表，而不能再继续套用 continued prefix merge。
+ */
+export type HistoryRestoreKind =
+  | 'single_session'
+  | 'logical_conversation'
+  | 'runtime_continue_authoritative';
+
 /** Represents a single message in the chat conversation. */
 export interface ClaudeMessage {
   type: ClaudeRole;
@@ -78,6 +103,16 @@ export interface ClaudeMessage {
    * 从历史 JSONL 加载出来的消息通常不带该字段。
    */
   __turnId?: number;
+  /** 后端提供的稳定语义 identity，供前端跨快照去重与 continued 过渡接管使用。 */
+  messageIdentity?: MessageIdentity;
+  /** 跨分段聚合后的稳定顺序号；authoritative logical snapshot 渲染时应以该顺序为准。 */
+  logicalOrder?: number;
+  /** 该消息所属的 continued 物理分段索引。 */
+  segmentIndex?: number;
+  /** 该消息所属的 continued 物理分段 sessionId。 */
+  segmentSessionId?: string;
+  /** 该消息在所属物理分段内的稳定局部顺序号。 */
+  segmentLocalIndex?: number;
   [key: string]: unknown;
 }
 

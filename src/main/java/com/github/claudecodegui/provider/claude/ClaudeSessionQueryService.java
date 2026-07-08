@@ -333,7 +333,10 @@ class ClaudeSessionQueryService {
         String normalized = text.replace("\r\n", "\n");
         normalized = normalized.replace("\r", "\n");
         normalized = normalized.replace(IMAGE_ATTACHMENT_HINT, "");
-        normalized = UserMessageSanitizer.sanitizeUserFacingText(normalized);
+        normalized = UserMessageSanitizer.sanitizeInjectedRequestTextToUserVisibleText(normalized);
+        if (normalized == null) {
+            return "";
+        }
         normalized = normalized.replaceAll("(?m)^[ \\t]+$", "");
         normalized = normalized.replaceAll("\n{3,}", "\n\n");
         normalized = normalized.replaceAll("^(?:\\s*\\n)+", "");

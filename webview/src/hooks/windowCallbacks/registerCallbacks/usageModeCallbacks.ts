@@ -10,11 +10,10 @@ import { drainPendingSettings, startInitialSettingsRequest } from '../settingsBo
 /**
  * 注册使用量、权限模式、模型与基础设置相关的 window bridge 回调。
  *
- * 该函数是后端向 WebView 同步运行态设置的入口。并轨时必须同时保留
- * 当前主线的 Codex 模型状态同步、provider 映射同步，以及上游新增的
- * 权限弹窗超时时间同步，避免设置页和运行态出现不一致。
+ * 该入口负责把后端运行态快照回写到前端，并同步维护 provider/model 选择状态、
+ * continued segment 运行态以及若干基础设置项，避免聊天页与设置页状态分叉。
  *
- * @param options 注册回调所需的状态 setter、当前 provider 引用和模型同步工具。
+ * @param options 回调注册所需的状态 setter、引用对象与同步工具
  */
 export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): void {
   const {
@@ -54,6 +53,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     shouldAdoptCodexDefaultReasoningEffortRef,
     syncActiveProviderModelMapping,
   } = options;
+
   const traceCodexRuntime = (event: string, payload: Record<string, unknown>) => {
     debugLog(`[CODEX_RUNTIME_TRACE][Webview] ${event}`, payload);
   };
@@ -93,10 +93,10 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
   /**
    * 同步 provider 维度的权限模式。
    *
-   * Codex 不支持 plan 模式，因此后端误传 plan 时在前端降级为 default。
+   * Codex 不支持 plan 模式，因此后端误传 plan 时，前端需要降级到 default。
    *
-   * @param mode 后端同步的权限模式。
-   * @param providerOverride 可选的 provider 覆盖值，用于处理 provider 切换期间的回调。
+   * @param mode 后端同步的权限模式
+   * @param providerOverride 可选的 provider 覆盖值，用于处理 provider 切换过程中的回调
    */
   const updateMode = (mode?: PermissionMode, providerOverride?: string) => {
     const activeProvider = providerOverride || currentProviderRef.current;
@@ -185,7 +185,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         setActiveCodexProviderId(normalizedProviderId);
       }
 
-      // 中文注释：Tab 恢复阶段需要把逻辑会话与 continued segment 运行态一并恢复，
+      // 中文注释：Tab 恢复阶段需要把逻辑会话与 continued segment 运行态一起恢复，
       // 否则切换模型/供应商后的“继续会话”信息只停留在后端快照里，前端后续动作无法感知。
       setLogicalConversationId(
         typeof data.logicalConversationId === 'string' && data.logicalConversationId.trim().length > 0
@@ -198,6 +198,10 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
           : typeof data.latestSessionId === 'string' && data.latestSessionId.trim().length > 0
             ? data.latestSessionId.trim()
             : null;
+      const restoredContinuationSourceSessionId =
+        typeof data.continuationSourceSessionId === 'string' && data.continuationSourceSessionId.trim().length > 0
+          ? data.continuationSourceSessionId.trim()
+          : null;
       // 中文注释：旧 Tab 快照可能只保留逻辑会话主键而缺失活动分段，后端补发 latestSessionId 时这里兜底到最新分段，
       // 避免恢复后继续发送又落回旧物理分段或空分段。
       setActiveSegmentSessionId(restoredActiveSegmentSessionId);
@@ -206,11 +210,15 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
           ? data.parentSegmentSessionId.trim()
           : null,
       );
-      setContinuationPending(data.continuationPending === true);
+      // 中文注释：如果恢复时已经存在稳定的 active segment，但没有 continuation source 锚点，
+      // 说明 continuationPending 只是旧快照残留，继续恢复为 true 只会错误阻塞首条发送。
+      const shouldNormalizeStaleContinuationPending =
+        data.continuationPending === true
+        && restoredActiveSegmentSessionId !== null
+        && restoredContinuationSourceSessionId === null;
+      setContinuationPending(shouldNormalizeStaleContinuationPending ? false : data.continuationPending === true);
       setContinuationSourceSessionId(
-        typeof data.continuationSourceSessionId === 'string' && data.continuationSourceSessionId.trim().length > 0
-          ? data.continuationSourceSessionId.trim()
-          : null,
+        shouldNormalizeStaleContinuationPending ? null : restoredContinuationSourceSessionId,
       );
 
       updateMode(data.permissionMode, nextProvider);
@@ -318,10 +326,10 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       }
 
       if (
-        data.reasoningEffort === 'low' ||
-        data.reasoningEffort === 'medium' ||
-        data.reasoningEffort === 'high' ||
-        data.reasoningEffort === 'xhigh'
+        data.reasoningEffort === 'low'
+        || data.reasoningEffort === 'medium'
+        || data.reasoningEffort === 'high'
+        || data.reasoningEffort === 'xhigh'
       ) {
         if (shouldAdoptCodexDefaultReasoningEffortRef.current) {
           setReasoningEffort(data.reasoningEffort);
@@ -400,13 +408,12 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
 
   /**
    * 回写“右键打开调试面板”全局开关。
-   * 该值会同时驱动设置页和聊天页的右键菜单入口，因此必须与其他
-   * 基础行为开关保持同一类回写协议，保证首次挂载时状态一致。
+   * 该值会同时驱动设置页和聊天页的右键菜单入口，因此需要与其他基础行为开关保持同类回写协议。
    */
   window.updateRightClickOpenDevToolsEnabled = (jsonStr: string) => {
     try {
       const data = JSON.parse(jsonStr);
-      // 该回调只在设置页挂载时需要，聊天页不一定提供这个 setter，因此必须做可选调用。
+      // 聊天页不一定提供这个 setter，因此这里需要保持可选调用。
       setRightClickOpenDevToolsEnabled?.(data.rightClickOpenDevToolsEnabled ?? false);
     } catch (error) {
       console.error('[Frontend] Failed to parse right click devtools enabled:', error);
@@ -415,8 +422,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
 
   /**
    * 回写前端诊断日志运行时配置。
-   * 该配置既要驱动聊天运行态日志桥接，也要在设置页未打开时保持最新值，
-   * 因此这里除了写入可选 React setter 外，还必须同步更新模块级 runtime config。
+   * 除了驱动 React 状态，还需要同步更新模块级 runtime config，保证聊天页未重新挂载时也能立即生效。
    */
   window.updateFrontendDebugConfig = (jsonStr: string) => {
     try {

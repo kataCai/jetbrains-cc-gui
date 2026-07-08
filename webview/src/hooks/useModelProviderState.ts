@@ -97,6 +97,10 @@ export interface UseModelProviderStateOptions {
     targetModel: string;
     targetReasoningEffort?: string;
     targetCodexProviderId?: string;
+    logicalConversationId?: string;
+    sourceSessionId?: string | null;
+    activeSegmentSessionId?: string | null;
+    continuationSourceSessionId?: string | null;
   }) => void;
 }
 

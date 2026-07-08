@@ -4,6 +4,7 @@ import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -125,11 +126,34 @@ public class SessionSendServiceTest {
     }
 
     /**
-     * 验证 continued segment 首发时会为 Codex 构造 carryover 前缀，
-     * 其中至少包含逻辑会话标识、来源分段和上一段摘要，供新 runtime segment 延续上下文。
+     * 验证 continued segment 首发时优先注入最近对话快照，而不是继续复用首轮摘要。
+     * 该约束直接覆盖“多次切换模型后仍沿用第一次 1+1 摘要，导致上下文回退”的回归场景。
      */
     @Test
-    public void buildCodexContinuationCarryoverPrefixShouldIncludeLogicalConversationSummary() {
+    public void buildCodexContinuationCarryoverPrefixShouldPreferRecentConversationSnapshotOverSummary() {
+        SessionState state = new SessionState();
+        state.setContinuationPending(true);
+        state.setLogicalConversationId("logical-001");
+        state.setContinuationSourceSessionId("segment-001");
+        state.setSummary("1+1=?");
+        state.setContinuationCarryoverText("User: 再+1=?\nAssistant: 4");
+
+        String prefix = SessionSendService.buildCodexContinuationCarryoverPrefix(state);
+
+        assertTrue(prefix.contains("Conversation Continuation"));
+        assertTrue(prefix.contains("logical-001"));
+        assertTrue(prefix.contains("segment-001"));
+        assertTrue(prefix.contains("Recent conversation turns"));
+        assertTrue(prefix.contains("User: 再+1=?"));
+        assertTrue(prefix.contains("Assistant: 4"));
+        assertFalse(prefix.contains("Previous conversation summary: 1+1=?"));
+    }
+
+    /**
+     * 验证当最近轮次快照缺失时，仍会回退到旧的摘要字段，避免历史兼容路径完全失效。
+     */
+    @Test
+    public void buildCodexContinuationCarryoverPrefixShouldFallbackToSummaryWhenSnapshotMissing() {
         SessionState state = new SessionState();
         state.setContinuationPending(true);
         state.setLogicalConversationId("logical-001");
@@ -138,10 +162,7 @@ public class SessionSendServiceTest {
 
         String prefix = SessionSendService.buildCodexContinuationCarryoverPrefix(state);
 
-        assertTrue(prefix.contains("Conversation Continuation"));
-        assertTrue(prefix.contains("logical-001"));
-        assertTrue(prefix.contains("segment-001"));
-        assertTrue(prefix.contains("继续修复历史会话跨模型切换后的上下文延续问题"));
+        assertTrue(prefix.contains("Previous conversation summary: 继续修复历史会话跨模型切换后的上下文延续问题"));
     }
 
     /**

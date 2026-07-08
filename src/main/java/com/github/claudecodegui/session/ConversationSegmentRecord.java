@@ -20,6 +20,8 @@ public class ConversationSegmentRecord {
     private final String createdBy;
     private final String carryoverMode;
     private final long createdAt;
+    private final String codexProviderId;
+    private final String providerDisplayName;
 
     /**
      * 创建运行时分段元数据对象。
@@ -49,6 +51,55 @@ public class ConversationSegmentRecord {
             String carryoverMode,
             long createdAt
     ) {
+        this(
+                sessionId,
+                logicalConversationId,
+                parentSessionId,
+                segmentIndex,
+                provider,
+                runtimeFamily,
+                model,
+                reasoningEffort,
+                createdBy,
+                carryoverMode,
+                createdAt,
+                "",
+                ""
+        );
+    }
+
+    /**
+     * 创建运行时分段元数据对象，并补充 Codex 供应商级展示信息。
+     *
+     * @param sessionId 当前物理分段的 sessionId/threadId
+     * @param logicalConversationId 所属逻辑会话 id
+     * @param parentSessionId 父分段 sessionId；首段可为空
+     * @param segmentIndex 分段序号，从 0 开始递增
+     * @param provider 当前分段绑定的 provider 标识
+     * @param runtimeFamily 当前分段所属运行时家族
+     * @param model 当前分段模型标识
+     * @param reasoningEffort 当前分段思考强度
+     * @param createdBy 分段创建原因
+     * @param carryoverMode 上下文迁移模式
+     * @param createdAt 分段创建时间戳
+     * @param codexProviderId Codex 运行时命中的具体 provider id；非 Codex 场景可为空
+     * @param providerDisplayName 供应商人类可读展示名；解析失败时可为空并回退到 providerId
+     */
+    public ConversationSegmentRecord(
+            String sessionId,
+            String logicalConversationId,
+            String parentSessionId,
+            int segmentIndex,
+            String provider,
+            String runtimeFamily,
+            String model,
+            String reasoningEffort,
+            String createdBy,
+            String carryoverMode,
+            long createdAt,
+            String codexProviderId,
+            String providerDisplayName
+    ) {
         this.sessionId = safe(sessionId);
         this.logicalConversationId = safe(logicalConversationId);
         this.parentSessionId = safe(parentSessionId);
@@ -60,6 +111,8 @@ public class ConversationSegmentRecord {
         this.createdBy = safe(createdBy);
         this.carryoverMode = safe(carryoverMode);
         this.createdAt = Math.max(0L, createdAt);
+        this.codexProviderId = safe(codexProviderId);
+        this.providerDisplayName = safe(providerDisplayName);
     }
 
     /**
@@ -70,7 +123,7 @@ public class ConversationSegmentRecord {
      */
     public static ConversationSegmentRecord fromJson(JsonObject json) {
         if (json == null) {
-            return new ConversationSegmentRecord("", "", "", 0, "", "", "", "", "", "", 0L);
+            return new ConversationSegmentRecord("", "", "", 0, "", "", "", "", "", "", 0L, "", "");
         }
         return new ConversationSegmentRecord(
                 readString(json, "sessionId"),
@@ -83,7 +136,9 @@ public class ConversationSegmentRecord {
                 readString(json, "reasoningEffort"),
                 readString(json, "createdBy"),
                 readString(json, "carryoverMode"),
-                readLong(json, "createdAt")
+                readLong(json, "createdAt"),
+                readString(json, "codexProviderId"),
+                readString(json, "providerDisplayName")
         );
     }
 
@@ -131,6 +186,14 @@ public class ConversationSegmentRecord {
         return createdAt;
     }
 
+    public String getCodexProviderId() {
+        return codexProviderId;
+    }
+
+    public String getProviderDisplayName() {
+        return providerDisplayName;
+    }
+
     /**
      * 判断分段记录是否具备最小可用标识。
      *
@@ -158,6 +221,8 @@ public class ConversationSegmentRecord {
         json.addProperty("createdBy", createdBy);
         json.addProperty("carryoverMode", carryoverMode);
         json.addProperty("createdAt", createdAt);
+        json.addProperty("codexProviderId", codexProviderId);
+        json.addProperty("providerDisplayName", providerDisplayName);
         return json;
     }
 

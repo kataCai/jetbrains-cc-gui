@@ -129,11 +129,23 @@ describe('useWindowCallbacks integration', () => {
     window.__sessionTransitioning = false;
     window.__sessionTransitionToken = null;
     window.__pendingSessionTransitionToast = undefined;
+    window.__pendingCompleteContinuedSegmentTransitionSessionId = undefined;
+    window.__continuedSegmentFirstSnapshotSessionId = null;
+    window.__continuedSegmentHistoryPrefixMessages = null;
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingTailMessages = null;
+    (window as any).__continuedSegmentPendingSourceSessionId = null;
+    (window as any).__continuedSegmentPendingLogicalConversationId = null;
+    (window as any).__continuedSegmentPendingCreatedAt = null;
+    (window as any).__continuedSegmentPendingReason = null;
+    (window as any).__continuedSegmentAwaitingFirstSessionId = false;
     window.__deniedToolIds = new Set();
     window.__preparedHistoryRestoreKey = null;
     window.__preparedHistoryRestoreSignature = null;
+    window.__preparedHistoryRestoreKind = null;
     window.__lastAppliedHistoryRestoreKey = null;
     window.__lastAppliedHistoryRestoreSignature = null;
+    window.__lastAppliedHistoryRestoreKind = null;
     window.sendToJava = vi.fn();
   });
 
@@ -251,6 +263,33 @@ describe('useWindowCallbacks integration', () => {
     expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
   });
 
+  /**
+   * 已完成的 continued 会话在 Tab 恢复时，若已经能确定当前活动分段，就不应继续恢复为 pending。
+   * 这个场景直接覆盖“旧快照残留 continuationPending=true，恢复后又把发送门禁卡死”的回归问题。
+   */
+  it('restoreTabRuntimeState normalizes stale continuationPending when active segment is already settled', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.restoreTabRuntimeState?.(JSON.stringify({
+        provider: 'codex',
+        model: 'gpt-5.4',
+        codexProviderId: 'buycode',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'segment-003',
+        parentSegmentSessionId: 'segment-002',
+        continuationPending: true,
+      }));
+    });
+
+    expect(opts.setLogicalConversationId).toHaveBeenCalledWith('logical-001');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-003');
+    expect(opts.setParentSegmentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
+  });
+
   // ===== historyLoadComplete releases transition guard =====
 
   it('historyLoadComplete releases __sessionTransitioning guard', () => {
@@ -326,6 +365,214 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__sessionTransitioning).toBe(false);
     expect(window.__sessionTransitionToken).toBeNull();
     expect(opts.setCurrentSessionId).toHaveBeenCalledWith('new-session-123');
+  });
+
+  it('setSessionId marks the first continued-segment snapshot and refreshes active segment anchor', () => {
+    const opts = createOptions({
+      continuationPendingRef: { current: true },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.setSessionId!('segment-002');
+    });
+
+    expect(opts.setCurrentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
+    expect(opts.currentSessionIdRef.current).toBe('segment-002');
+    expect(opts.continuationPendingRef.current).toBe(false);
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-002');
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'window.setSessionId received',
+      expect.objectContaining({
+        oldSessionId: null,
+        activeSegmentSessionId: null,
+        sessionId: 'segment-002',
+        continuationPending: true,
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'window.setSessionId marked continued segment first snapshot',
+      expect.objectContaining({
+        sessionId: 'segment-002',
+      }),
+    );
+  });
+
+  it('setSessionId keeps continued first snapshot state when pending flag fell back but prefix cache exists', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: 'logical-001' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-03T10:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-03T10:00:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+
+    act(() => {
+      window.setSessionId!('segment-002');
+    });
+
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-002');
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-002');
+    expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
+  });
+
+  it('setSessionId uses transition cache when continued refs were lost before the real session id arrives', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: null },
+      activeSegmentSessionIdRef: { current: null },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    // 中文注释：复现日志中的关键状态：prefix cache 已经建立，但 React refs 中的
+    // logicalConversationId / activeSegmentSessionId / continuationPending 已经丢失。
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    (window as any).__continuedSegmentPendingSourceSessionId = 'segment-001';
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    act(() => {
+      window.setSessionId!('segment-002');
+    });
+
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-002');
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-002');
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-002');
+    expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
+    expect((window as any).__continuedSegmentAwaitingFirstSessionId).toBe(false);
+  });
+
+  it('completeContinuedSegmentTransition preserves prefix when it arrives after setSessionId', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: null },
+      activeSegmentSessionIdRef: { current: null },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    (window as any).__continuedSegmentPendingSourceSessionId = 'segment-001';
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    act(() => {
+      window.setSessionId!('segment-002');
+      window.completeContinuedSegmentTransition?.('segment-002');
+    });
+
+    expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-002');
+  });
+
+  it('completeContinuedSegmentTransition explicitly closes the continued runtime state', () => {
+    const opts = createOptions({
+      continuationPendingRef: { current: true },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__sessionTransitioning = true;
+    window.__sessionTransitionToken = 'transition-continued-1';
+
+    act(() => {
+      window.completeContinuedSegmentTransition?.('segment-003');
+    });
+
+    expect(window.__sessionTransitioning).toBe(false);
+    expect(window.__sessionTransitionToken).toBeNull();
+    expect(opts.setCurrentSessionId).toHaveBeenCalledWith('segment-003');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-003');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
+    expect(opts.currentSessionIdRef.current).toBe('segment-003');
+    expect(opts.continuationPendingRef.current).toBe(false);
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-003');
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-003');
+  });
+
+  /**
+   * 验证 continued 创建失败后，前端回滚入口会恢复旧会话锚点并清理 continued 过渡缓存。
+   * 该场景用于约束“失败后不能继续保留 pending/source 状态，否则标签页会永久卡在 not ready”。
+   */
+  it('abortContinuedSegmentTransition restores previous session anchor and clears continued caches', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: true },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__sessionTransitioning = true;
+    window.__sessionTransitionToken = 'transition-abort-1';
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: 'old question', timestamp: '2026-07-07T10:00:00.000Z' },
+      { type: 'assistant', content: 'old answer', timestamp: '2026-07-07T10:00:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = 'segment-new-002';
+    window.__continuedSegmentPendingTailMessages = [
+      { type: 'user', content: 'continue', timestamp: '2026-07-07T10:01:00.000Z' },
+    ];
+    window.__continuedSegmentPendingSourceSessionId = 'segment-old-001';
+    window.__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    window.__continuedSegmentPendingCreatedAt = 1_751_886_000_000;
+    window.__continuedSegmentPendingReason = 'model';
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+
+    act(() => {
+      (window as any).abortContinuedSegmentTransition?.('segment-old-001');
+    });
+
+    expect(window.__sessionTransitioning).toBe(false);
+    expect(window.__sessionTransitionToken).toBeNull();
+    expect(opts.setCurrentSessionId).toHaveBeenCalledWith('segment-old-001');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-old-001');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
+    expect(opts.currentSessionIdRef.current).toBe('segment-old-001');
+    expect(opts.continuationPendingRef.current).toBe(false);
+    expect(window.__continuedSegmentHistoryPrefixMessages).toBeNull();
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBeNull();
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+    expect(window.__continuedSegmentPendingSourceSessionId).toBeNull();
+    expect(window.__continuedSegmentPendingLogicalConversationId).toBeNull();
+    expect(window.__continuedSegmentPendingCreatedAt).toBeNull();
+    expect(window.__continuedSegmentPendingReason).toBeNull();
+    expect(window.__continuedSegmentAwaitingFirstSessionId).toBe(false);
+  });
+
+  it('consumes pending completeContinuedSegmentTransition signal registered before callbacks mount', () => {
+    window.__pendingCompleteContinuedSegmentTransitionSessionId = 'segment-early-1';
+
+    const opts = createOptions({
+      continuationPendingRef: { current: true },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    expect(window.__pendingCompleteContinuedSegmentTransitionSessionId).toBeUndefined();
+    expect(opts.setCurrentSessionId).toHaveBeenCalledWith('segment-early-1');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-early-1');
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(false);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
   });
 
   it('updateSessionTitle keeps backward compatibility for legacy single-argument title replay', () => {
@@ -404,6 +651,280 @@ describe('useWindowCallbacks integration', () => {
 
     // setMessages SHOULD be called
     expect(opts.setMessages).toHaveBeenCalled();
+  });
+
+  it('updateMessages keeps the preserved logical conversation prefix when the first continued-segment snapshot only contains the new segment tail', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-002' },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentFirstSnapshotSessionId = 'segment-002';
+    (window as any).__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '旧问题', timestamp: '2026-07-02T14:20:00.000Z' },
+      { type: 'assistant', content: '旧回答', timestamp: '2026-07-02T14:20:01.000Z' },
+    ];
+    (window as any).__continuedSegmentHistoryPrefixSessionId = 'segment-002';
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '继续', timestamp: '2026-07-02T14:23:37.000Z' },
+      ]));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const previousMessages: ClaudeMessage[] = [
+      { type: 'user', content: '旧问题', timestamp: '2026-07-02T14:20:00.000Z' },
+      { type: 'assistant', content: '旧回答', timestamp: '2026-07-02T14:20:01.000Z' },
+      { type: 'user', content: '继续', timestamp: '2026-07-02T14:23:37.000Z' },
+    ];
+
+    const nextMessages = updater(previousMessages);
+
+    expect(nextMessages).toEqual([
+      { type: 'user', content: '旧问题', timestamp: '2026-07-02T14:20:00.000Z' },
+      { type: 'assistant', content: '旧回答', timestamp: '2026-07-02T14:20:01.000Z' },
+      { type: 'user', content: '继续', timestamp: '2026-07-02T14:23:37.000Z' },
+    ]);
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBeNull();
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued segment first snapshot applied',
+      expect.objectContaining({
+        currentSessionId: 'segment-002',
+        continuationPending: false,
+      }),
+    );
+  });
+
+  it('updateMessages keeps replacing only the continued-segment suffix on later snapshots from the same runtime segment', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-002' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    (window as any).__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '旧问题', timestamp: '2026-07-02T14:20:00.000Z' },
+      { type: 'assistant', content: '旧回答', timestamp: '2026-07-02T14:20:01.000Z' },
+    ];
+    (window as any).__continuedSegmentHistoryPrefixSessionId = 'segment-002';
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '继续', timestamp: '2026-07-02T14:23:37.000Z' },
+        { type: 'assistant', content: '新的回答', timestamp: '2026-07-02T14:23:39.000Z' },
+      ]));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const previousMessages: ClaudeMessage[] = [
+      { type: 'user', content: '旧问题', timestamp: '2026-07-02T14:20:00.000Z' },
+      { type: 'assistant', content: '旧回答', timestamp: '2026-07-02T14:20:01.000Z' },
+      { type: 'user', content: '继续', timestamp: '2026-07-02T14:23:37.000Z' },
+    ];
+
+    const nextMessages = updater(previousMessages);
+
+    expect(nextMessages).toEqual([
+      { type: 'user', content: '旧问题', timestamp: '2026-07-02T14:20:00.000Z' },
+      { type: 'assistant', content: '旧回答', timestamp: '2026-07-02T14:20:01.000Z' },
+      { type: 'user', content: '继续', timestamp: '2026-07-02T14:23:37.000Z' },
+      { type: 'assistant', content: '新的回答', timestamp: '2026-07-02T14:23:39.000Z' },
+    ]);
+  });
+
+  it('updateMessages preserves the full 1+1 continued conversation order after the new segment tail arrives', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-002' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    // 中文注释：这个用例直接覆盖用户日志中的语义链路：
+    // 旧分段已有“1+1=？ -> 2”，新分段首帧只返回“再+1=？ -> 3”时，
+    // 前端最终仍必须展示四条完整消息，且顺序不能被 shrink 保护或 assistant 身份复用打乱。
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-03T10:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-03T10:00:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = 'segment-002';
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-03T10:01:00.000Z' },
+        { type: 'assistant', content: '3', timestamp: '2026-07-03T10:01:01.000Z' },
+      ]));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-03T10:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-03T10:00:01.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-03T10:01:00.000Z' },
+    ]);
+
+    expect(nextMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=？',
+      'assistant:2',
+      'user:再+1=？',
+      'assistant:3',
+    ]);
+  });
+
+  it('updateMessages keeps prefix through guard-timeout tail snapshot and merges after setSessionId binds the segment', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: null },
+      activeSegmentSessionIdRef: { current: null },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    // 中文注释：覆盖真实日志链路：guard timeout 后先收到“再+1=？”局部快照，
+    // 此时 currentSessionId 和 prefixSessionId 都为空；随后 setSessionId 才回推真实分段 ID。
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    (window as any).__continuedSegmentPendingSourceSessionId = 'segment-001';
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-04T15:20:00.000Z' },
+      ]));
+    });
+
+    expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
+
+    act(() => {
+      window.setSessionId!('segment-002');
+    });
+    expect(opts.currentSessionIdRef.current).toBe('segment-002');
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-04T15:20:00.000Z' },
+        { type: 'assistant', content: '3', timestamp: '2026-07-04T15:20:01.000Z' },
+      ]));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-04T15:20:00.000Z' },
+    ]);
+
+    expect(nextMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=？',
+      'assistant:2',
+      'user:再+1=？',
+      'assistant:3',
+    ]);
+  });
+
+  it('caches the pre-bound continued tail and clears it after a richer bound snapshot arrives', () => {
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: null },
+      activeSegmentSessionIdRef: { current: null },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    // 中文注释：覆盖真实日志中的“continued prefix merge skipped”窗口。
+    // 在真实 sessionId 回推前，前端先收到 user-only 尾部快照时，必须先缓存该尾部，
+    // 否则后续即便 sessionId 绑定完成，也无法判断下一帧是否是在补齐同一段 runtime tail。
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-06T15:18:03.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-06T15:18:37.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:19:52.000Z' },
+      { type: 'assistant', content: '3', timestamp: '2026-07-06T15:20:08.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:20:38.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingSourceSessionId = 'segment-001';
+    window.__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:20:38.000Z' },
+      ]));
+    });
+
+    let updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([]);
+
+    expect(window.__continuedSegmentPendingTailMessages).toEqual([
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:20:38.000Z' },
+    ]);
+
+    act(() => {
+      window.setSessionId!('segment-002');
+    });
+    expect(opts.currentSessionIdRef.current).toBe('segment-002');
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:20:38.000Z' },
+        { type: 'assistant', content: '使用 superpowers:using-superpowers 来确认本轮流程要求。', timestamp: '2026-07-06T15:20:57.000Z' },
+      ]));
+    });
+
+    updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    let nextMessages = updater([
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-06T15:18:03.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-06T15:18:37.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:19:52.000Z' },
+      { type: 'assistant', content: '3', timestamp: '2026-07-06T15:20:08.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:20:38.000Z' },
+    ]);
+
+    expect(nextMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=？',
+      'assistant:2',
+      'user:再+1=？',
+      'assistant:3',
+      'user:再+1=？',
+      'assistant:使用 superpowers:using-superpowers 来确认本轮流程要求。',
+    ]);
+
+    (opts.setMessages as any).mockClear();
+    act(() => {
+      window.updateMessages!(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-06T15:20:38.000Z' },
+        { type: 'assistant', content: '使用 superpowers:using-superpowers 来确认本轮流程要求。', timestamp: '2026-07-06T15:20:57.000Z' },
+        { type: 'assistant', content: '4', timestamp: '2026-07-06T15:21:10.000Z' },
+      ]));
+    });
+
+    updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    nextMessages = updater(nextMessages);
+
+    expect(nextMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=？',
+      'assistant:2',
+      'user:再+1=？',
+      'assistant:3',
+      'user:再+1=？',
+      'assistant:使用 superpowers:using-superpowers 来确认本轮流程要求。',
+      'assistant:4',
+    ]);
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
   });
 
   it('ignores duplicate history snapshot when restore key and snapshot signature are unchanged', () => {
@@ -488,6 +1009,169 @@ describe('useWindowCallbacks integration', () => {
     });
 
     expect(opts.setMessages).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * 同一个 restore key 与 snapshot signature 只在 restoreKind 也相同的情况下才应视为重复。
+   * 这样 continued 首帧 merge 之后，再收到后端 authoritative restore 时，不能被旧去重条件误拦截。
+   */
+  it('accepts history snapshot again when restore kind changes under the same restore key and signature', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const restoredMessages: ClaudeMessage[] = [
+      {
+        type: 'assistant',
+        content: 'continued-refresh:segment-002',
+        timestamp: '2026-07-08T12:00:00.000Z',
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-001',
+        'snapshot-signature-001',
+        'single_session',
+      );
+      window.updateMessages!(JSON.stringify(restoredMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-001',
+        'snapshot-signature-001',
+        'runtime_continue_authoritative',
+      );
+      window.updateMessages!(JSON.stringify(restoredMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * authoritative continued restore 到达后，前端必须直接采用后端完整快照并清空全部 continued 过渡缓存，
+   * 不能再保留首帧 prefix merge、pending tail 或旧 first snapshot 状态，否则会再次把旧消息拼回界面。
+   */
+  it('authoritative continued restore replaces merged local history and clears continued transition caches', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: 'old prefix', timestamp: '2026-07-08T11:59:00.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = 'segment-001';
+    window.__continuedSegmentFirstSnapshotSessionId = 'segment-002';
+    window.__continuedSegmentPendingTailMessages = [
+      { type: 'assistant', content: 'optimistic tail', timestamp: '2026-07-08T11:59:59.000Z' },
+    ];
+    (window as any).__continuedSegmentPendingSourceSessionId = 'segment-001';
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentPendingCreatedAt = Date.now();
+    (window as any).__continuedSegmentPendingReason = 'provider_switch';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    const authoritativeMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '真实提问',
+        timestamp: '2026-07-08T12:00:00.000Z',
+        logicalOrder: 0,
+        segmentIndex: 0,
+        segmentSessionId: 'segment-001',
+        segmentLocalIndex: 0,
+        messageIdentity: {
+          key: 'user|source=msg-001',
+          role: 'user',
+          sourceId: 'msg-001',
+          segmentSessionId: 'segment-001',
+          segmentIndex: 0,
+          segmentLocalIndex: 0,
+          logicalOrder: 0,
+        },
+        raw: {
+          content: [{ type: 'text', text: '真实提问' }],
+          logicalOrder: 0,
+          segmentIndex: 0,
+          segmentSessionId: 'segment-001',
+          segmentLocalIndex: 0,
+          messageIdentity: {
+            key: 'user|source=msg-001',
+            role: 'user',
+            sourceId: 'msg-001',
+            segmentSessionId: 'segment-001',
+            segmentIndex: 0,
+            segmentLocalIndex: 0,
+            logicalOrder: 0,
+          },
+        } as any,
+      },
+      {
+        type: 'assistant',
+        content: '真实回答',
+        timestamp: '2026-07-08T12:00:01.000Z',
+        logicalOrder: 1,
+        segmentIndex: 0,
+        segmentSessionId: 'segment-001',
+        segmentLocalIndex: 1,
+        messageIdentity: {
+          key: 'assistant|segment=segment-001|local=1|content=真实回答',
+          role: 'assistant',
+          segmentSessionId: 'segment-001',
+          segmentIndex: 0,
+          segmentLocalIndex: 1,
+          logicalOrder: 1,
+        },
+        raw: {
+          content: [{ type: 'text', text: '真实回答' }],
+          logicalOrder: 1,
+          segmentIndex: 0,
+          segmentSessionId: 'segment-001',
+          segmentLocalIndex: 1,
+          messageIdentity: {
+            key: 'assistant|segment=segment-001|local=1|content=真实回答',
+            role: 'assistant',
+            segmentSessionId: 'segment-001',
+            segmentIndex: 0,
+            segmentLocalIndex: 1,
+            logicalOrder: 1,
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-001',
+        'snapshot-signature-authoritative',
+        'runtime_continue_authoritative',
+      );
+      window.updateMessages!(JSON.stringify(authoritativeMessages));
+    });
+
+    expect(opts.setMessages).toHaveBeenCalledTimes(1);
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const previousMergedMessages: ClaudeMessage[] = [
+      { type: 'user', content: 'old prefix', timestamp: '2026-07-08T11:59:00.000Z' },
+      { type: 'assistant', content: 'optimistic tail', timestamp: '2026-07-08T11:59:59.000Z' },
+      { type: 'assistant', content: 'stale local merge', timestamp: '2026-07-08T12:00:02.000Z' },
+    ];
+
+    const nextMessages = updater(previousMergedMessages);
+
+    expect(nextMessages).toEqual(authoritativeMessages);
+    expect(window.__continuedSegmentHistoryPrefixMessages).toBeNull();
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBeNull();
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBeNull();
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+    expect((window as any).__continuedSegmentPendingSourceSessionId).toBeNull();
+    expect((window as any).__continuedSegmentPendingLogicalConversationId).toBeNull();
+    expect((window as any).__continuedSegmentPendingCreatedAt).toBeNull();
+    expect((window as any).__continuedSegmentPendingReason).toBeNull();
+    expect((window as any).__continuedSegmentAwaitingFirstSessionId).toBe(false);
   });
 
   it('patchMessageUuid updates the latest unresolved user message using raw text fallback', () => {

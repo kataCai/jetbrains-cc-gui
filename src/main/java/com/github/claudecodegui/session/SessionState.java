@@ -94,6 +94,12 @@ public class SessionState {
      * 该字段在过渡态下用于识别应从哪一段迁移上下文、并在拿到新 sessionId 后补写元数据。
      */
     private volatile String continuationSourceSessionId = null;
+    /**
+     * 当前 continued segment 首发前预构建的上下文续接快照文本。
+     * 该字段与用于标题展示的 summary 解耦，只服务于跨 runtime/model 继续时的首条 carryover prompt，
+     * 避免在多次继续链路里反复沿用首轮摘要而导致上下文回退。
+     */
+    private volatile String continuationCarryoverText = null;
     private volatile boolean lastRecovered = false;
     private volatile String lastRecoveryCategory = null;
     private volatile String lastRecoveryAction = null;
@@ -188,6 +194,16 @@ public class SessionState {
 
     public String getContinuationSourceSessionId() {
         return continuationSourceSessionId;
+    }
+
+    /**
+     * 返回 continued segment 首发前预构建的上下文续接快照文本。
+     * 上层仅应在 continuationPending=true 的首发阶段消费该字段；收口完成后通常会被清空。
+     *
+     * @return 供首条续接 prompt 使用的最近对话快照；若当前没有可用快照则返回 null
+     */
+    public String getContinuationCarryoverText() {
+        return continuationCarryoverText;
     }
 
     /**
@@ -339,6 +355,16 @@ public class SessionState {
      */
     public void setContinuationSourceSessionId(String continuationSourceSessionId) {
         this.continuationSourceSessionId = continuationSourceSessionId;
+    }
+
+    /**
+     * 设置 continued segment 首发要使用的上下文续接快照文本。
+     * 允许传入 null 或空串表示当前只能退回旧的 summary 兼容路径。
+     *
+     * @param continuationCarryoverText 最近对话快照文本；传入 null 表示清空
+     */
+    public void setContinuationCarryoverText(String continuationCarryoverText) {
+        this.continuationCarryoverText = continuationCarryoverText;
     }
 
     /**

@@ -1,4 +1,4 @@
-import { useCallback, type RefObject } from 'react';
+import { useCallback, type MutableRefObject, type RefObject } from 'react';
 import type { TFunction } from 'i18next';
 import { sendBridgeEvent } from '../utils/bridge';
 import type { ClaudeContentBlock, ClaudeMessage } from '../types';
@@ -50,6 +50,46 @@ export interface UseMessageSenderOptions {
   longContextEnabled?: boolean;
   openContextUsageDialog: (requestId?: string | null, loading?: boolean) => void;
   closeContextUsageDialog: (requestId?: string | null) => boolean;
+  currentSessionId?: string | null;
+  continuationPending?: boolean;
+  currentSessionIdRef?: MutableRefObject<string | null>;
+  continuationPendingRef?: MutableRefObject<boolean>;
+}
+
+/**
+ * 判断 continued segment 是否仍处于“新 runtime 已切换，但真实 sessionId 还未回传”的过渡态。
+ * 一旦命中该状态，前端必须阻止首条消息继续发送，避免后端在空 sessionId 上启动 Codex 发送链路。
+ *
+ * @param isTransitioning 当前前端 session transition guard 是否仍处于激活状态
+ * @param continuationPending 当前会话是否仍标记为 continued segment 待完成
+ * @param currentSessionId 当前前端可见的真实 sessionId，若为空说明新分段尚未 ready
+ * @return 若返回 true，则当前提交必须被门禁拦截
+ */
+export function shouldBlockContinuedSegmentSubmit(
+  isTransitioning: boolean,
+  continuationPending: boolean,
+  currentSessionId: string | null | undefined,
+  allowFirstSendWithoutSessionId = false,
+): boolean {
+  return isTransitioning || (continuationPending && !currentSessionId?.trim() && !allowFirstSendWithoutSessionId);
+}
+
+/**
+ * 判断 continued segment 是否处在“前端已建立过渡缓存，正等待首个 SDK sessionId”的首发窗口。
+ * Codex runtime 的真实 sessionId 需要第一次 send 之后才会由 SDK 回传；因此只要 createContinuedSegment
+ * 已经写入待绑定元数据，并且仍保留旧逻辑会话前缀，就允许这一条消息先发出，后续由 setSessionId 绑定新物理分段。
+ *
+ * @return true 表示当前允许 continued segment 在 currentSessionId 为空时执行首条发送
+ */
+export function isContinuedSegmentReadyForFirstSend(): boolean {
+  const hasPrefixCache = Array.isArray(window.__continuedSegmentHistoryPrefixMessages)
+    && window.__continuedSegmentHistoryPrefixMessages.length > 0;
+  return window.__continuedSegmentAwaitingFirstSessionId === true
+    && hasPrefixCache
+    && !!(
+      window.__continuedSegmentPendingSourceSessionId?.trim()
+      || window.__continuedSegmentPendingLogicalConversationId?.trim()
+    );
 }
 
 /**
@@ -81,6 +121,10 @@ export function useMessageSender({
   longContextEnabled,
   openContextUsageDialog,
   closeContextUsageDialog,
+  currentSessionId,
+  continuationPending = false,
+  currentSessionIdRef,
+  continuationPendingRef,
 }: UseMessageSenderOptions) {
   /**
    * Check if the input is a new session command
@@ -298,6 +342,24 @@ export function useMessageSender({
 
     if (!text && !hasAttachments) return;
 
+    const effectiveCurrentSessionId = currentSessionIdRef ? currentSessionIdRef.current : currentSessionId;
+    const effectiveContinuationPending = continuationPendingRef ? continuationPendingRef.current : continuationPending;
+    const allowContinuedFirstSendWithoutSessionId = isContinuedSegmentReadyForFirstSend();
+    if (shouldBlockContinuedSegmentSubmit(
+      window.__sessionTransitioning === true,
+      effectiveContinuationPending,
+      effectiveCurrentSessionId,
+      allowContinuedFirstSendWithoutSessionId,
+    )) {
+      addToast(
+        t('chat.continuedSegmentNotReady', {
+          defaultValue: 'chat.continuedSegmentNotReady',
+        }),
+        'info',
+      );
+      return;
+    }
+
     // Check SDK status
     if (!sdkStatusLoaded) {
       addToast(t('chat.sdkStatusLoading'), 'info');
@@ -378,14 +440,18 @@ export function useMessageSender({
     // Send message to backend
     sendMessageToBackend(text, attachments, agentInfo, fileTagsInfo, permissionMode);
   }, [
+    addToast,
     sdkStatusLoaded,
     currentSdkInstalled,
     currentProvider,
+    currentSessionId,
+    continuationPending,
+    currentSessionIdRef,
+    continuationPendingRef,
     permissionMode,
     selectedAgent,
     buildUserContentBlocks,
     sendMessageToBackend,
-    addToast,
     t,
   ]);
 

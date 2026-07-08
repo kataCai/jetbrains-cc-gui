@@ -415,6 +415,11 @@ public class CodexMessageHandler implements MessageCallback {
         if (hasCommandMessage) {
             return false;
         }
+        // 中文注释：内部注入前导在清洗后可能整段变为空。
+        // 这种情况下这里应直接视为“没有命令元数据”，而不是继续对空结果做 contains 判断触发空指针。
+        if (filterContent == null) {
+            return false;
+        }
         return filterContent.contains("<command-name>")
             || filterContent.contains("<local-command-stdout>")
             || filterContent.contains("<local-command-stderr>")

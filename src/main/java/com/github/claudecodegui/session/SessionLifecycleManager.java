@@ -18,21 +18,26 @@ import com.github.claudecodegui.skill.SlashCommandRegistry;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.github.claudecodegui.util.TokenUsageUtils;
+import com.github.claudecodegui.util.UserMessageSanitizer;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.ide.util.PropertiesComponent;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.util.concurrency.AppExecutorUtil;
 import com.intellij.ui.jcef.JBCefBrowser;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -44,7 +49,16 @@ public class SessionLifecycleManager {
     private static final Logger LOG = Logger.getInstance(SessionLifecycleManager.class);
     private static final String PERMISSION_MODE_PROPERTY_KEY = "claude.code.permission.mode";
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
-    private static final String CONTINUATION_CARRYOVER_MODE = "session_summary";
+    private static final String HISTORY_RESTORE_KIND_SINGLE_SESSION = "single_session";
+    private static final String HISTORY_RESTORE_KIND_LOGICAL_CONVERSATION = "logical_conversation";
+    private static final String HISTORY_RESTORE_KIND_RUNTIME_CONTINUE_AUTHORITATIVE =
+            "runtime_continue_authoritative";
+    private static final String CONTINUATION_CARRYOVER_MODE = "recent_turns_snapshot";
+    private static final String CONTINUATION_CARRYOVER_SUMMARY_FALLBACK_MODE = "summary_fallback";
+    private static final int CONTINUATION_CARRYOVER_MAX_VISIBLE_MESSAGES = 4;
+    private static final int CONTINUATION_CARRYOVER_MAX_MESSAGE_LENGTH = 240;
+    private static final long CONTINUED_LOGICAL_REFRESH_RETRY_DELAY_MS = 300L;
+    private static final int CONTINUED_LOGICAL_REFRESH_MAX_RETRIES = 5;
     private final Set<String> inFlightHistoryRestoreKeys = ConcurrentHashMap.newKeySet();
     private final AtomicReference<String> lastFinishedHistoryRestoreKey = new AtomicReference<>();
 
@@ -207,25 +221,89 @@ public class SessionLifecycleManager {
             host.getHandlerContext().setSession(newSession);
             syncHandlerRuntimeState(newSession);
             host.setupSessionCallbacks();
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createContinuedSessionWithRuntimeSwitch session_attached"
+                    + ", sessionId=" + firstNonBlank(newSession.getSessionId())
+                    + ", logicalConversationId=" + firstNonBlank(newSession.getState().getLogicalConversationId())
+                    + ", activeSegmentSessionId=" + firstNonBlank(newSession.getState().getActiveSegmentSessionId())
+                    + ", parentSegmentSessionId=" + firstNonBlank(newSession.getState().getParentSegmentSessionId())
+                    + ", continuationPending=" + newSession.getState().isContinuationPending()
+                    + ", continuationSourceSessionId=" + firstNonBlank(newSession.getState().getContinuationSourceSessionId())
+                    + ", provider=" + firstNonBlank(newSession.getProvider())
+                    + ", runtimeFamily=" + SessionRuntimeFamily.resolve(
+                    newSession.getProvider(),
+                    null,
+                    newSession.getState().getCodexSessionBinding()
+            )
+                    + ", model=" + firstNonBlank(newSession.getModel())
+                    + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding()));
 
             newSession.setSessionInfo(null, workingDirectory);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createContinuedSessionWithRuntimeSwitch session_initialized"
+                    + ", sessionId=" + firstNonBlank(newSession.getSessionId())
+                    + ", logicalConversationId=" + firstNonBlank(newSession.getState().getLogicalConversationId())
+                    + ", activeSegmentSessionId=" + firstNonBlank(newSession.getState().getActiveSegmentSessionId())
+                    + ", parentSegmentSessionId=" + firstNonBlank(newSession.getState().getParentSegmentSessionId())
+                    + ", continuationPending=" + newSession.getState().isContinuationPending()
+                    + ", continuationSourceSessionId=" + firstNonBlank(newSession.getState().getContinuationSourceSessionId())
+                    + ", cwd=" + firstNonBlank(newSession.getCwd()));
             fetchSlashCommandsOnStartup();
 
-            ApplicationManager.getApplication().invokeLater(() -> {
-                host.callJavaScript("historyLoadComplete");
-                host.callJavaScript("updateStatus",
-                        JsUtils.escapeJs(ClaudeCodeGuiBundle.message("toast.newSessionCreatedReady")));
-                resetTokenUsage();
-            });
+            ApplicationManager.getApplication().invokeLater(this::resetTokenUsage);
         }).exceptionally(ex -> {
             LOG.error("Failed to create continued session: " + ex.getMessage(), ex);
             ApplicationManager.getApplication().invokeLater(() -> {
-                host.callJavaScript("historyLoadComplete");
-                host.callJavaScript("updateStatus",
-                        JsUtils.escapeJs("Failed to continue session: " + ex.getMessage()));
+                rollbackFailedContinuedSessionCreation(oldSession, host.getSession(), ex.getMessage());
             });
             return null;
         });
+    }
+
+    /**
+     * 在 continued 新分段创建失败后，回滚插件与前端状态到旧会话。
+     * 这里必须同时恢复 host/handlerContext 当前会话，并显式通知前端清理 continued pending/cache，
+     * 否则当前标签页会继续停留在“continued 尚未就绪”的错误状态，后续发送也会被持续拦截。
+     *
+     * @param previousSession continued 创建前的旧会话
+     * @param failedSession 已经挂到 host 上但随后初始化失败的新会话
+     * @param errorMessage 失败原因
+     */
+    protected void rollbackFailedContinuedSessionCreation(
+            ClaudeSession previousSession,
+            ClaudeSession failedSession,
+            String errorMessage
+    ) {
+        boolean shouldRestorePreviousSession = previousSession != null
+                && failedSession != null
+                && host.getSession() == failedSession;
+
+        if (shouldRestorePreviousSession) {
+            host.setSession(previousSession);
+            if (host.getHandlerContext() != null) {
+                host.getHandlerContext().setSession(previousSession);
+            }
+            syncHandlerRuntimeState(previousSession);
+            host.setupSessionCallbacks();
+            host.callJavaScript(
+                    "window.abortContinuedSegmentTransition",
+                    JsUtils.escapeJs(previousSession.getSessionId())
+            );
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " rollbackFailedContinuedSessionCreation restored previousSessionId="
+                    + firstNonBlank(previousSession.getSessionId())
+                    + ", failedSessionId=" + firstNonBlank(failedSession.getSessionId())
+                    + ", logicalConversationId="
+                    + firstNonBlank(previousSession.getState().getLogicalConversationId()));
+        } else {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " rollbackFailedContinuedSessionCreation skipped_restore"
+                    + ", previousSessionId=" + firstNonBlank(previousSession != null ? previousSession.getSessionId() : null)
+                    + ", failedSessionId=" + firstNonBlank(failedSession != null ? failedSession.getSessionId() : null)
+                    + ", currentHostSessionId=" + firstNonBlank(host.getSession() != null ? host.getSession().getSessionId() : null));
+        }
+
+        host.callJavaScript("historyLoadComplete");
+        host.callJavaScript(
+                "updateStatus",
+                JsUtils.escapeJs("Failed to continue session: " + firstNonBlank(errorMessage, "unknown error"))
+        );
     }
 
     /**
@@ -448,6 +526,12 @@ public class SessionLifecycleManager {
             loadFuture.handle((unused, ex) -> {
                 finishHistoryRestoreRequest(restoreRequestKey);
                 ApplicationManager.getApplication().invokeLater(() -> {
+                    if (shouldSkipHistoryRestoreForInactiveSession(newSession)) {
+                        LOG.info("[HistoryRestore] Skip stale history restore completion callback, sessionId="
+                                + firstNonBlank(sessionId)
+                                + ", restoreSource=" + firstNonBlank(restoreSource));
+                        return;
+                    }
                     if (ex == null) {
                         replayRestoredSessionTitle(sessionId);
                         LOG.info(TabSessionRestoreDebugTrace.buildMessage(
@@ -524,7 +608,7 @@ public class SessionLifecycleManager {
     ) {
         return CompletableFuture.runAsync(() -> {
             try {
-                CodexHistoryReader codexReader = new CodexHistoryReader();
+                CodexHistoryReader codexReader = createCodexHistoryReader();
                 String messagesJson = codexReader.getSessionMessagesAsJson(sessionId);
                 JsonArray messages = new Gson().fromJson(messagesJson, JsonArray.class);
                 if (messages == null) {
@@ -538,14 +622,23 @@ public class SessionLifecycleManager {
                     resolvedCwd = session.getCwd();
                 }
 
+                if (shouldSkipHistoryRestoreForInactiveSession(session)) {
+                    LOG.info("[HistoryRestore] Skip stale Codex history restore before applying snapshot, sessionId="
+                            + actualThreadId + ", restoreSource=" + firstNonBlank(restoreSource));
+                    return;
+                }
+
                 session.setSessionInfo(actualThreadId, resolvedCwd);
                 restoreCodexSessionBindingIfPresent(session, actualThreadId);
                 HistoryMessageInjector.restoreCodexMessagesToSessionState(session.getState(), messages);
                 pushCodexHistoryMessagesToFrontend(
+                        session,
                         messages,
                         buildHistoryRestoreRequestKey(actualThreadId, restoreSource, transitionToken)
                 );
-                restoreCodexHistoryTokenUsage(session, messages);
+                if (!shouldSkipHistoryRestoreForInactiveSession(session)) {
+                    restoreCodexHistoryTokenUsage(session, messages);
+                }
 
                 LOG.info(TabSessionRestoreDebugTrace.buildMessage(
                         "history_restore_codex_enhanced_completed",
@@ -571,22 +664,98 @@ public class SessionLifecycleManager {
      *
      * @param messages Codex 原始历史消息数组
      */
-    private void pushCodexHistoryMessagesToFrontend(JsonArray messages, String restoreRequestKey) {
+    private void pushCodexHistoryMessagesToFrontend(
+            ClaudeSession expectedSession,
+            JsonArray messages,
+            String restoreRequestKey
+    ) {
         List<JsonObject> frontendMessages = HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+        pushFrontendMessagesToFrontendIfSessionCurrent(
+                expectedSession,
+                frontendMessages,
+                restoreRequestKey,
+                messages.size(),
+                HISTORY_RESTORE_KIND_SINGLE_SESSION
+        );
+    }
+
+    /**
+     * 把已经构造完成的前端消息快照推送到当前窗口。
+     * 统一保留 `prepareHistoryRestoreSnapshot -> clearMessages -> updateMessages` 注入顺序，
+     * 避免运行时 continued 回刷与历史恢复再次出现两套不同的前端重放语义。
+     *
+     * @param frontendMessages 供前端直接渲染的消息快照
+     * @param restoreRequestKey 本轮快照对应的稳定 restore key
+     * @param rawMessageCount 用于日志观测的原始消息数
+     */
+    private void pushFrontendMessagesToFrontend(
+            List<JsonObject> frontendMessages,
+            String restoreRequestKey,
+            int rawMessageCount,
+            String restoreKind
+    ) {
         String payload = JsUtils.escapeJs(new Gson().toJson(frontendMessages));
         String rawSnapshotSignature = HistoryMessageInjector.buildFrontendSnapshotSignature(frontendMessages);
         String snapshotSignature = JsUtils.escapeJs(rawSnapshotSignature);
         String escapedRestoreRequestKey = JsUtils.escapeJs(restoreRequestKey);
+        String normalizedRestoreKind = hasText(restoreKind) ? restoreKind : HISTORY_RESTORE_KIND_SINGLE_SESSION;
+        String escapedRestoreKind = JsUtils.escapeJs(normalizedRestoreKind);
         LOG.info("[HistoryRestore] Push Codex history snapshot to frontend: restoreRequestKey="
                 + restoreRequestKey
                 + ", snapshotSignature=" + rawSnapshotSignature
+                + ", restoreKind=" + normalizedRestoreKind
                 + ", frontendMessageCount=" + frontendMessages.size()
-                + ", rawMessageCount=" + messages.size());
-        ApplicationManager.getApplication().invokeLater(() -> {
-            host.callJavaScript("prepareHistoryRestoreSnapshot", escapedRestoreRequestKey, snapshotSignature);
+                + ", rawMessageCount=" + rawMessageCount);
+        Runnable pushSnapshot = () -> {
+            host.callJavaScript(
+                    "prepareHistoryRestoreSnapshot",
+                    escapedRestoreRequestKey,
+                    snapshotSignature,
+                    escapedRestoreKind
+            );
             host.callJavaScript("clearMessages");
             host.callJavaScript("updateMessages", payload);
-        });
+        };
+        if (ApplicationManager.getApplication() == null || ApplicationManager.getApplication().isUnitTestMode()) {
+            pushSnapshot.run();
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(pushSnapshot);
+    }
+
+    /**
+     * 仅当当前 host 仍然指向同一个会话实例时，才允许把历史恢复或 continued 聚合快照推给前端。
+     * 这样可以阻止“旧 startup restore 晚到后覆盖当前新会话”以及“旧 continued 重试任务晚到后污染新分段”的竞态。
+     *
+     * @param expectedSession 发起本次恢复或回刷的目标会话实例
+     * @param frontendMessages 供前端渲染的消息快照
+     * @param restoreRequestKey 本轮 restore key
+     * @param rawMessageCount 原始消息数量
+     */
+    protected void pushFrontendMessagesToFrontendIfSessionCurrent(
+            ClaudeSession expectedSession,
+            List<JsonObject> frontendMessages,
+            String restoreRequestKey,
+            int rawMessageCount,
+            String restoreKind
+    ) {
+        if (shouldSkipHistoryRestoreForInactiveSession(expectedSession)) {
+            LOG.info("[HistoryRestore] Skip stale frontend snapshot push: restoreRequestKey="
+                    + restoreRequestKey + ", rawMessageCount=" + rawMessageCount);
+            return;
+        }
+        pushFrontendMessagesToFrontend(frontendMessages, restoreRequestKey, rawMessageCount, restoreKind);
+    }
+
+    /**
+     * 判断某个历史恢复或 continued 回刷任务是否已经指向了过期会话实例。
+     * 这里必须按对象实例判断，而不是只看 sessionId，因为 startup restore 过程中用户可能已经在同一窗口创建了全新空会话。
+     *
+     * @param expectedSession 发起恢复或回刷的目标会话实例
+     * @return true 表示当前任务已经过期，不能再继续向前端回放
+     */
+    protected boolean shouldSkipHistoryRestoreForInactiveSession(ClaudeSession expectedSession) {
+        return expectedSession != null && host.getSession() != expectedSession;
     }
 
     /**
@@ -796,6 +965,16 @@ public class SessionLifecycleManager {
     }
 
     /**
+     * 创建 Codex 历史读取器。
+     * 单独保留工厂方法，便于单元测试替换历史来源，而不影响生产链路的真实会话读取。
+     *
+     * @return Codex 历史读取器
+     */
+    protected CodexHistoryReader createCodexHistoryReader() {
+        return new CodexHistoryReader();
+    }
+
+    /**
      * 在新分段拿到真实 sessionId 后，补齐逻辑会话与分段索引并清除 continuation pending。
      * 该方法会在会话 id 回调和单元测试桩中共用，因此需要保证幂等和兼容空元数据输入。
      *
@@ -842,6 +1021,7 @@ public class SessionLifecycleManager {
                 resolveLogicalConversationIdBySessionId(sourceSessionId),
                 "logical-" + sourceSessionId
         );
+        String carryoverMode = resolveContinuationCarryoverMode(state);
 
         try {
             CodemossSettingsService settingsService = createSettingsService();
@@ -881,15 +1061,18 @@ public class SessionLifecycleManager {
                         sourceMetadata.model,
                         sourceMetadata.reasoningEffort,
                         "backfill_source_segment",
-                        CONTINUATION_CARRYOVER_MODE,
+                        carryoverMode,
                         previousLogicalRecord != null && previousLogicalRecord.isMeaningful()
                                 ? previousLogicalRecord.getCreatedAt()
-                                : now
+                                : now,
+                        sourceMetadata.codexProviderId,
+                        sourceMetadata.providerDisplayName
                 ));
                 existingSegments = settingsService.listConversationSegments(logicalConversationId);
                 nextSegmentIndex = existingSegments.size();
             }
 
+            String targetCodexProviderDisplayName = resolveCodexProviderDisplayName(settingsService, targetCodexProviderId);
             settingsService.saveConversationSegmentRecord(new ConversationSegmentRecord(
                     newSessionId,
                     logicalConversationId,
@@ -900,8 +1083,10 @@ public class SessionLifecycleManager {
                     firstNonBlank(targetModel, session.getModel()),
                     firstNonBlank(targetReasoningEffort, session.getReasoningEffort()),
                     "runtime_switch:" + firstNonBlank(switchReason, "unknown"),
-                    CONTINUATION_CARRYOVER_MODE,
-                    now
+                    carryoverMode,
+                    now,
+                    firstNonBlank(targetCodexProviderId),
+                    targetCodexProviderDisplayName
             ));
 
             settingsService.saveLogicalConversationRecord(new LogicalConversationRecord(
@@ -927,6 +1112,7 @@ public class SessionLifecycleManager {
         state.setParentSegmentSessionId(firstNonBlank(sourceSessionId));
         state.setContinuationPending(false);
         state.setContinuationSourceSessionId(null);
+        state.setContinuationCarryoverText(null);
 
         if (hasText(targetProvider)) {
             session.setProvider(targetProvider);
@@ -940,17 +1126,267 @@ public class SessionLifecycleManager {
         if (SessionRuntimeFamily.CODEX.equals(targetRuntimeFamily) || hasText(targetCodexProviderId)) {
             session.getState().setCodexSessionBinding(buildCodexBindingFromProvider(targetCodexProviderId, targetModel));
         }
+        refreshContinuedLogicalConversationMessages(
+                newSessionId,
+                logicalConversationId,
+                newSessionId,
+                session
+        );
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " completeContinuedSegment applied logicalConversationId="
                 + firstNonBlank(state.getLogicalConversationId())
                 + ", activeSegmentSessionId=" + firstNonBlank(state.getActiveSegmentSessionId())
                 + ", parentSegmentSessionId=" + firstNonBlank(state.getParentSegmentSessionId())
                 + ", continuationPending=" + state.isContinuationPending()
+                + ", carryoverMode=" + carryoverMode
                 + ", provider=" + firstNonBlank(session.getProvider())
                 + ", runtimeFamily=" + SessionRuntimeFamily.resolve(session.getProvider(), null, state.getCodexSessionBinding())
                 + ", model=" + firstNonBlank(session.getModel())
                 + ", binding=" + describeBinding(state.getCodexSessionBinding()));
 
         syncHandlerRuntimeState(session);
+    }
+
+    /**
+     * 构建 continued 收口后需要回刷到前端的逻辑会话聚合消息。
+     * 默认实现复用 HistoryMessageInjector 的逻辑会话聚合能力；测试可按需覆盖该入口隔离文件系统依赖。
+     *
+     * @param requestedSessionId 本轮回刷对应的最新 sessionId
+     * @param logicalConversationId 所属逻辑会话 id
+     * @param activeSegmentSessionId 当前活动分段 sessionId
+     * @return 可直接写回 SessionState 并推送前端的聚合消息快照
+     */
+    protected List<JsonObject> buildContinuedLogicalConversationFrontendMessages(
+            String requestedSessionId,
+            String logicalConversationId,
+            String activeSegmentSessionId
+    ) {
+        return HistoryMessageInjector.buildCodexLogicalConversationFrontendBatch(
+                requestedSessionId,
+                logicalConversationId,
+                activeSegmentSessionId,
+                createSettingsService(),
+                createCodexHistoryReader()
+        );
+    }
+
+    /**
+     * 在 continued segment 元数据收口后，按逻辑会话维度回刷聚合消息。
+     * 这样运行时 continued 与历史恢复将共享同一套“多分段聚合 + 边界提示”的展示语义，
+     * 避免新物理 session 的局部快照把旧消息整段覆盖掉。
+     *
+     * @param requestedSessionId 本轮回刷对应的最新 sessionId
+     * @param logicalConversationId 所属逻辑会话 id
+     * @param activeSegmentSessionId 当前活动分段 sessionId
+     * @param session 当前会话对象
+     */
+    private void refreshContinuedLogicalConversationMessages(
+            String requestedSessionId,
+            String logicalConversationId,
+            String activeSegmentSessionId,
+            ClaudeSession session
+    ) {
+        refreshContinuedLogicalConversationMessages(
+                requestedSessionId,
+                logicalConversationId,
+                activeSegmentSessionId,
+                session,
+                0
+        );
+    }
+
+    /**
+     * 按 attempt 序号执行一次 continued 聚合回刷。
+     * 如果新分段历史中尚未出现任何可见 user 消息，说明该分段还没有达到“可安全覆盖前端快照”的时机，
+     * 此时只能跳过本轮覆盖式回刷并短延迟重试，避免把前端 optimistic user message 抹掉。
+     *
+     * @param requestedSessionId 本轮回刷对应的最新 sessionId
+     * @param logicalConversationId 所属逻辑会话 id
+     * @param activeSegmentSessionId 当前活动分段 sessionId
+     * @param session 当前会话对象
+     * @param attempt 当前尝试次数，从 0 开始
+     */
+    /**
+     * 在流式回复结束或 send_complete 收口后，按当前活动会话状态尝试补一轮 continued 逻辑会话回刷。
+     * 这个入口专门处理“首次 continued 收口时历史尚未可见，但稍后历史文件已经完整落盘”的晚到场景，
+     * 避免前一次 defer 结束后，最终 assistant 结果再也没有机会回刷到当前逻辑会话视图。
+     */
+    public void refreshActiveContinuedLogicalConversationMessagesIfNeeded() {
+        refreshActiveContinuedLogicalConversationMessagesIfNeeded(host.getSession());
+    }
+
+    /**
+     * 根据给定会话的 continued 元数据决定是否需要执行补偿式逻辑回刷。
+     * 仅当 continued 已完成绑定，且逻辑会话 id、父分段 id、活动分段 id 都完整时才触发；
+     * 对普通会话、仍处于 continuationPending 的过渡态，以及缺失关键标识的脏状态一律直接跳过。
+     *
+     * @param session 当前准备执行补偿回刷的会话实例
+     */
+    protected void refreshActiveContinuedLogicalConversationMessagesIfNeeded(ClaudeSession session) {
+        if (session == null) {
+            return;
+        }
+        SessionState state = session.getState();
+        if (state == null || state.isContinuationPending()) {
+            return;
+        }
+        String logicalConversationId = firstNonBlank(state.getLogicalConversationId());
+        String activeSegmentSessionId = firstNonBlank(state.getActiveSegmentSessionId());
+        String parentSegmentSessionId = firstNonBlank(state.getParentSegmentSessionId());
+        if (!hasText(logicalConversationId) || !hasText(activeSegmentSessionId) || !hasText(parentSegmentSessionId)) {
+            return;
+        }
+        refreshContinuedLogicalConversationMessages(
+                activeSegmentSessionId,
+                logicalConversationId,
+                activeSegmentSessionId,
+                session
+        );
+    }
+
+    private void refreshContinuedLogicalConversationMessages(
+            String requestedSessionId,
+            String logicalConversationId,
+            String activeSegmentSessionId,
+            ClaudeSession session,
+            int attempt
+    ) {
+        if (session == null || !hasText(logicalConversationId) || !hasText(activeSegmentSessionId)) {
+            return;
+        }
+        try {
+            List<JsonObject> activeSegmentFrontendMessages =
+                    loadVisibleFrontendMessagesFromSession(activeSegmentSessionId);
+            if (!containsVisibleUserMessage(activeSegmentFrontendMessages)) {
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX
+                        + " refreshContinuedLogicalConversationMessages deferred active segment not ready"
+                        + ", logicalConversationId=" + firstNonBlank(logicalConversationId)
+                        + ", activeSegmentSessionId=" + firstNonBlank(activeSegmentSessionId)
+                        + ", requestedSessionId=" + firstNonBlank(requestedSessionId)
+                        + ", attempt=" + attempt);
+                scheduleContinuedLogicalConversationRefreshRetry(
+                        requestedSessionId,
+                        logicalConversationId,
+                        activeSegmentSessionId,
+                        session,
+                        attempt
+                );
+                return;
+            }
+            List<JsonObject> frontendMessages = buildContinuedLogicalConversationFrontendMessages(
+                    requestedSessionId,
+                    logicalConversationId,
+                    activeSegmentSessionId
+            );
+            if (frontendMessages == null || frontendMessages.isEmpty()) {
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " refreshContinuedLogicalConversationMessages skipped empty snapshot"
+                        + ", logicalConversationId=" + firstNonBlank(logicalConversationId)
+                        + ", activeSegmentSessionId=" + firstNonBlank(activeSegmentSessionId));
+                return;
+            }
+            HistoryMessageInjector.restoreCodexMessagesToSessionState(session.getState(), frontendMessages);
+            pushFrontendMessagesToFrontendIfSessionCurrent(
+                    session,
+                    frontendMessages,
+                    buildHistoryRestoreRequestKey(activeSegmentSessionId, "runtime_continue", null),
+                    frontendMessages.size(),
+                    HISTORY_RESTORE_KIND_RUNTIME_CONTINUE_AUTHORITATIVE
+            );
+        } catch (Exception e) {
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " refreshContinuedLogicalConversationMessages failed: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 读取指定分段当前已经可见的前端消息。
+     * 这里只关心“是否已经出现真实 user 消息”，不直接把结果推给前端；
+     * 目的是在 continued 收口后先判断新分段历史是否足够完整，再决定是否执行覆盖式聚合回刷。
+     *
+     * @param sessionId 目标物理分段 sessionId
+     * @return 转换后的可见前端消息列表；读取失败或尚未可见时返回空列表
+     */
+    protected List<JsonObject> loadVisibleFrontendMessagesFromSession(String sessionId) {
+        if (!hasText(sessionId)) {
+            return java.util.Collections.emptyList();
+        }
+        try {
+            String messagesJson = createCodexHistoryReader().getSessionMessagesAsJson(sessionId);
+            JsonArray messages = new Gson().fromJson(messagesJson, JsonArray.class);
+            if (messages == null) {
+                return java.util.Collections.emptyList();
+            }
+            return HistoryMessageInjector.convertCodexMessagesToFrontendBatch(messages);
+        } catch (Exception e) {
+            LOG.debug(CODEX_RUNTIME_TRACE_PREFIX + " loadVisibleFrontendMessagesFromSession failed: " + e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /**
+     * 判断一批前端消息中是否已经出现真实 user 消息。
+     * continued 首次继续提问场景下，只有看到了新分段 user turn，才允许后端用聚合快照覆盖当前前端列表；
+     * 否则该聚合快照大概率还缺少最新用户追问，会直接触发“用户可见记录丢失”。
+     *
+     * @param frontendMessages 待判断的前端消息列表
+     * @return 至少包含一条 user 消息时返回 true
+     */
+    protected boolean containsVisibleUserMessage(List<JsonObject> frontendMessages) {
+        if (frontendMessages == null || frontendMessages.isEmpty()) {
+            return false;
+        }
+        for (JsonObject frontendMessage : frontendMessages) {
+            if (frontendMessage == null || !frontendMessage.has("type")) {
+                continue;
+            }
+            if ("user".equals(firstNonBlank(frontendMessage.get("type").getAsString()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 为未就绪的新分段安排短延迟重试。
+     * 生产环境需要在历史文件稍后落盘后重新补齐 continued 边界提示；但单元测试不应引入异步重试噪音，
+     * 因此测试模式下只记录 defer 行为，不自动调度下一次尝试。
+     *
+     * @param requestedSessionId 本轮回刷对应的最新 sessionId
+     * @param logicalConversationId 所属逻辑会话 id
+     * @param activeSegmentSessionId 当前活动分段 sessionId
+     * @param session 当前会话对象
+     * @param attempt 当前尝试次数
+     */
+    protected void scheduleContinuedLogicalConversationRefreshRetry(
+            String requestedSessionId,
+            String logicalConversationId,
+            String activeSegmentSessionId,
+            ClaudeSession session,
+            int attempt
+    ) {
+        Application application = ApplicationManager.getApplication();
+        if (attempt >= CONTINUED_LOGICAL_REFRESH_MAX_RETRIES) {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX
+                    + " refreshContinuedLogicalConversationMessages gave up waiting for active segment"
+                    + ", logicalConversationId=" + firstNonBlank(logicalConversationId)
+                    + ", activeSegmentSessionId=" + firstNonBlank(activeSegmentSessionId)
+                    + ", attempt=" + attempt);
+            return;
+        }
+        if (application == null || application.isUnitTestMode()) {
+            return;
+        }
+        AppExecutorUtil.getAppScheduledExecutorService().schedule(() -> {
+            if (host.isDisposed()) {
+                return;
+            }
+            refreshContinuedLogicalConversationMessages(
+                    requestedSessionId,
+                    logicalConversationId,
+                    activeSegmentSessionId,
+                    session,
+                    attempt + 1
+            );
+        }, CONTINUED_LOGICAL_REFRESH_RETRY_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -977,13 +1413,19 @@ public class SessionLifecycleManager {
                         firstNonBlank(sourceSegmentRecord.getProvider()),
                         firstNonBlank(sourceSegmentRecord.getRuntimeFamily()),
                         firstNonBlank(sourceSegmentRecord.getModel()),
-                        firstNonBlank(sourceSegmentRecord.getReasoningEffort())
+                        firstNonBlank(sourceSegmentRecord.getReasoningEffort()),
+                        firstNonBlank(sourceSegmentRecord.getCodexProviderId()),
+                        firstNonBlank(sourceSegmentRecord.getProviderDisplayName())
                 );
             }
         } catch (Exception e) {
             LOG.debug(CODEX_RUNTIME_TRACE_PREFIX + " resolveSourceSegmentRuntimeMetadata segment lookup failed: " + e.getMessage());
         }
 
+        String sourceCodexProviderId = currentSession != null && currentSession.getState().getCodexSessionBinding() != null
+                ? firstNonBlank(currentSession.getState().getCodexSessionBinding().getProviderId())
+                : "";
+        String sourceProviderDisplayName = resolveCodexProviderDisplayName(settingsService, sourceCodexProviderId);
         if (logicalRecord != null && logicalRecord.isMeaningful()) {
             return new SourceSegmentRuntimeMetadata(
                     firstNonBlank(logicalRecord.getProvider(), currentSession != null ? currentSession.getProvider() : ""),
@@ -996,12 +1438,14 @@ public class SessionLifecycleManager {
                             )
                                     : ""),
                     firstNonBlank(logicalRecord.getLastModel(), currentSession != null ? currentSession.getModel() : ""),
-                    currentSession != null ? firstNonBlank(currentSession.getReasoningEffort()) : ""
+                    currentSession != null ? firstNonBlank(currentSession.getReasoningEffort()) : "",
+                    sourceCodexProviderId,
+                    sourceProviderDisplayName
             );
         }
 
         if (currentSession == null) {
-            return new SourceSegmentRuntimeMetadata("", "", "", "");
+            return new SourceSegmentRuntimeMetadata("", "", "", "", "", "");
         }
         return new SourceSegmentRuntimeMetadata(
                 firstNonBlank(currentSession.getProvider()),
@@ -1011,8 +1455,36 @@ public class SessionLifecycleManager {
                         currentSession.getState().getCodexSessionBinding()
                 )),
                 firstNonBlank(currentSession.getModel()),
-                firstNonBlank(currentSession.getReasoningEffort())
+                firstNonBlank(currentSession.getReasoningEffort()),
+                sourceCodexProviderId,
+                sourceProviderDisplayName
         );
+    }
+
+    /**
+     * 解析 Codex provider 的人类可读展示名。
+     * 该方法只作为历史边界提示的辅助信息来源；若配置缺失或 provider 已删除，则允许回退为空并最终展示 providerId。
+     *
+     * @param settingsService 配置服务
+     * @param providerId 目标 Codex provider id
+     * @return provider 展示名；未命中时返回空串
+     */
+    private String resolveCodexProviderDisplayName(CodemossSettingsService settingsService, String providerId) {
+        if (!hasText(providerId) || settingsService == null) {
+            return "";
+        }
+        try {
+            JsonObject provider = settingsService.getCodexProviderById(providerId);
+            if (provider == null) {
+                return "";
+            }
+            if (provider.has("name") && !provider.get("name").isJsonNull()) {
+                return firstNonBlank(provider.get("name").getAsString());
+            }
+        } catch (Exception e) {
+            LOG.debug(CODEX_RUNTIME_TRACE_PREFIX + " resolveCodexProviderDisplayName failed: " + e.getMessage());
+        }
+        return "";
     }
 
     /**
@@ -1194,6 +1666,15 @@ public class SessionLifecycleManager {
         return new ClaudeSession(host.getProject(), host.getClaudeSDKBridge(), host.getCodexSDKBridge());
     }
 
+    /**
+     * 为新建 continued segment 预填最小但足够准确的续接元数据。
+     * 这里除了复制逻辑会话标识和来源分段信息，还会从旧会话的最近可见消息中提取一段 carryover 快照，
+     * 供新 runtime 在首条发送前准确接住最新上下文，而不是退回到首轮摘要。
+     *
+     * @param oldSession 继续链路中的来源会话
+     * @param newSession 待初始化的目标会话
+     * @param request 前端发起继续操作时携带的目标 runtime 请求
+     */
     private void primeContinuationMetadata(
             ClaudeSession oldSession,
             ClaudeSession newSession,
@@ -1206,6 +1687,7 @@ public class SessionLifecycleManager {
                 resolveLogicalConversationIdBySessionId(sourceSessionId),
                 "logical-" + UUID.randomUUID()
         );
+        String continuationCarryoverText = buildContinuationCarryoverText(oldSession);
 
         newSession.getState().setLogicalConversationId(logicalConversationId);
         newSession.getState().setActiveSegmentSessionId(null);
@@ -1213,14 +1695,156 @@ public class SessionLifecycleManager {
         newSession.getState().setContinuationPending(true);
         newSession.getState().setContinuationSourceSessionId(sourceSessionId);
         newSession.getState().setSummary(oldSession.getSummary());
+        newSession.getState().setContinuationCarryoverText(continuationCarryoverText);
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " primeContinuationMetadata logicalConversationId="
                 + logicalConversationId
                 + ", sourceSessionId=" + sourceSessionId
+                + ", carryoverMode=" + resolveContinuationCarryoverMode(newSession.getState())
+                + ", carryoverPreview=" + firstNonBlank(continuationCarryoverText)
                 + ", targetProvider=" + firstNonBlank(newSession.getProvider())
                 + ", targetModel=" + firstNonBlank(newSession.getModel())
                 + ", targetReasoningEffort=" + firstNonBlank(newSession.getReasoningEffort())
                 + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding())
                 + ", request=" + (request != null ? request.toLogString() : "(null)"));
+    }
+
+    /**
+     * 从来源会话的最近可见消息中构建 continued 首发所需的 carryover 快照。
+     * 优先保留最后几条用户/助手消息，确保后续多次继续时始终衔接最近轮次；若当前消息为空，则回退到旧的 summary。
+     *
+     * @param sourceSession 作为上下文来源的旧会话
+     * @return 可直接注入首条 prompt 的最近对话快照；若没有可用消息则返回 summary 回退文本或空串
+     */
+    protected String buildContinuationCarryoverText(ClaudeSession sourceSession) {
+        if (sourceSession == null) {
+            return "";
+        }
+        return buildContinuationCarryoverText(
+                sourceSession.getState().getMessages(),
+                sourceSession.getSummary()
+        );
+    }
+
+    /**
+     * 基于消息列表生成最近轮次快照文本。
+     * 只保留用户与助手的可见文本消息，并对内容做压缩裁剪，避免把完整历史整段塞回首条 carryover prompt。
+     *
+     * @param messages 来源会话当前可见的消息列表
+     * @param fallbackSummary 当消息列表为空时可退回的摘要文本
+     * @return 规范化后的最近对话快照；若无可用消息则返回摘要回退文本或空串
+     */
+    private String buildContinuationCarryoverText(List<ClaudeSession.Message> messages, String fallbackSummary) {
+        List<ClaudeSession.Message> eligibleMessages = new ArrayList<>();
+        if (messages != null) {
+            for (ClaudeSession.Message message : messages) {
+                if (isContinuationCarryoverEligible(message)) {
+                    eligibleMessages.add(message);
+                }
+            }
+        }
+
+        if (eligibleMessages.isEmpty()) {
+            return firstNonBlank(fallbackSummary);
+        }
+
+        int startIndex = Math.max(0, eligibleMessages.size() - CONTINUATION_CARRYOVER_MAX_VISIBLE_MESSAGES);
+        StringBuilder carryoverBuilder = new StringBuilder();
+        for (int index = startIndex; index < eligibleMessages.size(); index++) {
+            String formattedMessage = formatContinuationCarryoverMessage(eligibleMessages.get(index));
+            if (!hasText(formattedMessage)) {
+                continue;
+            }
+            if (carryoverBuilder.length() > 0) {
+                carryoverBuilder.append("\n");
+            }
+            carryoverBuilder.append(formattedMessage);
+        }
+        return hasText(carryoverBuilder.toString()) ? carryoverBuilder.toString() : firstNonBlank(fallbackSummary);
+    }
+
+    /**
+     * 判断一条消息是否适合作为 continued carryover 快照的一部分。
+     * 过滤系统消息、错误消息、空白内容、工具结果占位文本以及已被历史恢复污染出来的 synthetic continued user message，
+     * 尽量只保留用户真正看到、且适合继续拼接到下一次 carryoverPreview 的自然语言上下文。
+     *
+     * @param message 待判断的消息
+     * @return true 表示该消息可参与最近轮次快照构建
+     */
+    private boolean isContinuationCarryoverEligible(ClaudeSession.Message message) {
+        if (message == null) {
+            return false;
+        }
+        if (message.type != ClaudeSession.Message.Type.USER && message.type != ClaudeSession.Message.Type.ASSISTANT) {
+            return false;
+        }
+        if (message.type == ClaudeSession.Message.Type.USER
+                && UserMessageSanitizer.isSyntheticContinuationCarryoverMessage(message.content)) {
+            return false;
+        }
+        String normalizedContent = normalizeContinuationCarryoverContent(message.content);
+        return hasText(normalizedContent) && !"[tool_result]".equals(normalizedContent);
+    }
+
+    /**
+     * 将单条消息格式化为 carryover 快照中的稳定文本行。
+     * 统一使用 `User:` / `Assistant:` 前缀，便于新 runtime 快速理解最后几轮对话角色与顺序。
+     *
+     * @param message 已通过筛选的消息
+     * @return 单行格式化文本；若消息内容不可用则返回空串
+     */
+    private String formatContinuationCarryoverMessage(ClaudeSession.Message message) {
+        if (message == null) {
+            return "";
+        }
+        String normalizedContent = normalizeContinuationCarryoverContent(message.content);
+        if (!hasText(normalizedContent)) {
+            return "";
+        }
+        String role = message.type == ClaudeSession.Message.Type.USER ? "User" : "Assistant";
+        return role + ": " + normalizedContent;
+    }
+
+    /**
+     * 规范化 carryover 快照中的消息内容。
+     * 这里会先复用统一的用户可见文本清洗逻辑，再压平换行与多余空白，并截断超长文本，
+     * 避免继续会话的首条 prompt 被内部前缀或单条长消息放大。
+     *
+     * @param content 原始消息内容
+     * @return 归一化后的单行文本；若原始内容为空则返回空串
+     */
+    private String normalizeContinuationCarryoverContent(String content) {
+        if (!hasText(content)) {
+            return "";
+        }
+        String sanitizedContent = UserMessageSanitizer.sanitizeInjectedRequestTextToUserVisibleText(content);
+        if (!hasText(sanitizedContent)) {
+            return "";
+        }
+        String normalizedContent = sanitizedContent.replace("\r", " ").replace("\n", " ").trim().replaceAll("\\s+", " ");
+        if (normalizedContent.length() > CONTINUATION_CARRYOVER_MAX_MESSAGE_LENGTH) {
+            return normalizedContent.substring(0, CONTINUATION_CARRYOVER_MAX_MESSAGE_LENGTH) + "...";
+        }
+        return normalizedContent;
+    }
+
+    /**
+     * 根据当前会话状态判断本次 continued 链路实际采用的 carryover 模式。
+     * 最近轮次快照优先级最高；若快照不可用但仍存在 summary，则显式标记为摘要回退，便于日志与元数据排查。
+     *
+     * @param state 当前 continued 链路对应的会话状态
+     * @return 本次延续链路的上下文迁移模式标识
+     */
+    private String resolveContinuationCarryoverMode(SessionState state) {
+        if (state == null) {
+            return "";
+        }
+        if (hasText(state.getContinuationCarryoverText())) {
+            return CONTINUATION_CARRYOVER_MODE;
+        }
+        if (hasText(state.getSummary())) {
+            return CONTINUATION_CARRYOVER_SUMMARY_FALLBACK_MODE;
+        }
+        return "";
     }
 
     private void syncHandlerRuntimeState(ClaudeSession session) {
@@ -1413,17 +2037,23 @@ public class SessionLifecycleManager {
         private final String runtimeFamily;
         private final String model;
         private final String reasoningEffort;
+        private final String codexProviderId;
+        private final String providerDisplayName;
 
         private SourceSegmentRuntimeMetadata(
                 String provider,
                 String runtimeFamily,
                 String model,
-                String reasoningEffort
+                String reasoningEffort,
+                String codexProviderId,
+                String providerDisplayName
         ) {
             this.provider = firstNonBlank(provider);
             this.runtimeFamily = firstNonBlank(runtimeFamily);
             this.model = firstNonBlank(model);
             this.reasoningEffort = firstNonBlank(reasoningEffort);
+            this.codexProviderId = firstNonBlank(codexProviderId);
+            this.providerDisplayName = firstNonBlank(providerDisplayName);
         }
     }
 
@@ -1499,5 +2129,23 @@ public class SessionLifecycleManager {
                 session.getReasoningEffort(),
                 "session_id_assigned"
         );
+
+        Application continuationApplication = ApplicationManager.getApplication();
+        Runnable notifyContinuedSegmentReady = () -> {
+            // 中文注释：显式桥接 continued 生命周期完成信号，避免前端继续把“首帧消息到达”
+            // 当作唯一的收口条件。这样即使首帧快照延迟，continued 的 pending/source 状态也能先正确收口。
+            host.callJavaScript("window.completeContinuedSegmentTransition", JsUtils.escapeJs(newSessionId));
+            // continued segment 只有在真实 sessionId 已经落地后才能释放前端 guard，
+            // 否则前端会把“继续”误当成可发送状态，进而在空 sessionId 上启动新一轮发送。
+            host.callJavaScript("historyLoadComplete");
+            host.callJavaScript("updateStatus",
+                    JsUtils.escapeJs(ClaudeCodeGuiBundle.message("toast.conversationContinuedReady")));
+            resetTokenUsage();
+        };
+        if (continuationApplication != null) {
+            continuationApplication.invokeLater(notifyContinuedSegmentReady);
+        } else {
+            notifyContinuedSegmentReady.run();
+        }
     }
 }

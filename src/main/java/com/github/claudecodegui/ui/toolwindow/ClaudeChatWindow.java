@@ -848,6 +848,11 @@ public class ClaudeChatWindow {
      * @return 无返回值
      */
     private void onStreamEnded() {
+        // continued 场景下历史文件可能在 stream_end 之后才完整可见，这里补触发一次逻辑会话回刷，
+        // 避免首次收口 defer 结束后，最后一条 assistant 结果长期停留在物理分段局部视图里。
+        if (sessionLifecycleManager != null) {
+            sessionLifecycleManager.refreshActiveContinuedLogicalConversationMessagesIfNeeded();
+        }
     }
 
     private void initializeSessionInfo() {
@@ -928,6 +933,7 @@ public class ClaudeChatWindow {
         snapshot.titleBindingMode = persistedState != null
                 ? persistedState.getEffectiveTitleBindingMode()
                 : TabStateService.TITLE_BINDING_MODE_FOLLOW_SESSION_TITLE;
+        normalizeContinuationSnapshotForPersistence(snapshot);
 
         // 恢复链路和前端 ready 会频繁进入这里；若快照内容未变，则跳过重复写入与重复落盘请求。
         if (areTabSessionStatesEquivalent(persistedState, snapshot)) {
@@ -974,6 +980,32 @@ public class ClaudeChatWindow {
             TabStateService.TabSessionState snapshot
     ) {
         return !areTabSessionStatesEquivalent(persistedState, snapshot);
+    }
+
+    /**
+     * 在 Tab 快照落盘前归一化 continued 过渡态字段。
+     * 仅当快照已经具备稳定的活动分段或真实 sessionId，且缺失 continuation source 锚点时，
+     * 才把 `continuationPending` 视为陈旧状态并强制收口；真正 in-flight 的 continued 仍会保留 source 锚点。
+     *
+     * @param snapshot 当前准备持久化的 Tab 会话快照
+     */
+    private void normalizeContinuationSnapshotForPersistence(TabStateService.TabSessionState snapshot) {
+        if (snapshot == null || !snapshot.continuationPending) {
+            return;
+        }
+        String normalizedSourceSessionId = normalizeValue(snapshot.continuationSourceSessionId);
+        String normalizedActiveSegmentSessionId = normalizeValue(snapshot.activeSegmentSessionId);
+        String normalizedSessionId = normalizeValue(snapshot.sessionId);
+        if (normalizedSourceSessionId != null) {
+            return;
+        }
+        if (normalizedActiveSegmentSessionId == null && normalizedSessionId == null) {
+            return;
+        }
+        // 中文注释：这种组合说明 continued 的真实分段已经稳定落地，但旧的 pending 标记尚未被某次快照清掉。
+        // 若继续原样落盘，Tab 恢复后前端会再次把会话误判成“continued 尚未 ready”。
+        snapshot.continuationPending = false;
+        snapshot.continuationSourceSessionId = null;
     }
 
     /**

@@ -523,6 +523,22 @@ if (typeof window !== 'undefined' && !window.setSessionId) {
   };
 }
 
+if (typeof window !== 'undefined' && !window.completeContinuedSegmentTransition) {
+  debugLog('[Main] Pre-registering completeContinuedSegmentTransition placeholder');
+  window.completeContinuedSegmentTransition = (sessionId?: string) => {
+    debugLog('[Main] Storing pending continued transition completion:', sessionId ?? '');
+    window.__pendingCompleteContinuedSegmentTransitionSessionId = sessionId ?? '';
+  };
+}
+
+if (typeof window !== 'undefined' && !window.abortContinuedSegmentTransition) {
+  debugLog('[Main] Pre-registering abortContinuedSegmentTransition placeholder');
+  window.abortContinuedSegmentTransition = (sessionId?: string) => {
+    debugLog('[Main] Storing pending continued transition abort:', sessionId ?? '');
+    window.__pendingAbortContinuedSegmentTransitionSessionId = sessionId ?? '';
+  };
+}
+
 // Pre-register updateDependencyStatus to handle backend status responses that arrive before React initializes
 if (typeof window !== 'undefined' && !window.updateDependencyStatus) {
   debugLog('[Main] Pre-registering updateDependencyStatus placeholder');

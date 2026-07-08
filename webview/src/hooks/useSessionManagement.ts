@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type MutableRefObject } from 'react';
 import type { TFunction } from 'i18next';
 import type { ClaudeMessage, HistoryData, HistorySessionSummary } from '../types';
 import { sendBridgeEvent } from '../utils/bridge';
-import { debugLog } from '../utils/debug';
+import { debugLog, emitFrontendDiagnosticLog } from '../utils/debug';
 
 type ViewMode = 'chat' | 'history' | 'settings';
 
@@ -98,6 +98,11 @@ interface UseSessionManagementOptions {
   loading: boolean;
   historyData: HistoryData | null;
   currentSessionId: string | null;
+  logicalConversationId?: string | null;
+  currentSessionIdRef?: MutableRefObject<string | null>;
+  continuationPendingRef?: MutableRefObject<boolean>;
+  setContinuationPending: (pending: boolean) => void;
+  setContinuationSourceSessionId: (sessionId: string | null) => void;
   setHistoryData: React.Dispatch<React.SetStateAction<HistoryData | null>>;
   setMessages: React.Dispatch<React.SetStateAction<ClaudeMessage[]>>;
   setCurrentView: (view: ViewMode) => void;
@@ -123,6 +128,9 @@ export interface ContinuedSegmentRequest {
   targetReasoningEffort?: string;
   targetCodexProviderId?: string;
   logicalConversationId?: string;
+  sourceSessionId?: string | null;
+  activeSegmentSessionId?: string | null;
+  continuationSourceSessionId?: string | null;
 }
 
 interface UseSessionManagementReturn {
@@ -160,6 +168,11 @@ export function useSessionManagement({
   loading,
   historyData,
   currentSessionId,
+  logicalConversationId = null,
+  currentSessionIdRef,
+  continuationPendingRef,
+  setContinuationPending,
+  setContinuationSourceSessionId,
   setHistoryData,
   setMessages,
   setCurrentView,
@@ -186,6 +199,34 @@ export function useSessionManagement({
   const transitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyDataRef = useRef(historyData);
   historyDataRef.current = historyData;
+
+  /**
+   * 清理前端本地的 continued segment 过渡态与历史前缀缓存。
+   * 该方法只用于“独立新会话 / 历史切换 / 删除后重建空会话”这类明确不应继续沿用旧逻辑会话的路径，
+   * 目的是避免 stale `continuationPending` 让首条新消息被误拦截为“continued segment 尚未 ready”。
+   *
+   * @return 无返回值
+   */
+  const resetContinuedSegmentRuntimeState = useCallback(() => {
+    if (continuationPendingRef) {
+      continuationPendingRef.current = false;
+    }
+    setContinuationPending(false);
+    setContinuationSourceSessionId(null);
+    window.__continuedSegmentFirstSnapshotSessionId = null;
+    window.__continuedSegmentHistoryPrefixMessages = null;
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingTailMessages = null;
+    window.__continuedSegmentPendingSourceSessionId = null;
+    window.__continuedSegmentPendingLogicalConversationId = null;
+    window.__continuedSegmentPendingCreatedAt = null;
+    window.__continuedSegmentPendingReason = null;
+    window.__continuedSegmentAwaitingFirstSessionId = false;
+  }, [
+    continuationPendingRef,
+    setContinuationPending,
+    setContinuationSourceSessionId,
+  ]);
 
   /**
    * 统一控制“删除会话成功”提示的立即显示或延迟显示。
@@ -231,8 +272,14 @@ export function useSessionManagement({
       setIsThinking(false);
       setStreamingActive(false);
     }
+    // 中文注释：独立新会话、历史恢复与删除后重建都不应该继承 continued segment 的 pending/source 状态，
+    // 否则前端会把当前空白新会话误判成“切段未完成”，导致第一次发送直接弹出 not ready 提示。
+    resetContinuedSegmentRuntimeState();
     setMessages([]);
     setCurrentSessionId(nextSessionId);
+    if (currentSessionIdRef) {
+      currentSessionIdRef.current = nextSessionId;
+    }
     setCustomSessionTitle(nextTitle);
     setUsagePercentage(0);
     setUsageUsedTokens(undefined);
@@ -263,8 +310,11 @@ export function useSessionManagement({
     setUsageUsedTokens,
     setUsageMaxTokens,
     currentSessionId,
+    currentSessionIdRef,
     loading,
     messages.length,
+    continuationPendingRef,
+    resetContinuedSegmentRuntimeState,
     traceCodexRuntime,
   ]);
 
@@ -318,9 +368,13 @@ export function useSessionManagement({
    * @return 无返回值
    */
   const createContinuedSegment = useCallback((request: ContinuedSegmentRequest) => {
+    const resolvedSourceSessionId = request.activeSegmentSessionId?.trim()
+      || request.continuationSourceSessionId?.trim()
+      || request.sourceSessionId?.trim()
+      || currentSessionId;
     const payload = {
-      sourceSessionId: currentSessionId,
-      logicalConversationId: request.logicalConversationId,
+      sourceSessionId: resolvedSourceSessionId,
+      logicalConversationId: request.logicalConversationId?.trim() || undefined,
       targetProvider: request.targetProvider,
       targetRuntimeFamily: request.targetRuntimeFamily,
       targetModel: request.targetModel,
@@ -330,6 +384,15 @@ export function useSessionManagement({
     };
 
     traceCodexRuntime('createContinuedSegment', payload);
+    emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'createContinuedSegment request', {
+      ...payload,
+      requestSourceSessionId: request.sourceSessionId?.trim() || null,
+      activeSegmentSessionId: request.activeSegmentSessionId?.trim() || null,
+      currentSessionId,
+      continuationSourceSessionId: request.continuationSourceSessionId?.trim() || null,
+      resolvedSourceSessionId: resolvedSourceSessionId?.trim() || null,
+      transitionToken: window.__sessionTransitionToken ?? null,
+    });
 
     if (loading) {
       sendBridgeEvent('interrupt_session');
@@ -339,8 +402,15 @@ export function useSessionManagement({
     // 否则用户在切模型/切供应商后会立刻丢失当前上下文展示。
     window.__sessionTransitioning = true;
     window.__sessionTransitionToken = createSessionTransitionToken();
+    emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'createContinuedSegment before transient reset', {
+      messageCount: messages.length,
+      continuationPending: continuationPendingRef?.current ?? null,
+      currentSessionId: currentSessionIdRef?.current ?? currentSessionId,
+      hasPrefixCache: Array.isArray(window.__continuedSegmentHistoryPrefixMessages),
+      prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
+    });
     if (typeof window.__resetTransientUiState === 'function') {
-      window.__resetTransientUiState();
+      window.__resetTransientUiState({ preserveContinuedPrefix: true });
     } else {
       clearToasts();
       setStatus('');
@@ -348,7 +418,43 @@ export function useSessionManagement({
       setIsThinking(false);
       setStreamingActive(false);
     }
+    // 中文注释：continued segment 切换必须在 reset 之后写入前缀缓存。
+    // 这样既能清掉 streaming/loading 等瞬时状态，又不会让 reset 的默认清理逻辑覆盖旧历史前缀。
+    window.__continuedSegmentFirstSnapshotSessionId = null;
+    window.__continuedSegmentHistoryPrefixMessages = messages.slice();
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingTailMessages = null;
+    // 中文注释：这些 transition 元数据用于跨越 React ref 丢失、guard timeout 和 setSessionId 先到等竞态。
+    // 只要它们存在，后续真实 sessionId 回推就能被识别为 continued 首帧，而不是误走普通会话分支。
+    window.__continuedSegmentPendingSourceSessionId = resolvedSourceSessionId?.trim() || null;
+    window.__continuedSegmentPendingLogicalConversationId = request.logicalConversationId?.trim()
+      || logicalConversationId?.trim()
+      || null;
+    window.__continuedSegmentPendingCreatedAt = Date.now();
+    window.__continuedSegmentPendingReason = request.switchReason;
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+    emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'createContinuedSegment after transient reset', {
+      messageCount: messages.length,
+      continuationPending: continuationPendingRef?.current ?? null,
+      currentSessionId: currentSessionIdRef?.current ?? currentSessionId,
+      hasPrefixCache: Array.isArray(window.__continuedSegmentHistoryPrefixMessages),
+      prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
+      pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId,
+      pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId,
+      awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId,
+    });
     setCurrentSessionId(null);
+    if (currentSessionIdRef) {
+      currentSessionIdRef.current = null;
+    }
+    // 中文注释：continued segment 在真实 sessionId 回传前必须先在前端本地进入 pending 状态，
+    // 否则 transition guard 超时后，消息发送和首帧 shrink 保护都会误判为普通会话。
+    setContinuationPending(true);
+    if (continuationPendingRef) {
+      // 中文注释：同步更新 ref，避免发送回调在下一次 rerender 之前继续读到旧的 pending 状态。
+      continuationPendingRef.current = true;
+    }
+    setContinuationSourceSessionId(resolvedSourceSessionId?.trim() || null);
     setUsagePercentage(0);
     setUsageUsedTokens(undefined);
     setUsageMaxTokens(undefined);
@@ -370,15 +476,21 @@ export function useSessionManagement({
   }, [
     clearToasts,
     currentSessionId,
+    logicalConversationId,
     loading,
+    messages,
     setCurrentSessionId,
     setIsThinking,
     setLoadingState,
     setStatus,
     setStreamingActive,
+    setContinuationPending,
+    setContinuationSourceSessionId,
     setUsageMaxTokens,
     setUsagePercentage,
     setUsageUsedTokens,
+    currentSessionIdRef,
+    continuationPendingRef,
     traceCodexRuntime,
   ]);
 
@@ -593,7 +705,8 @@ export function useSessionManagement({
     const target = resolveHistoryTarget(historyDataRef.current, sessionId);
     const updateData = JSON.stringify({
       sessionId: target.representativeSessionId || sessionId,
-      logicalConversationId: target.logicalConversationId,
+      logicalConversationId: target.logicalConversationId
+        || (currentSessionId === sessionId ? logicalConversationId : null),
       customTitle: newTitle,
     });
     console.warn('[HistoryTitleSync][Frontend] send update_title', updateData);

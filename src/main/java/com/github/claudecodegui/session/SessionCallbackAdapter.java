@@ -142,10 +142,14 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
             return;
         }
         LOG.info("Session ID: " + sessionId);
+        LOG.info("[CODEX_RUNTIME_TRACE] SessionCallbackAdapter forwarding setSessionId to frontend"
+                + ", sessionId=" + sessionId);
         ApplicationManager.getApplication().invokeLater(() -> {
             if (isInactive()) {
                 return;
             }
+            LOG.info("[CODEX_RUNTIME_TRACE] SessionCallbackAdapter invokeLater setSessionId"
+                    + ", sessionId=" + sessionId);
             jsTarget.callJavaScript("setSessionId", JsUtils.escapeJs(sessionId));
         });
     }

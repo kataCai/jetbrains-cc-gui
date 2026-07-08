@@ -99,7 +99,9 @@ public class CodemossSettingsServiceConversationMetadataTest {
                 "medium",
                 "manual_switch_provider",
                 "summary_plus_recent_messages",
-                1719590500000L
+                1719590500000L,
+                "managed-buycode",
+                "BuyCode"
         );
         ConversationSegmentRecord segmentA = new ConversationSegmentRecord(
                 "session-001",
@@ -112,7 +114,9 @@ public class CodemossSettingsServiceConversationMetadataTest {
                 "medium",
                 "new_conversation",
                 "summary_only",
-                1719590400000L
+                1719590400000L,
+                "codex-cli-login",
+                "官方 CLI 登录"
         );
 
         service.saveConversationSegmentRecord(segmentB);
@@ -123,6 +127,8 @@ public class CodemossSettingsServiceConversationMetadataTest {
         assertEquals("logical-001", restored.getLogicalConversationId());
         assertEquals("session-001", restored.getParentSessionId());
         assertEquals(1, restored.getSegmentIndex());
+        assertEquals("managed-buycode", restored.getCodexProviderId());
+        assertEquals("BuyCode", restored.getProviderDisplayName());
 
         List<ConversationSegmentRecord> segments = service.listConversationSegments("logical-001");
         assertEquals(2, segments.size());

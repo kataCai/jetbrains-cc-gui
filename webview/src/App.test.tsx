@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { buildContinuedSegmentSwitchRequest } from './App';
 import { DialogProvider } from './contexts/DialogContext';
 import { SessionProvider } from './contexts/SessionContext';
 import { MessagesProvider } from './contexts/MessagesContext';
@@ -396,5 +397,33 @@ describe('App task reminder callback integration', () => {
 
     expect(mockSendBridgeEvent).toHaveBeenCalledWith('restart_session');
     expect(screen.queryByText('Execution failed, retry?')).toBeNull();
+  });
+});
+
+describe('buildContinuedSegmentSwitchRequest', () => {
+  it('prefers active segment and continuation anchors instead of overwriting sourceSessionId with currentSessionId', () => {
+    // 中文注释：首次或多次切模型时，continued request 的 sourceSessionId 需要优先锚定活动分段，
+    // 不能被瞬时 currentSessionId 回退覆盖为空，否则后端无法建立正确的 parent/source 关系。
+    const request = buildContinuedSegmentSwitchRequest(
+      {
+        switchReason: 'model',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: 'gpt-5.4-mini',
+      },
+      {
+        currentSessionId: null,
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'segment-002',
+        continuationPending: true,
+      },
+    );
+
+    expect(request).toEqual(expect.objectContaining({
+      logicalConversationId: 'logical-001',
+      activeSegmentSessionId: 'segment-002',
+      continuationSourceSessionId: 'segment-002',
+      sourceSessionId: 'segment-002',
+    }));
   });
 });

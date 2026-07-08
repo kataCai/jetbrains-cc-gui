@@ -27,7 +27,11 @@ interface Window {
    * 后端会在 `clearMessages -> updateMessages` 前先下发 restore key 与 snapshot signature，
    * 前端据此忽略同一恢复周期内重复注入的完全相同历史快照。
    */
-  prepareHistoryRestoreSnapshot?: (restoreKey: string, snapshotSignature: string) => void;
+  prepareHistoryRestoreSnapshot?: (
+    restoreKey: string,
+    snapshotSignature: string,
+    restoreKind?: import('./types').HistoryRestoreKind,
+  ) => void;
 
   /**
    * Patch a single message UUID without re-sending the full message list.
@@ -111,6 +115,14 @@ interface Window {
    * Set current session ID (for rewind feature)
    */
   setSessionId?: (sessionId: string) => void;
+  /**
+   * continued segment 元数据收口完成后，由后端显式通知前端结束 continued 过渡态。
+   */
+  completeContinuedSegmentTransition?: (sessionId?: string) => void;
+  /**
+   * continued segment 创建失败后，显式回滚前端到旧 session 并清理过渡缓存。
+   */
+  abortContinuedSegmentTransition?: (sessionId?: string) => void;
 
   /**
    * Add toast notification (called from backend)
@@ -484,6 +496,14 @@ interface Window {
    * Pending session ID before App component mounts (for rewind feature)
    */
   __pendingSessionId?: string;
+  /**
+   * Pending continued transition completion signal before React callbacks mount.
+   */
+  __pendingCompleteContinuedSegmentTransitionSessionId?: string;
+  /**
+   * Pending continued transition abort signal before React callbacks mount.
+   */
+  __pendingAbortContinuedSegmentTransitionSessionId?: string;
 
   /**
    * Apply IDEA editor font configuration (called from Java backend)
@@ -735,11 +755,69 @@ interface Window {
   __sessionTransitionToken?: string | null;
 
   /**
+   * continued segment 切换成功后，下一次 updateMessages 需要跳过 shrink 保护的目标 sessionId。
+   * 仅消费一次，用来避免 continued segment 首帧被误判成普通“列表缩短”而把旧分段尾巴重新拼回去。
+   */
+  __continuedSegmentFirstSnapshotSessionId?: string | null;
+
+  /**
+   * continued segment 进入新物理 session 之前，当前窗口已经可见的逻辑会话前缀消息。
+   * 运行时切模型后的后端快照通常只包含新分段自身的消息，因此前端需要临时保留这个前缀，
+   * 再与新分段快照做拼接，避免旧消息在 updateMessages 时被整体替换掉。
+   */
+  __continuedSegmentHistoryPrefixMessages?: import('./types').ClaudeMessage[] | null;
+
+  /**
+   * `__continuedSegmentHistoryPrefixMessages` 所属的新物理 sessionId。
+   * 只有当前窗口已经切到这个 sessionId 时，前端才允许把前缀重新拼回当前快照，
+   * 避免陈旧缓存跨会话误命中。
+   */
+  __continuedSegmentHistoryPrefixSessionId?: string | null;
+
+  /**
+   * continued 首问发生在真实 sessionId 回推之前时，前端先收到的新分段尾部快照缓存。
+   * 该缓存用于把“sessionId 未绑定前先到的 user-only / partial tail”延迟到绑定完成后再参与比较，
+   * 避免早到快照直接丢失，后续无法判断新快照是否是在补齐同一段 runtime tail。
+   */
+  __continuedSegmentPendingTailMessages?: import('./types').ClaudeMessage[] | null;
+
+  /**
+   * continued segment 切段时的稳定 source sessionId。
+   * 该字段在 createContinuedSegment 同步写入，不依赖 React ref 后续是否被 rerender 覆盖，
+   * 用于 setSessionId 回推时识别“仍属于 continued 首帧”的竞态场景。
+   */
+  __continuedSegmentPendingSourceSessionId?: string | null;
+
+  /**
+   * continued segment 切段时的逻辑会话 ID。
+   * 仅作为诊断和兜底上下文使用；为空不代表当前不是 continued，因为旧会话可能只有 source session 锚点。
+   */
+  __continuedSegmentPendingLogicalConversationId?: string | null;
+
+  /**
+   * continued transition cache 的创建时间戳。
+   * 用于后续诊断 stale cache 与真实 setSessionId 回推之间的时序距离。
+   */
+  __continuedSegmentPendingCreatedAt?: number | null;
+
+  /**
+   * continued transition 的触发原因，例如 model/provider/activeProvider。
+   * 该字段只参与日志诊断，不参与业务分支判断。
+   */
+  __continuedSegmentPendingReason?: string | null;
+
+  /**
+   * true 表示前端已经创建 continued segment，并正在等待 SDK 回推第一个真实 sessionId。
+   * 该状态允许 continued 首问在 guard 超时后发出，但 setSessionId 回推时必须按 continued 首帧处理。
+   */
+  __continuedSegmentAwaitingFirstSessionId?: boolean;
+
+  /**
    * Resets all transient UI state (loading, streaming, toasts, refs) in one shot.
    * Called by beginSessionTransition (useSessionManagement) to synchronously
    * clear both React state AND internal refs before starting a new session.
    */
-  __resetTransientUiState?: () => void;
+  __resetTransientUiState?: (options?: { preserveContinuedPrefix?: boolean }) => void;
 
   /**
    * Timestamp of the last streaming activity (content/thinking delta or message update).
@@ -793,9 +871,11 @@ interface Window {
   /** 当前待消费的历史恢复快照上下文。只在紧随其后的单次 `updateMessages` 中生效。 */
   __preparedHistoryRestoreKey?: string | null;
   __preparedHistoryRestoreSignature?: string | null;
+  __preparedHistoryRestoreKind?: import('./types').HistoryRestoreKind | null;
   /** 最近一次已经成功落地到界面的历史恢复快照标识，用于忽略重复注入。 */
   __lastAppliedHistoryRestoreKey?: string | null;
   __lastAppliedHistoryRestoreSignature?: string | null;
+  __lastAppliedHistoryRestoreKind?: import('./types').HistoryRestoreKind | null;
   /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
   __cancelPendingUpdateMessages?: () => void;
   /**

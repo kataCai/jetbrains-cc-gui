@@ -45,7 +45,7 @@ import { useDialogs } from './contexts/DialogContext';
 import { getComposerUsageMode } from './components/ChatInputBox/modeViewModel';
 import type { ToolResultBlock } from './types';
 import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from './utils/permissionDialogTimeout';
-import { debugLog } from './utils/debug';
+import { debugLog, emitFrontendDiagnosticLog } from './utils/debug';
 
 /**
  * 仅允许弹出强提醒对话框的任务状态。
@@ -77,6 +77,59 @@ const parseTaskReminderDialogPayload = (json: string): TaskReminderDialogRequest
   } catch {
     return null;
   }
+};
+
+type ContinuedSegmentConfigRequest = {
+  switchReason: 'provider' | 'model' | 'activeProvider';
+  targetProvider: string;
+  targetRuntimeFamily: 'claude' | 'codex';
+  targetModel: string;
+  targetReasoningEffort?: string;
+  targetCodexProviderId?: string;
+  logicalConversationId?: string;
+  sourceSessionId?: string | null;
+  activeSegmentSessionId?: string | null;
+  continuationSourceSessionId?: string | null;
+};
+
+type ContinuedSegmentRuntimeSnapshot = {
+  currentSessionId: string | null;
+  logicalConversationId: string | null;
+  activeSegmentSessionId: string | null;
+  continuationPending: boolean;
+};
+
+/**
+ * 为模型/供应商切换构造 continued segment 请求。
+ * 这里必须优先使用逻辑会话当前活动分段作为 source 锚点，而不是盲目回退到瞬时 currentSessionId，
+ * 否则首次切模型或 sessionId 尚未真正回传时，会把 sourceSessionId 覆盖成空值，导致后端无法建立 parent/source 关系。
+ *
+ * @param request useModelProviderState 产出的目标运行时切换请求
+ * @param snapshot 当前前端会话运行态快照，包含 current session 与逻辑会话锚点
+ * @return 供 createContinuedSegment 使用的完整 continued request
+ */
+export const buildContinuedSegmentSwitchRequest = (
+  request: ContinuedSegmentConfigRequest,
+  snapshot: ContinuedSegmentRuntimeSnapshot,
+): ContinuedSegmentConfigRequest => {
+  const continuationSourceSessionId = snapshot.continuationPending
+    ? snapshot.activeSegmentSessionId ?? snapshot.currentSessionId
+    : snapshot.currentSessionId;
+  const resolvedSourceSessionId = request.activeSegmentSessionId?.trim()
+    || request.continuationSourceSessionId?.trim()
+    || request.sourceSessionId?.trim()
+    || snapshot.activeSegmentSessionId?.trim()
+    || continuationSourceSessionId?.trim()
+    || snapshot.currentSessionId?.trim()
+    || null;
+
+  return {
+    ...request,
+    sourceSessionId: resolvedSourceSessionId,
+    logicalConversationId: snapshot.logicalConversationId ?? undefined,
+    activeSegmentSessionId: snapshot.activeSegmentSessionId,
+    continuationSourceSessionId,
+  };
 };
 
 const App = () => {
@@ -175,14 +228,7 @@ const App = () => {
   }, [continuationPending]);
 
   const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  const forceCreateNewSessionRef = useRef<((request: {
-    switchReason: 'provider' | 'model' | 'activeProvider';
-    targetProvider: string;
-    targetRuntimeFamily: 'claude' | 'codex';
-    targetModel: string;
-    targetReasoningEffort?: string;
-    targetCodexProviderId?: string;
-  }) => void) | null>(null);
+  const forceCreateNewSessionRef = useRef<((request: ContinuedSegmentConfigRequest) => void) | null>(null);
   const [anchorCollapsedCount, setAnchorCollapsedCount] = useState(0);
   const handleMessageNodeRef = useCallback((id: string, node: HTMLDivElement | null) => {
     if (node) {
@@ -235,13 +281,33 @@ const App = () => {
     targetModel: string;
     targetReasoningEffort?: string;
     targetCodexProviderId?: string;
+    logicalConversationId?: string;
+    sourceSessionId?: string | null;
+    activeSegmentSessionId?: string | null;
+    continuationSourceSessionId?: string | null;
   }) => {
+    const continuedSegmentRequest = buildContinuedSegmentSwitchRequest(request, {
+      currentSessionId: currentSessionIdRef.current,
+      logicalConversationId: logicalConversationIdRef.current,
+      activeSegmentSessionId: activeSegmentSessionIdRef.current,
+      continuationPending: continuationPendingRef.current,
+    });
     debugLog('[CODEX_RUNTIME_TRACE][Webview] handleCodexConversationConfigChanged', {
-      ...request,
+      ...continuedSegmentRequest,
       currentSessionId: currentSessionIdRef.current,
       customSessionTitle: customSessionTitleRef.current,
+      logicalConversationId: logicalConversationIdRef.current,
+      activeSegmentSessionId: activeSegmentSessionIdRef.current,
+      continuationPending: continuationPendingRef.current,
     });
-    forceCreateNewSessionRef.current?.(request);
+    emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'handleCodexConversationConfigChanged', {
+      ...continuedSegmentRequest,
+      currentSessionId: currentSessionIdRef.current,
+      logicalConversationId: logicalConversationIdRef.current,
+      activeSegmentSessionId: activeSegmentSessionIdRef.current,
+      continuationPending: continuationPendingRef.current,
+    });
+    forceCreateNewSessionRef.current?.(continuedSegmentRequest);
   }, []);
 
   useEffect(() => {
@@ -428,6 +494,11 @@ const App = () => {
     loading,
     historyData,
     currentSessionId,
+    logicalConversationId,
+    currentSessionIdRef,
+    continuationPendingRef,
+    setContinuationPending,
+    setContinuationSourceSessionId,
     setHistoryData,
     setMessages,
     setCurrentView,
@@ -580,6 +651,10 @@ const App = () => {
     longContextEnabled,
     openContextUsageDialog,
     closeContextUsageDialog,
+    currentSessionId,
+    continuationPending,
+    currentSessionIdRef,
+    continuationPendingRef,
   });
 
   const {

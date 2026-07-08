@@ -60,6 +60,45 @@ public class ClaudeChatWindowPersistencePolicyTest {
     }
 
     /**
+     * 验证 continued 分段已经稳定落地、但 source 锚点缺失时，持久化前会把陈旧 pending 归一化。
+     * 该场景直接约束“Tab 恢复后再次被 continued 门禁卡住”的回归问题。
+     *
+     * @throws Exception 反射调用异常
+     */
+    @Test
+    public void shouldNormalizeSettledContinuedSnapshotBeforePersistence() throws Exception {
+        TabStateService.TabSessionState snapshot = new TabStateService.TabSessionState();
+        snapshot.sessionId = "segment-003";
+        snapshot.activeSegmentSessionId = "segment-003";
+        snapshot.continuationPending = true;
+        snapshot.continuationSourceSessionId = null;
+
+        invokeNormalizeContinuationSnapshotForPersistence(snapshot);
+
+        assertFalse(snapshot.continuationPending);
+        assertFalse(snapshot.continuationSourceSessionId != null && !snapshot.continuationSourceSessionId.trim().isEmpty());
+    }
+
+    /**
+     * 验证真正 in-flight 的 continued 过渡态仍会保留 pending/source 锚点，避免误伤正常继续链路。
+     *
+     * @throws Exception 反射调用异常
+     */
+    @Test
+    public void shouldKeepInFlightContinuedSnapshotWhenSourceAnchorExists() throws Exception {
+        TabStateService.TabSessionState snapshot = new TabStateService.TabSessionState();
+        snapshot.sessionId = "segment-003";
+        snapshot.activeSegmentSessionId = "segment-003";
+        snapshot.continuationPending = true;
+        snapshot.continuationSourceSessionId = "segment-002";
+
+        invokeNormalizeContinuationSnapshotForPersistence(snapshot);
+
+        assertTrue(snapshot.continuationPending);
+        assertTrue("segment-002".equals(snapshot.continuationSourceSessionId));
+    }
+
+    /**
      * 验证 WebView 恢复节流会阻止过于频繁的重建请求。
      * 该约束用于抑制 manual force refresh 与 watchdog recreate 在短时间内连续放大卡顿。
      *
@@ -105,6 +144,23 @@ public class ClaudeChatWindowPersistencePolicyTest {
         );
         method.setAccessible(true);
         return (Boolean) method.invoke(allocateWindow(), persistedState, snapshot);
+    }
+
+    /**
+     * 反射调用 continued 快照持久化归一化入口，验证陈旧 pending 是否会在落盘前被收口。
+     *
+     * @param snapshot 待归一化的快照
+     * @throws Exception 反射调用异常
+     */
+    private void invokeNormalizeContinuationSnapshotForPersistence(
+            TabStateService.TabSessionState snapshot
+    ) throws Exception {
+        Method method = ClaudeChatWindow.class.getDeclaredMethod(
+                "normalizeContinuationSnapshotForPersistence",
+                TabStateService.TabSessionState.class
+        );
+        method.setAccessible(true);
+        method.invoke(allocateWindow(), snapshot);
     }
 
     /**

@@ -281,6 +281,32 @@ describe('appendOptimisticMessageIfMissing', () => {
     expect(result[0]).toBe(backendMsg);
   });
 
+  /**
+   * 当前后端已经为用户消息补齐稳定 identity 后，optimistic 去重必须优先按 identity 命中，
+   * 不能继续依赖文本与时间窗口，否则 continued authoritative restore 期间仍可能把同一条用户消息补回两次。
+   */
+  it('prefers stable message identity over text and timestamp when matching optimistic user messages', () => {
+    const optimistic = makeUserMsg('frontend optimistic text', {
+      isOptimistic: true,
+      timestamp: '2026-07-08T12:00:05.000Z',
+      messageIdentity: {
+        key: 'user|source=msg-001',
+        role: 'user',
+      } as any,
+    });
+    const backendMsg = makeUserMsg('backend restored text', {
+      timestamp: '2026-07-08T11:59:55.000Z',
+      messageIdentity: {
+        key: 'user|source=msg-001',
+        role: 'user',
+      } as any,
+    });
+
+    const result = appendOptimisticMessageIfMissing([optimistic], [backendMsg]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(backendMsg);
+  });
+
   it('matches the latest backend user message by content even when confirmation is delayed', () => {
     const oldTs = new Date(Date.now() - OPTIMISTIC_MESSAGE_TIME_WINDOW - 1000).toISOString();
     const newTs = new Date().toISOString();

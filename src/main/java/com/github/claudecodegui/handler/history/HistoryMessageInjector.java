@@ -216,13 +216,7 @@ public class HistoryMessageInjector {
      */
     public static List<JsonObject> convertCodexMessagesToFrontendBatch(JsonArray messages) {
         List<JsonObject> frontendMessages = new ArrayList<>();
-        for (int i = 0; i < messages.size(); i++) {
-            JsonObject msg = messages.get(i).getAsJsonObject();
-            JsonObject frontendMsg = convertCodexMessageToFrontend(msg);
-            if (frontendMsg != null) {
-                addCodexFrontendMessage(frontendMessages, frontendMsg);
-            }
-        }
+        appendConvertedCodexMessages(frontendMessages, messages, null, null);
         return frontendMessages;
     }
 
@@ -249,19 +243,18 @@ public class HistoryMessageInjector {
             if (segmentMessages == null) {
                 continue;
             }
+            ConversationSegmentRecord currentSegment = segmentRecords != null && segmentIndex < segmentRecords.size()
+                    ? segmentRecords.get(segmentIndex)
+                    : null;
 
             if (segmentIndex > 0) {
-                ConversationSegmentRecord currentSegment = segmentRecords != null && segmentIndex < segmentRecords.size()
-                        ? segmentRecords.get(segmentIndex)
-                        : null;
-                JsonObject boundaryMessage = buildContinuationBoundarySystemMessage(currentSegment);
+                JsonObject boundaryMessage = buildContinuationBoundarySystemMessage(currentSegment, frontendMessages.size());
                 if (boundaryMessage != null) {
                     frontendMessages.add(boundaryMessage);
                 }
             }
 
-            List<JsonObject> convertedSegmentMessages = convertCodexMessagesToFrontendBatch(segmentMessages);
-            frontendMessages.addAll(convertedSegmentMessages);
+            appendConvertedCodexMessages(frontendMessages, segmentMessages, currentSegment, currentSegment);
         }
         return frontendMessages;
     }
@@ -273,12 +266,16 @@ public class HistoryMessageInjector {
      * @param segmentRecord 当前即将进入的分段元数据
      * @return 可插入前端消息流的系统消息；缺少有效元数据时返回 null
      */
-    private static JsonObject buildContinuationBoundarySystemMessage(ConversationSegmentRecord segmentRecord) {
+    private static JsonObject buildContinuationBoundarySystemMessage(
+            ConversationSegmentRecord segmentRecord,
+            int logicalOrder
+    ) {
         if (segmentRecord == null) {
             return null;
         }
 
-        String provider = firstNonBlank(segmentRecord.getProvider(), segmentRecord.getRuntimeFamily());
+        String runtimeFamily = firstNonBlank(segmentRecord.getRuntimeFamily(), segmentRecord.getProvider());
+        String provider = resolveContinuationBoundaryProviderDisplay(segmentRecord, runtimeFamily);
         String model = firstNonBlank(segmentRecord.getModel());
         if (!hasText(provider) && !hasText(model)) {
             return null;
@@ -288,11 +285,54 @@ public class HistoryMessageInjector {
         systemMessage.addProperty("type", "system");
         systemMessage.addProperty(
                 "content",
-                "已切换到 " + firstNonBlank(provider, "unknown-provider")
-                        + (hasText(model) ? " / " + model : "")
+                "已切换到 " + buildContinuationBoundaryDisplay(runtimeFamily, provider, model)
                         + " 继续当前会话。"
         );
+        annotateBoundaryMessageMetadata(systemMessage, segmentRecord, logicalOrder);
         return systemMessage;
+    }
+
+    /**
+     * 组装 continued 分段边界提示中的核心显示串。
+     * 对 Codex 分段优先展示“运行时家族 / 供应商展示名(或 providerId) / 模型”，
+     * 对旧数据或非 Codex 分段则回退到既有 provider/model 语义。
+     */
+    private static String buildContinuationBoundaryDisplay(String runtimeFamily, String provider, String model) {
+        String normalizedRuntimeFamily = firstNonBlank(runtimeFamily);
+        String normalizedProvider = firstNonBlank(provider);
+        String normalizedModel = firstNonBlank(model);
+        if (SessionRuntimeFamily.CODEX.equals(normalizedRuntimeFamily) && hasText(normalizedProvider)) {
+            if (normalizedRuntimeFamily.equals(normalizedProvider)) {
+                return normalizedRuntimeFamily + (hasText(normalizedModel) ? " / " + normalizedModel : "");
+            }
+            if (hasText(normalizedModel)) {
+                return normalizedRuntimeFamily + " / " + normalizedProvider + " / " + normalizedModel;
+            }
+            return normalizedRuntimeFamily + " / " + normalizedProvider;
+        }
+        String fallbackProvider = firstNonBlank(normalizedProvider, normalizedRuntimeFamily, "unknown-provider");
+        return fallbackProvider + (hasText(normalizedModel) ? " / " + normalizedModel : "");
+    }
+
+    /**
+     * 解析 continued 分段边界提示中的供应商显示文本。
+     * 对 Codex 分段优先走 providerDisplayName，其次回退到 codexProviderId；旧记录缺字段时再回退到历史 provider 字段。
+     */
+    private static String resolveContinuationBoundaryProviderDisplay(
+            ConversationSegmentRecord segmentRecord,
+            String runtimeFamily
+    ) {
+        if (segmentRecord == null) {
+            return "";
+        }
+        if (SessionRuntimeFamily.CODEX.equals(firstNonBlank(runtimeFamily))) {
+            return firstNonBlank(
+                    segmentRecord.getProviderDisplayName(),
+                    segmentRecord.getCodexProviderId(),
+                    segmentRecord.getProvider()
+            );
+        }
+        return firstNonBlank(segmentRecord.getProvider(), runtimeFamily);
     }
 
     /**
@@ -316,25 +356,79 @@ public class HistoryMessageInjector {
         return frontendMessages.size() + "-" + Long.toHexString(checksum.getValue());
     }
 
-    private static void addCodexFrontendMessage(List<JsonObject> frontendMessages, JsonObject incoming) {
+    /**
+     * 按当前分段上下文把一批 Codex 历史消息转换并追加到前端消息列表。
+     * 该入口会在批内统一补齐稳定身份与顺序元数据，并在命中 provider 双录重复时保留已有 logicalOrder，
+     * 避免 continued authoritative restore 与普通历史恢复再次只靠 timestamp 识别同一条消息。
+     *
+     * @param frontendMessages 已累计的前端消息列表
+     * @param messages 当前待转换的 Codex 原始历史数组
+     * @param segmentRecord 当前分段元数据；单段恢复时允许为空
+     * @param identitySegmentRecord identity/顺序注解使用的分段元数据；边界场景下与 segmentRecord 保持同源
+     */
+    private static void appendConvertedCodexMessages(
+            List<JsonObject> frontendMessages,
+            JsonArray messages,
+            ConversationSegmentRecord segmentRecord,
+            ConversationSegmentRecord identitySegmentRecord
+    ) {
+        if (messages == null) {
+            return;
+        }
+        int nextSegmentLocalIndex = 0;
+        for (int i = 0; i < messages.size(); i++) {
+            JsonObject msg = messages.get(i).getAsJsonObject();
+            JsonObject frontendMsg = convertCodexMessageToFrontend(msg);
+            if (frontendMsg == null) {
+                continue;
+            }
+            annotateFrontendMessageMetadata(
+                    frontendMsg,
+                    msg,
+                    identitySegmentRecord,
+                    nextSegmentLocalIndex,
+                    frontendMessages.size()
+            );
+            if (addCodexFrontendMessage(frontendMessages, frontendMsg)) {
+                nextSegmentLocalIndex++;
+            }
+        }
+    }
+
+    /**
+     * 将一条前端消息按“新逻辑消息”或“重复补录消息”两类场景写入列表。
+     * 若命中 provider 同轮双录的 user 消息，则会复用已存在消息的稳定身份元数据，只替换为信息更丰富的版本。
+     *
+     * @param frontendMessages 已累计的前端消息列表
+     * @param incoming 当前待写入的前端消息
+     * @return true 表示新增了一条逻辑消息；false 表示只是合并到上一条重复消息
+     */
+    private static boolean addCodexFrontendMessage(List<JsonObject> frontendMessages, JsonObject incoming) {
         if (frontendMessages.isEmpty()) {
             frontendMessages.add(incoming);
-            return;
+            return true;
         }
 
         int lastIndex = frontendMessages.size() - 1;
         JsonObject previous = frontendMessages.get(lastIndex);
         if (isDuplicateAdjacentCodexUserMessage(previous, incoming)) {
-            frontendMessages.set(lastIndex, preferRicherUserMessage(previous, incoming));
-            return;
+            frontendMessages.set(lastIndex, inheritStableFrontendMetadata(previous, preferRicherUserMessage(previous, incoming)));
+            return false;
         }
 
         frontendMessages.add(incoming);
+        return true;
     }
 
     private static boolean isDuplicateAdjacentCodexUserMessage(JsonObject previous, JsonObject incoming) {
         if (!isUserMessage(previous) || !isUserMessage(incoming)) {
             return false;
+        }
+
+        String previousIdentityKey = extractMessageIdentityKey(previous);
+        String incomingIdentityKey = extractMessageIdentityKey(incoming);
+        if (hasText(previousIdentityKey) && previousIdentityKey.equals(incomingIdentityKey)) {
+            return true;
         }
 
         String previousTimestamp = getStringProperty(previous, "timestamp");
@@ -377,6 +471,315 @@ public class HistoryMessageInjector {
             return null;
         }
         return object.get(propertyName).getAsString();
+    }
+
+    /**
+     * 为单条前端消息补齐稳定身份与顺序元数据。
+     * 这里优先使用 provider 原始 source id 作为 identity key；缺失时再回退到分段内局部顺序，
+     * 保证 authoritative logical snapshot 在前端可以稳定覆盖 prefix merge 产生的同一条消息。
+     *
+     * @param frontendMsg 待注解的前端消息
+     * @param sourceMsg 对应的 Codex 原始历史消息
+     * @param segmentRecord 当前分段元数据；单段恢复时可为空
+     * @param segmentLocalIndex 该消息在当前物理分段内的稳定局部顺序
+     * @param logicalOrder 该消息在最终前端列表中的稳定渲染顺序
+     */
+    private static void annotateFrontendMessageMetadata(
+            JsonObject frontendMsg,
+            JsonObject sourceMsg,
+            ConversationSegmentRecord segmentRecord,
+            int segmentLocalIndex,
+            int logicalOrder
+    ) {
+        if (frontendMsg == null) {
+            return;
+        }
+        String role = firstNonBlank(getStringProperty(frontendMsg, "type"), "unknown");
+        String segmentSessionId = segmentRecord != null ? firstNonBlank(segmentRecord.getSessionId()) : "";
+        int segmentIndex = segmentRecord != null ? Math.max(0, segmentRecord.getSegmentIndex()) : 0;
+        String sourceId = extractCodexStableSourceId(sourceMsg, frontendMsg);
+        String identityKey = buildFrontendMessageIdentityKey(
+                role,
+                sourceId,
+                frontendMsg,
+                segmentSessionId,
+                segmentIndex,
+                segmentLocalIndex
+        );
+
+        JsonObject messageIdentity = new JsonObject();
+        messageIdentity.addProperty("key", identityKey);
+        messageIdentity.addProperty("role", role);
+        if (hasText(sourceId)) {
+            messageIdentity.addProperty("sourceId", sourceId);
+        }
+        if (hasText(segmentSessionId)) {
+            messageIdentity.addProperty("segmentSessionId", segmentSessionId);
+        }
+        messageIdentity.addProperty("segmentIndex", segmentIndex);
+        messageIdentity.addProperty("segmentLocalIndex", segmentLocalIndex);
+        messageIdentity.addProperty("logicalOrder", logicalOrder);
+
+        frontendMsg.add("messageIdentity", messageIdentity);
+        frontendMsg.addProperty("logicalOrder", logicalOrder);
+        frontendMsg.addProperty("segmentIndex", segmentIndex);
+        if (hasText(segmentSessionId)) {
+            frontendMsg.addProperty("segmentSessionId", segmentSessionId);
+        }
+        frontendMsg.addProperty("segmentLocalIndex", segmentLocalIndex);
+        copyStableMetadataIntoRaw(frontendMsg, messageIdentity, logicalOrder, segmentIndex, segmentSessionId, segmentLocalIndex);
+    }
+
+    /**
+     * 为 continued 分段边界系统消息补齐稳定 identity 与顺序元数据。
+     * 该身份用于前端在多次 authoritative restore 之间识别同一条边界提示，避免重复插入“已切换到...”系统消息。
+     *
+     * @param boundaryMessage 边界系统消息
+     * @param segmentRecord 当前即将进入的分段元数据
+     * @param logicalOrder 最终渲染顺序号
+     */
+    private static void annotateBoundaryMessageMetadata(
+            JsonObject boundaryMessage,
+            ConversationSegmentRecord segmentRecord,
+            int logicalOrder
+    ) {
+        if (boundaryMessage == null || segmentRecord == null) {
+            return;
+        }
+        String segmentSessionId = firstNonBlank(segmentRecord.getSessionId());
+        int segmentIndex = Math.max(0, segmentRecord.getSegmentIndex());
+        String provider = firstNonBlank(
+                segmentRecord.getProviderDisplayName(),
+                segmentRecord.getCodexProviderId(),
+                segmentRecord.getProvider(),
+                segmentRecord.getRuntimeFamily()
+        );
+        String model = firstNonBlank(segmentRecord.getModel());
+        String identityKey = "system-boundary|segment=" + segmentSessionId
+                + "|provider=" + provider
+                + "|model=" + model;
+
+        JsonObject messageIdentity = new JsonObject();
+        messageIdentity.addProperty("key", identityKey);
+        messageIdentity.addProperty("role", "system");
+        messageIdentity.addProperty("segmentSessionId", segmentSessionId);
+        messageIdentity.addProperty("segmentIndex", segmentIndex);
+        messageIdentity.addProperty("logicalOrder", logicalOrder);
+
+        boundaryMessage.add("messageIdentity", messageIdentity);
+        boundaryMessage.addProperty("logicalOrder", logicalOrder);
+        boundaryMessage.addProperty("segmentIndex", segmentIndex);
+        boundaryMessage.addProperty("segmentSessionId", segmentSessionId);
+    }
+
+    /**
+     * 把稳定身份元数据同步写入 raw，供后续状态回放或调试链路在只拿到 raw 时仍能恢复关键顺序信息。
+     *
+     * @param frontendMsg 已注解顶层字段的前端消息
+     * @param messageIdentity 顶层构造完成的 identity 对象
+     * @param logicalOrder 全局稳定顺序
+     * @param segmentIndex 物理分段序号
+     * @param segmentSessionId 物理分段 sessionId
+     * @param segmentLocalIndex 分段内局部顺序
+     */
+    private static void copyStableMetadataIntoRaw(
+            JsonObject frontendMsg,
+            JsonObject messageIdentity,
+            int logicalOrder,
+            int segmentIndex,
+            String segmentSessionId,
+            int segmentLocalIndex
+    ) {
+        if (frontendMsg == null || !frontendMsg.has("raw") || !frontendMsg.get("raw").isJsonObject()) {
+            return;
+        }
+        JsonObject raw = frontendMsg.getAsJsonObject("raw");
+        raw.add("messageIdentity", messageIdentity.deepCopy());
+        raw.addProperty("logicalOrder", logicalOrder);
+        raw.addProperty("segmentIndex", segmentIndex);
+        if (hasText(segmentSessionId)) {
+            raw.addProperty("segmentSessionId", segmentSessionId);
+        }
+        raw.addProperty("segmentLocalIndex", segmentLocalIndex);
+    }
+
+    /**
+     * 构造前端消息稳定 identity key。
+     * sourceId 可用时优先采用 provider 原始标识；否则回退到“分段 + 局部顺序”的稳定组合键，
+     * 既保留 repeated user message 的区分能力，也让 authoritative restore 可以稳定覆盖旧前缀。
+     *
+     * @param role 前端消息角色
+     * @param sourceId provider 原始稳定标识
+     * @param frontendMsg 前端消息
+     * @param segmentSessionId 所属物理分段 sessionId
+     * @param segmentIndex 所属物理分段索引
+     * @param segmentLocalIndex 分段内局部顺序
+     * @return 稳定 identity key
+     */
+    private static String buildFrontendMessageIdentityKey(
+            String role,
+            String sourceId,
+            JsonObject frontendMsg,
+            String segmentSessionId,
+            int segmentIndex,
+            int segmentLocalIndex
+    ) {
+        if (hasText(sourceId)) {
+            return role + "|source=" + sourceId;
+        }
+        String toolIdentity = extractToolIdentityFromFrontendMessage(frontendMsg);
+        if (hasText(toolIdentity)) {
+            return role + "|tool=" + toolIdentity;
+        }
+        String normalizedContent = normalizeDuplicateUserContent(firstNonBlank(getStringProperty(frontendMsg, "content")));
+        String segmentToken = hasText(segmentSessionId) ? segmentSessionId : "segment-index-" + segmentIndex;
+        return role + "|segment=" + segmentToken
+                + "|local=" + segmentLocalIndex
+                + "|content=" + normalizedContent;
+    }
+
+    /**
+     * 从 Codex 原始历史消息中提取尽量稳定的 source id。
+     * 该逻辑会同时兼容 event_msg、response_item message 与 tool call/result，优先复用 provider 已有 id，
+     * 只有在 provider 未提供稳定标识时才回退到上层的分段局部顺序。
+     *
+     * @param sourceMsg 原始 Codex 历史消息
+     * @param frontendMsg 已转换出的前端消息
+     * @return 可作为 identity 优先锚点的 source id；缺失时返回空串
+     */
+    private static String extractCodexStableSourceId(JsonObject sourceMsg, JsonObject frontendMsg) {
+        if (sourceMsg == null) {
+            return "";
+        }
+        JsonObject payload = sourceMsg.has("payload") && sourceMsg.get("payload").isJsonObject()
+                ? sourceMsg.getAsJsonObject("payload")
+                : null;
+        if (payload != null) {
+            String payloadType = firstNonBlank(getStringProperty(payload, "type"));
+            if ("function_call".equals(payloadType) || "custom_tool_call".equals(payloadType)) {
+                return firstNonBlank(getStringProperty(payload, "call_id"), getStringProperty(payload, "id"));
+            }
+            if ("function_call_output".equals(payloadType)) {
+                return firstNonBlank(
+                        getStringProperty(payload, "call_id"),
+                        getStringProperty(payload, "tool_use_id"),
+                        getStringProperty(payload, "id")
+                );
+            }
+            String rawId = firstNonBlank(
+                    getStringProperty(payload, "uuid"),
+                    getStringProperty(payload, "id"),
+                    getStringProperty(payload, "message_id"),
+                    getStringProperty(payload, "event_id"),
+                    getStringProperty(payload, "call_id")
+            );
+            if (hasText(rawId)) {
+                return rawId;
+            }
+        }
+        return extractToolIdentityFromFrontendMessage(frontendMsg);
+    }
+
+    /**
+     * 从前端 raw block 中提取 tool_use / tool_result 的稳定摘要。
+     * 当 provider 没有单独暴露 message id 时，这个摘要仍可用于识别同一条工具调用消息。
+     *
+     * @param frontendMsg 已转换好的前端消息
+     * @return tool 语义摘要；没有工具块时返回空串
+     */
+    private static String extractToolIdentityFromFrontendMessage(JsonObject frontendMsg) {
+        if (frontendMsg == null || !frontendMsg.has("raw") || !frontendMsg.get("raw").isJsonObject()) {
+            return "";
+        }
+        JsonArray rawBlocks = extractFrontendRawBlocks(frontendMsg.getAsJsonObject("raw"));
+        List<String> parts = new ArrayList<>();
+        for (JsonElement rawBlockElement : rawBlocks) {
+            if (!rawBlockElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject rawBlock = rawBlockElement.getAsJsonObject();
+            String type = getStringProperty(rawBlock, "type");
+            if ("tool_use".equals(type)) {
+                parts.add("tool_use:" + firstNonBlank(getStringProperty(rawBlock, "id"), getStringProperty(rawBlock, "name")));
+            } else if ("tool_result".equals(type)) {
+                parts.add("tool_result:" + firstNonBlank(getStringProperty(rawBlock, "tool_use_id")));
+            }
+        }
+        return parts.isEmpty() ? "" : String.join("|", parts);
+    }
+
+    /**
+     * 在双录重复消息之间继承稳定 identity 与顺序元数据。
+     * 这样 richer 版本替换 placeholder 版本时，不会把既有 logicalOrder、segmentLocalIndex 和 identity key 改乱。
+     *
+     * @param previous 已存在列表中的旧消息
+     * @param replacement 本轮选中的更丰富消息
+     * @return 继承稳定元数据后的替换消息
+     */
+    private static JsonObject inheritStableFrontendMetadata(JsonObject previous, JsonObject replacement) {
+        if (previous == null || replacement == null) {
+            return replacement;
+        }
+        if (previous.has("messageIdentity")) {
+            replacement.add("messageIdentity", previous.get("messageIdentity").deepCopy());
+        }
+        copyNumericProperty(previous, replacement, "logicalOrder");
+        copyNumericProperty(previous, replacement, "segmentIndex");
+        copyNumericProperty(previous, replacement, "segmentLocalIndex");
+        copyStringProperty(previous, replacement, "segmentSessionId");
+        if (replacement.has("raw") && replacement.get("raw").isJsonObject()) {
+            JsonObject raw = replacement.getAsJsonObject("raw");
+            if (previous.has("messageIdentity")) {
+                raw.add("messageIdentity", previous.get("messageIdentity").deepCopy());
+            }
+            copyNumericProperty(previous, raw, "logicalOrder");
+            copyNumericProperty(previous, raw, "segmentIndex");
+            copyNumericProperty(previous, raw, "segmentLocalIndex");
+            copyStringProperty(previous, raw, "segmentSessionId");
+        }
+        return replacement;
+    }
+
+    /**
+     * 读取顶层 `messageIdentity.key`。
+     *
+     * @param message 前端消息
+     * @return identity key；缺失时返回空串
+     */
+    private static String extractMessageIdentityKey(JsonObject message) {
+        if (message == null || !message.has("messageIdentity") || !message.get("messageIdentity").isJsonObject()) {
+            return "";
+        }
+        return firstNonBlank(getStringProperty(message.getAsJsonObject("messageIdentity"), "key"));
+    }
+
+    /**
+     * 复制整数字段，避免重复消息替换时丢失稳定顺序元数据。
+     *
+     * @param from 源对象
+     * @param to 目标对象
+     * @param propertyName 字段名
+     */
+    private static void copyNumericProperty(JsonObject from, JsonObject to, String propertyName) {
+        if (from == null || to == null || propertyName == null || !from.has(propertyName) || from.get(propertyName).isJsonNull()) {
+            return;
+        }
+        to.addProperty(propertyName, from.get(propertyName).getAsInt());
+    }
+
+    /**
+     * 复制字符串字段，避免重复消息替换时丢失所属分段 sessionId。
+     *
+     * @param from 源对象
+     * @param to 目标对象
+     * @param propertyName 字段名
+     */
+    private static void copyStringProperty(JsonObject from, JsonObject to, String propertyName) {
+        String value = getStringProperty(from, propertyName);
+        if (!hasText(value) || to == null) {
+            return;
+        }
+        to.addProperty(propertyName, value);
     }
 
     /**
@@ -537,7 +940,7 @@ public class HistoryMessageInjector {
      * @param state 当前会话状态
      * @param frontendMessages 已按前端协议转换完成的消息列表
      */
-    static void restoreCodexMessagesToSessionState(SessionState state, List<JsonObject> frontendMessages) {
+    public static void restoreCodexMessagesToSessionState(SessionState state, List<JsonObject> frontendMessages) {
         state.clearMessages();
         if (frontendMessages == null) {
             return;
@@ -1056,6 +1459,45 @@ public class HistoryMessageInjector {
     }
 
     /**
+     * 按逻辑会话维度构建 continued/runtime restore 共用的前端聚合消息批次。
+     * 该入口复用历史恢复链路的“恢复计划 -> 分段读取 -> 边界提示注入”语义，
+     * 避免运行时 continued 再复制一份独立的拼装逻辑，导致展示语义继续分叉。
+     *
+     * @param requestedSessionId 当前恢复入口感知到的 sessionId，通常为最新活动分段
+     * @param logicalConversationId 所属逻辑会话 id
+     * @param activeSegmentSessionId 当前活动分段 sessionId
+     * @param settingsService 分段元数据读取服务
+     * @param codexReader Codex 历史读取器
+     * @return 可直接回刷到前端的聚合消息列表
+     */
+    public static List<JsonObject> buildCodexLogicalConversationFrontendBatch(
+            String requestedSessionId,
+            String logicalConversationId,
+            String activeSegmentSessionId,
+            CodemossSettingsService settingsService,
+            CodexHistoryReader codexReader
+    ) {
+        if (settingsService == null || codexReader == null) {
+            return new ArrayList<>();
+        }
+        SessionLoadRequest request = new SessionLoadRequest(
+                firstNonBlank(requestedSessionId),
+                firstNonBlank(logicalConversationId),
+                firstNonBlank(activeSegmentSessionId),
+                "",
+                "",
+                "runtime_continue",
+                ""
+        );
+        CodexRestorePlan restorePlan = buildCodexRestorePlan(request, settingsService);
+        CodexSegmentBundle segmentBundle = loadCodexSegmentBundle(restorePlan, settingsService, codexReader);
+        return convertCodexMessagesToFrontendBatch(
+                segmentBundle.getSegmentMessagesList(),
+                segmentBundle.getSegmentRecords()
+        );
+    }
+
+    /**
      * 统一输出逻辑会话恢复计划的 trace 摘要。
      * 该摘要只保留用于串联日志的稳定字段，避免把整段消息或大对象直接写入日志。
      *
@@ -1082,9 +1524,25 @@ public class HistoryMessageInjector {
      * @return 拼接后的 Codex 原始历史消息
      */
     private CodexSegmentBundle loadCodexSegmentBundle(CodexRestorePlan restorePlan) {
+        return loadCodexSegmentBundle(restorePlan, context.getSettingsService(), new CodexHistoryReader());
+    }
+
+    /**
+     * 顺序读取恢复计划中的全部物理分段消息，并携带分段元数据一并返回。
+     * 该静态入口同时服务于历史恢复与运行时 continued 聚合回刷，避免两条链路再维护两套读取顺序。
+     *
+     * @param restorePlan 当前逻辑会话恢复计划
+     * @param settingsService 分段元数据读取服务
+     * @param codexReader Codex 历史读取器
+     * @return 包含分段消息与分段记录的聚合载荷
+     */
+    private static CodexSegmentBundle loadCodexSegmentBundle(
+            CodexRestorePlan restorePlan,
+            CodemossSettingsService settingsService,
+            CodexHistoryReader codexReader
+    ) {
         List<JsonArray> segmentMessagesList = new ArrayList<>();
         List<ConversationSegmentRecord> segmentRecords = new ArrayList<>();
-        CodexHistoryReader codexReader = new CodexHistoryReader();
         for (String segmentSessionId : restorePlan.getSegmentSessionIds()) {
             if (!hasText(segmentSessionId)) {
                 continue;
@@ -1092,7 +1550,7 @@ public class HistoryMessageInjector {
             String messagesJson = codexReader.getSessionMessagesAsJson(segmentSessionId);
             JsonArray segmentMessages = JsonParser.parseString(messagesJson).getAsJsonArray();
             segmentMessagesList.add(segmentMessages);
-            segmentRecords.add(resolveSegmentRecord(segmentSessionId));
+            segmentRecords.add(resolveSegmentRecord(settingsService, segmentSessionId));
         }
         return new CodexSegmentBundle(
                 segmentMessagesList,
@@ -1133,8 +1591,22 @@ public class HistoryMessageInjector {
      * @return 对应分段元数据；缺失时返回空语义记录
      */
     private ConversationSegmentRecord resolveSegmentRecord(String sessionId) {
+        return resolveSegmentRecord(context.getSettingsService(), sessionId);
+    }
+
+    /**
+     * 读取指定物理分段对应的元数据记录。
+     * 静态版本用于运行时 continued 聚合回刷，实例版本继续服务于历史恢复链路。
+     *
+     * @param settingsService 分段元数据读取服务
+     * @param sessionId 物理分段 sessionId
+     * @return 对应分段元数据；缺失时返回空语义记录
+     */
+    private static ConversationSegmentRecord resolveSegmentRecord(
+            CodemossSettingsService settingsService,
+            String sessionId
+    ) {
         try {
-            CodemossSettingsService settingsService = context.getSettingsService();
             ConversationSegmentRecord record = settingsService != null
                     ? settingsService.getConversationSegmentRecord(sessionId)
                     : null;

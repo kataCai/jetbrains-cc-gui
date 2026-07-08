@@ -3,8 +3,10 @@ package com.github.claudecodegui.session;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.session.ClaudeSession.Message;
 import com.github.claudecodegui.permission.PermissionRequest;
+import com.google.gson.JsonObject;
 import org.junit.Test;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -206,6 +208,42 @@ public class CodexMessageHandlerTest {
 
         assertEquals(0, state.getMessages().size());
         assertEquals(0, callback.messageUpdateCount);
+    }
+
+    /**
+     * 验证当用户消息在清洗后已经完全为空时，命令过滤链路不会因为继续对空结果执行 contains 判断而抛异常。
+     * 这里直接反射调用私有过滤方法，避免公开入口把异常吞掉后掩盖真实缺陷。
+     */
+    @Test
+    public void userMessageWithOnlyInjectedPreludeShouldNotCrashCommandFilteringPath() throws Exception {
+        SessionState state = new SessionState();
+
+        CallbackHandler callbackHandler = new CallbackHandler();
+        RecordingCallback callback = new RecordingCallback();
+        callbackHandler.setCallback(callback);
+
+        CodexMessageHandler handler = new CodexMessageHandler(state, callbackHandler);
+        JsonObject messageJson = new JsonObject();
+        JsonObject message = new JsonObject();
+        message.addProperty("role", "user");
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        JsonObject textBlock = new JsonObject();
+        textBlock.addProperty("type", "text");
+        textBlock.addProperty("text", "<agents-instructions>\n# AGENTS.md instructions\n</agents-instructions>\n<environment_context>\nproject\n</environment_context>");
+        content.add(textBlock);
+        message.add("content", content);
+        messageJson.add("message", message);
+
+        Method method = CodexMessageHandler.class.getDeclaredMethod(
+                "isFilteredCommandMessage",
+                JsonObject.class,
+                Message.Type.class
+        );
+        method.setAccessible(true);
+
+        Object result = method.invoke(handler, messageJson, Message.Type.USER);
+
+        assertFalse((Boolean) result);
     }
 
     @Test

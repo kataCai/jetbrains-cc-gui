@@ -316,7 +316,7 @@ public class CodexMessageConverter {
      * These blocks are useful model context, but should not be rendered as user history.
      */
     public static String stripSystemTags(String text) {
-        return UserMessageSanitizer.sanitizeUserFacingText(text);
+        return UserMessageSanitizer.sanitizeInjectedRequestTextToUserVisibleText(text);
     }
 
     private static JsonArray textContentBlocks(String text) {
