@@ -5,7 +5,7 @@ import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.bridge.ProcessManager;
 import com.github.claudecodegui.util.ClaudeCliPathResolver;
 import com.github.claudecodegui.util.ManagedProcessRunner;
-import com.github.claudecodegui.util.UserMessageSanitizer;
+import com.github.claudecodegui.util.UserVisibleTextGateway;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -333,10 +333,7 @@ class ClaudeSessionQueryService {
         String normalized = text.replace("\r\n", "\n");
         normalized = normalized.replace("\r", "\n");
         normalized = normalized.replace(IMAGE_ATTACHMENT_HINT, "");
-        normalized = UserMessageSanitizer.sanitizeInjectedRequestTextToUserVisibleText(normalized);
-        if (normalized == null) {
-            return "";
-        }
+        normalized = UserVisibleTextGateway.toVisibleUserTextOrEmpty(normalized);
         normalized = normalized.replaceAll("(?m)^[ \\t]+$", "");
         normalized = normalized.replaceAll("\n{3,}", "\n\n");
         normalized = normalized.replaceAll("^(?:\\s*\\n)+", "");

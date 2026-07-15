@@ -86,6 +86,32 @@ public class CodexSessionLiteReaderTest {
     }
 
     @Test
+    public void parseSessionInfoFromLite_stripsPermissionsAndSkillsPrelude() {
+        String sessionId = "thread_abc123def456";
+        String message = "<permissions instructions>Filesystem sandboxing defines which files can be read or written.</permissions instructions>\n\n"
+                + "## Skills\n\n"
+                + "### Skill roots\n\n"
+                + "- `r0` = `D:/Users/example/.agents/skills`\n\n"
+                + "### Available skills\n\n"
+                + "- firecrawl-search: Search the web. (file: r0/firecrawl-search/SKILL.md)\n\n"
+                + "### How to use skills\n\n"
+                + "1. Read the skill before doing work.\n\n"
+                + "Continue the real task";
+        SessionLiteReader.LiteSessionFile lite = new SessionLiteReader.LiteSessionFile(
+                System.currentTimeMillis(), 1000,
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":"
+                        + "\"" + message.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"}}\n",
+                ""
+        );
+
+        CodexSessionLiteReader.CodexLiteSessionInfo info = reader.parseSessionInfoFromLite(sessionId, lite);
+        assertNotNull(info);
+        assertTrue(info.summary.contains("Continue the real task"));
+        assertTrue(!info.summary.contains("permissions instructions"));
+        assertTrue(!info.summary.contains("firecrawl-search"));
+    }
+
+    @Test
     public void readSessionLite_invalidSessionId() throws IOException {
         Path tempDir = Files.createTempDirectory("codex-lite-test");
         try {

@@ -1,5 +1,6 @@
 package com.github.claudecodegui.bridge;
 
+import com.github.claudecodegui.util.PluginBuildInfo;
 import com.intellij.ide.plugins.IdeaPluginDescriptor;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
@@ -218,6 +219,8 @@ public class BridgeDirectoryResolver {
 
             String signature = BridgeArchiveLocator.computeSignature(descriptor, archiveFile);
             LOG.info("[BridgeResolver] Expected signature: " + signature);
+            LOG.info("[BridgeResolver] Build fingerprint: " + PluginBuildInfo.load().describeForLog()
+                    + ", expectedBridgeSignature=" + signature);
             File versionFile = new File(extractedDir, BRIDGE_VERSION_FILE);
             LOG.info("[BridgeResolver] Version file path: " + versionFile.getAbsolutePath());
             LOG.info("[BridgeResolver] Version file exists: " + versionFile.exists());

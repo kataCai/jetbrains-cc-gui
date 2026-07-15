@@ -12,6 +12,7 @@ import type { ClaudeMessage, HistoryRestoreKind, MessageIdentity } from '../../.
 import type { ContextUsageData } from '../../../components/ContextUsageDialog';
 import { sendBridgeEvent } from '../../../utils/bridge';
 import { debugError, emitFrontendDiagnosticLog } from '../../../utils/debug';
+import { isHighConfidenceInternalVisibleResidue } from '../../../utils/contentBlockNormalize';
 import {
   appendOptimisticMessageIfMissing,
   ensureStreamingAssistantInList,
@@ -26,6 +27,533 @@ import { releaseSessionTransition } from '../sessionTransition';
 import { parseSequence } from '../parseSequence';
 
 const isTruthy = (v: unknown) => v === true || v === 'true';
+
+const CONTINUED_PENDING_TAIL_INTERNAL_PREFIXES = [
+  '# AGENTS.md instructions',
+  '<agents-instructions>',
+  '<INSTRUCTIONS>',
+  '<environment_context>',
+  '<permissions instructions>',
+  'Filesystem sandboxing defines which files can be read or written.',
+  '## Conversation Continuation',
+  '## Skills',
+  'A skill is a set of local instructions to follow that is stored in a `SKILL.md` file.',
+];
+const USER_VISIBLE_SYSTEM_TAG_NAMES = [
+  'agents-instructions',
+  'system-reminder',
+  'system-prompt',
+  'permissions instructions',
+  'environment_context',
+  'INSTRUCTIONS',
+];
+const USER_VISIBLE_MARKDOWN_INSTRUCTION_PREAMBLE_PREFIXES = [
+  '# AGENTS.md instructions',
+  '# Codex 全局通用规则',
+];
+const USER_VISIBLE_APPENDED_CONTEXT_MARKERS = [
+  '\n\n## Agent Role and Instructions\n\n',
+  '\n\n## Workspace Context\n\n',
+  '\n\n## Project Modules\n\nThis project contains multiple modules:\n',
+  '\n\n## Active Terminal Session\n\nThe user is working in the following terminal context:\n\n',
+  '\n\n## Referenced Files\n\nThe following files were referenced by the user:\n\n',
+  '\n\n## IDE Context\n\n',
+  "\n\n## User's Current IDE Context\n\nThe user is viewing this file in their IDE.",
+  "\n\n## User's Current IDE Context\n\nThe user is working in an IDE.",
+  '\n\n### Multi-Project Workspace Structure\n\n',
+  '\n\n### Project Module Structure\n\nThis project contains multiple modules:\n',
+];
+const USER_VISIBLE_CONTINUATION_HEADING = '## Conversation Continuation';
+const USER_VISIBLE_CONTINUATION_PURPOSE_LINE = 'You are continuing an existing conversation in a new runtime segment.';
+const USER_VISIBLE_CONTINUATION_LOGICAL_ID_PREFIX = 'Logical conversation id:';
+const USER_VISIBLE_CONTINUATION_PREVIOUS_SESSION_PREFIX = 'Previous segment session id:';
+const USER_VISIBLE_CONTINUATION_SUMMARY_PREFIX = 'Previous conversation summary:';
+const USER_VISIBLE_CONTINUATION_RECENT_TURNS_PREFIX = 'Recent conversation turns:';
+const USER_VISIBLE_CONTINUATION_INTENT_LINE =
+  "Preserve the user's intent and continue from that context unless the latest request overrides it.";
+const USER_VISIBLE_MAX_SANITIZE_PASSES = 8;
+
+function normalizeUserVisibleText(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function removeTagBlocks(text: string, tagName: string): string {
+  let result = text;
+  const openTag = `<${tagName}>`;
+  const closeTag = `</${tagName}>`;
+  let startIndex = result.indexOf(openTag);
+  while (startIndex >= 0) {
+    const endIndex = result.indexOf(closeTag, startIndex);
+    if (endIndex < 0) {
+      break;
+    }
+    result = result.slice(0, startIndex) + result.slice(endIndex + closeTag.length);
+    startIndex = result.indexOf(openTag);
+  }
+  return result;
+}
+
+function stripSystemTagsForUserVisibleText(text: string): string {
+  return USER_VISIBLE_SYSTEM_TAG_NAMES.reduce(
+    (result, tagName) => removeTagBlocks(result, tagName),
+    text,
+  );
+}
+
+function trimLeadingBlankLines(text: string): string {
+  return text.replace(/^[\n\t ]+/, '');
+}
+
+function removeFirstParagraph(text: string): string {
+  const separatorIndex = text.indexOf('\n\n');
+  if (separatorIndex < 0) {
+    return '';
+  }
+  return text.slice(separatorIndex + 2);
+}
+
+function stripLeadingMarkdownInstructionPreambles(text: string): string {
+  let result = text;
+  let changed = false;
+  do {
+    changed = false;
+    const trimmedLeading = trimLeadingBlankLines(result);
+    for (const prefix of USER_VISIBLE_MARKDOWN_INSTRUCTION_PREAMBLE_PREFIXES) {
+      if (trimmedLeading.startsWith(prefix)) {
+        result = removeFirstParagraph(trimmedLeading);
+        changed = true;
+        break;
+      }
+    }
+  } while (changed);
+  return result;
+}
+
+function looksLikeContinuationCarryoverBlock(text: string): boolean {
+  if (!text.startsWith(USER_VISIBLE_CONTINUATION_HEADING)) {
+    return false;
+  }
+  const hasAnchor = text.includes(USER_VISIBLE_CONTINUATION_LOGICAL_ID_PREFIX)
+    && text.includes(USER_VISIBLE_CONTINUATION_PREVIOUS_SESSION_PREFIX);
+  const hasBody = text.includes(USER_VISIBLE_CONTINUATION_SUMMARY_PREFIX)
+    || text.includes(USER_VISIBLE_CONTINUATION_RECENT_TURNS_PREFIX);
+  return text.includes(USER_VISIBLE_CONTINUATION_PURPOSE_LINE)
+    && hasAnchor
+    && hasBody
+    && text.includes(USER_VISIBLE_CONTINUATION_INTENT_LINE);
+}
+
+function removeContinuationCarryoverBlocks(text: string): string {
+  let result = text;
+  let searchIndex = 0;
+  let changed = false;
+  while (searchIndex < result.length) {
+    const startIndex = result.indexOf(USER_VISIBLE_CONTINUATION_HEADING, searchIndex);
+    if (startIndex < 0) {
+      break;
+    }
+    const blockEndIndex = findContinuationCarryoverBlockEnd(result, startIndex);
+    if (blockEndIndex < 0) {
+      searchIndex = startIndex + USER_VISIBLE_CONTINUATION_HEADING.length;
+      continue;
+    }
+    const block = result.slice(startIndex, blockEndIndex).trim();
+    if (!looksLikeContinuationCarryoverBlock(block)) {
+      searchIndex = startIndex + USER_VISIBLE_CONTINUATION_HEADING.length;
+      continue;
+    }
+    result = result.slice(0, startIndex) + result.slice(blockEndIndex);
+    changed = true;
+    searchIndex = Math.max(0, startIndex);
+  }
+  return changed ? collapseExcessBlankLines(result) : result;
+}
+
+/**
+ * 以固定意图行为块尾锚点定位 continuation 提示块，避免被中间正文空行提前截断。
+ */
+function findContinuationCarryoverBlockEnd(text: string, startIndex: number): number {
+  const intentIndex = text.indexOf(USER_VISIBLE_CONTINUATION_INTENT_LINE, startIndex);
+  if (intentIndex < 0) {
+    return -1;
+  }
+  let endIndex = intentIndex + USER_VISIBLE_CONTINUATION_INTENT_LINE.length;
+  while (endIndex < text.length) {
+    const current = text[endIndex];
+    if (current !== '\n' && current !== ' ' && current !== '\t') {
+      break;
+    }
+    endIndex += 1;
+  }
+  return endIndex;
+}
+
+/**
+ * continuation / skills 等内部块剥离后可能留下过多空行，这里统一收敛为最多一个空段。
+ */
+function collapseExcessBlankLines(text: string): string {
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function isHighConfidenceInternalSkillHeading(paragraph: string): boolean {
+  return paragraph.startsWith('## Skills')
+    || paragraph.startsWith('### Skill roots')
+    || paragraph.startsWith('### Available skills')
+    || paragraph.startsWith('### How to use skills')
+    || paragraph.startsWith('A skill is a set of local instructions to follow that is stored in a `SKILL.md` file.');
+}
+
+function looksLikeStrongInternalSkillEvidence(paragraph: string): boolean {
+  return paragraph.includes('SKILL.md')
+    || paragraph.includes('### Skill roots')
+    || paragraph.includes('### Available skills')
+    || paragraph.includes('### How to use skills')
+    || paragraph.includes('The list above is the skills available in this session')
+    || paragraph.includes('After deciding to use a skill')
+    || paragraph.includes('(file: r0/')
+    || paragraph.includes('(file: r1/')
+    || paragraph.includes('(file: r2/');
+}
+
+function looksLikeSkillInstructionParagraph(paragraph: string): boolean {
+  return isHighConfidenceInternalSkillHeading(paragraph)
+    || looksLikeStrongInternalSkillEvidence(paragraph)
+    || paragraph.startsWith('- `r')
+    || paragraph.startsWith('- Discovery:')
+    || paragraph.startsWith('- Trigger rules:')
+    || paragraph.startsWith('- Missing/blocked:')
+    || paragraph.startsWith('- How to use a skill')
+    || paragraph.startsWith('- Coordination and sequencing:')
+    || paragraph.startsWith('- Context hygiene:')
+    || paragraph.startsWith('- Safety and fallback:')
+    || paragraph.startsWith('1. After deciding to use a skill')
+    || paragraph.startsWith('2. When `SKILL.md` references relative paths')
+    || paragraph.startsWith('3. If `SKILL.md` points to extra folders')
+    || paragraph.startsWith('4. If `scripts/` exist')
+    || paragraph.startsWith('5. If `assets/` or templates exist')
+    || paragraph.includes('skill roots')
+    || paragraph.includes('Available skills')
+    || paragraph.includes('How to use skills');
+}
+
+function looksLikeFlattenedSingleParagraphInternalSkillSection(paragraph: string): boolean {
+  return paragraph.startsWith('## Skills')
+    && paragraph.includes('SKILL.md')
+    && paragraph.includes('### Available skills')
+    && paragraph.includes('### How to use skills');
+}
+
+function stripInternalSkillSections(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length === 0) {
+    return text;
+  }
+
+  const keptParagraphs: string[] = [];
+  let index = 0;
+  while (index < paragraphs.length) {
+    const paragraph = paragraphs[index]?.trim() || '';
+    if (!paragraph) {
+      index += 1;
+      continue;
+    }
+    if (!isHighConfidenceInternalSkillHeading(paragraph)) {
+      keptParagraphs.push(paragraphs[index]);
+      index += 1;
+      continue;
+    }
+
+    let sectionEndIndex = index + 1;
+    let foundStrongInternalSkillEvidence = looksLikeStrongInternalSkillEvidence(paragraph);
+    while (sectionEndIndex < paragraphs.length) {
+      const sectionParagraph = paragraphs[sectionEndIndex]?.trim() || '';
+      if (!sectionParagraph) {
+        sectionEndIndex += 1;
+        continue;
+      }
+      if (!looksLikeSkillInstructionParagraph(sectionParagraph)) {
+        break;
+      }
+      if (looksLikeStrongInternalSkillEvidence(sectionParagraph)) {
+        foundStrongInternalSkillEvidence = true;
+      }
+      sectionEndIndex += 1;
+    }
+
+    const isFlattenedSingleParagraphSection = foundStrongInternalSkillEvidence
+      && looksLikeFlattenedSingleParagraphInternalSkillSection(paragraph);
+    if (foundStrongInternalSkillEvidence && (sectionEndIndex > index + 1 || isFlattenedSingleParagraphSection)) {
+      index = sectionEndIndex;
+      continue;
+    }
+
+    keptParagraphs.push(paragraphs[index]);
+    index += 1;
+  }
+
+  return keptParagraphs.join('\n\n');
+}
+
+function stripAppendedContext(text: string): string {
+  let cutIndex = -1;
+  for (const marker of USER_VISIBLE_APPENDED_CONTEXT_MARKERS) {
+    const markerIndex = text.indexOf(marker);
+    if (markerIndex <= 0) {
+      continue;
+    }
+    const prefix = text.slice(0, markerIndex).trim();
+    if (!prefix) {
+      continue;
+    }
+    if (cutIndex < 0 || markerIndex < cutIndex) {
+      cutIndex = markerIndex;
+    }
+  }
+  if (cutIndex < 0) {
+    return text;
+  }
+  return text.slice(0, cutIndex);
+}
+
+function sanitizeUserVisibleText(text: string | null | undefined): string | null {
+  if (!text) {
+    return null;
+  }
+  let sanitized = normalizeUserVisibleText(text);
+  for (let pass = 0; pass < USER_VISIBLE_MAX_SANITIZE_PASSES; pass += 1) {
+    const previous = sanitized;
+    sanitized = stripSystemTagsForUserVisibleText(sanitized);
+    sanitized = stripLeadingMarkdownInstructionPreambles(sanitized);
+    sanitized = removeContinuationCarryoverBlocks(sanitized);
+    sanitized = stripInternalSkillSections(sanitized);
+    sanitized = stripAppendedContext(sanitized);
+    if (previous === sanitized) {
+      break;
+    }
+  }
+  const trimmed = sanitized.trim();
+  return trimmed ? trimmed : null;
+}
+
+function toUserTextRawBlocks(text: string): Array<{ type: 'text'; text: string }> {
+  return [{ type: 'text', text }];
+}
+
+/**
+ * 统一提取 user raw 中的内容块，优先复用原始结构，避免不同入口各自解析 `raw.content`/`raw.message.content`。
+ */
+function extractUserRawContentBlocks(raw: ClaudeMessage['raw']): Array<Record<string, unknown>> {
+  if (!raw || typeof raw === 'string') {
+    return [];
+  }
+  const rawObject = raw as Record<string, unknown>;
+  const directContent = rawObject.content;
+  if (Array.isArray(directContent)) {
+    return directContent.filter((block): block is Record<string, unknown> => !!block && typeof block === 'object');
+  }
+  const rawMessage = rawObject.message;
+  if (rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)) {
+    const nestedContent = (rawMessage as Record<string, unknown>).content;
+    if (Array.isArray(nestedContent)) {
+      return nestedContent.filter((block): block is Record<string, unknown> => !!block && typeof block === 'object');
+    }
+  }
+  return [];
+}
+
+/**
+ * 判断净化后的 user raw 是否仍包含前端可见的非文本 block，避免纯图片/附件消息被误删。
+ */
+function containsVisibleNonTextUserBlocks(raw: ClaudeMessage['raw']): boolean {
+  return extractUserRawContentBlocks(raw).some((block) => {
+    const type = typeof block.type === 'string' ? block.type : '';
+    return type !== '' && type !== 'text' && type !== 'thinking';
+  });
+}
+
+/**
+ * 只重写 user raw 中可见文本 block，保留图片、附件等非文本 block，避免净化文本时退化消息结构。
+ */
+function buildSanitizedUserRaw(raw: ClaudeMessage['raw'], text: string | null): ClaudeMessage['raw'] {
+  if (raw == null) {
+    return raw;
+  }
+  if (typeof raw === 'string') {
+    return text ?? '';
+  }
+  const sanitizedBlocks: Array<Record<string, unknown>> = [];
+  const originalBlocks = extractUserRawContentBlocks(raw);
+  let insertedSanitizedText = false;
+  for (const block of originalBlocks) {
+    const type = typeof block.type === 'string' ? block.type : '';
+    if (type === 'text') {
+      if (!insertedSanitizedText && text) {
+        sanitizedBlocks.push({ ...block, text });
+        insertedSanitizedText = true;
+      }
+      continue;
+    }
+    sanitizedBlocks.push({ ...block });
+  }
+  if (!insertedSanitizedText && text) {
+    sanitizedBlocks.push(...toUserTextRawBlocks(text));
+  }
+
+  const rawObject = { ...(raw as Record<string, unknown>) };
+  rawObject.content = sanitizedBlocks;
+  const rawMessage = rawObject.message;
+  if (rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)) {
+    rawObject.message = {
+      ...(rawMessage as Record<string, unknown>),
+      content: sanitizedBlocks.map((block) => ({ ...block })),
+    };
+  }
+  return rawObject;
+}
+
+function summarizeDiagnosticMessageContent(content: string | null | undefined): string | null {
+  if (typeof content !== 'string') {
+    return null;
+  }
+  const compact = content.replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return null;
+  }
+  return compact.slice(0, 96);
+}
+
+type SanitizedFrontendVisibleMessageResult = {
+  message: ClaudeMessage | null;
+  changed: boolean;
+};
+
+/**
+ * 从前端消息对象中提取所有可能参与可见性判断的文本候选。
+ * 这里会同时读取顶层 `content`、`raw.content` 与 `raw.message.content`，避免只清洗顶层文本时遗漏 raw 回退分支。
+ */
+function extractFrontendMessageTexts(message: ClaudeMessage): string[] {
+  const texts: string[] = [];
+  const appendText = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) {
+      texts.push(value);
+    }
+  };
+  const appendTextBlocks = (value: unknown) => {
+    if (!Array.isArray(value)) {
+      return;
+    }
+    value.forEach((block) => {
+      if (block && typeof block === 'object' && (block as { type?: string }).type === 'text') {
+        appendText((block as { text?: unknown }).text);
+      }
+    });
+  };
+
+  appendText(message.content);
+  const raw = message.raw;
+  if (typeof raw === 'string') {
+    appendText(raw);
+    return texts;
+  }
+  if (!raw || typeof raw !== 'object') {
+    return texts;
+  }
+
+  const rawObject = raw as Record<string, unknown>;
+  appendText(rawObject.content);
+  appendTextBlocks(rawObject.content);
+  if (rawObject.message && typeof rawObject.message === 'object' && !Array.isArray(rawObject.message)) {
+    const rawMessage = rawObject.message as Record<string, unknown>;
+    appendText(rawMessage.content);
+    appendTextBlocks(rawMessage.content);
+  }
+  return texts;
+}
+
+/**
+ * 判断当前前端消息是否属于“非 user 但命中高置信内部残留”的污染消息。
+ * 该判定专门服务 assistant/system/notification 兜底过滤，避免 permissions/skills/continuation 被直接渲染。
+ */
+function isHighConfidenceInternalResidueVisibleMessage(message: ClaudeMessage): boolean {
+  if (message.type === 'user') {
+    return false;
+  }
+  return extractFrontendMessageTexts(message).some((text) => isHighConfidenceInternalVisibleResidue(text));
+}
+
+/**
+ * 统一净化前端可见消息。
+ * `user` 分支保留“净化后继续展示真实问题文本”的策略；非 user 分支一旦命中高置信内部残留则整条丢弃。
+ */
+function sanitizeFrontendVisibleMessage(message: ClaudeMessage): SanitizedFrontendVisibleMessageResult {
+  if (message.type !== 'user') {
+    if (isHighConfidenceInternalResidueVisibleMessage(message)) {
+      return { message: null, changed: true };
+    }
+    return { message, changed: false };
+  }
+  const originalContent = typeof message.content === 'string' ? message.content : '';
+  const sanitizedContent = sanitizeUserVisibleText(originalContent);
+  const hasVisibleNonTextBlocks = containsVisibleNonTextUserBlocks(message.raw);
+  if (!sanitizedContent) {
+    if (!hasVisibleNonTextBlocks) {
+      return { message: null, changed: originalContent.trim().length > 0 || !!message.raw };
+    }
+    return {
+      message: {
+        ...message,
+        content: '',
+        raw: buildSanitizedUserRaw(message.raw, null),
+      },
+      changed: originalContent.trim().length > 0 || !!message.raw,
+    };
+  }
+  const sanitizedRaw = buildSanitizedUserRaw(message.raw, sanitizedContent);
+  if (sanitizedContent === originalContent && sanitizedRaw === message.raw) {
+    return { message, changed: false };
+  }
+  return {
+    message: {
+      ...message,
+      content: sanitizedContent,
+      raw: sanitizedRaw,
+    },
+    changed: true,
+  };
+}
+
+type SanitizedFrontendMessageListResult = {
+  messages: ClaudeMessage[];
+  sanitizedToEmptyCount: number;
+  changedCount: number;
+};
+
+/**
+ * 对一批待显示消息执行统一净化，并返回变更统计。
+ * 该入口同时被 continued pending tail、authoritative snapshot 和历史追加链路复用，避免不同入口的过滤规则漂移。
+ */
+function sanitizeFrontendVisibleMessages(messages: ClaudeMessage[]): SanitizedFrontendMessageListResult {
+  let sanitizedToEmptyCount = 0;
+  let changedCount = 0;
+  const sanitizedMessages: ClaudeMessage[] = [];
+  for (const message of messages) {
+    const sanitizedResult = sanitizeFrontendVisibleMessage(message);
+    if (!sanitizedResult.message) {
+      sanitizedToEmptyCount += 1;
+      changedCount += 1;
+      continue;
+    }
+    if (sanitizedResult.changed) {
+      changedCount += 1;
+    }
+    sanitizedMessages.push(sanitizedResult.message);
+  }
+  return {
+    messages: sanitizedMessages,
+    sanitizedToEmptyCount,
+    changedCount,
+  };
+}
 
 /**
  * 为消息中的非文本 raw block 构建轻量签名。
@@ -66,6 +594,72 @@ function getStructuralRawBlockSignature(
   }
 
   return parts.join('|');
+}
+
+/**
+ * 判断 continued 过渡态里某条消息是否仍明显带着内部 prompt/skills 残留。
+ * 这里只匹配高置信固定前缀与固定组合特征，专门服务“pending tail 缓存”兜底，
+ * 避免普通历史恢复或真实用户 Markdown 被误删。
+ *
+ * @param message 待检查的前端消息
+ * @return true 表示该消息不应进入 continued pending tail 缓存
+ */
+function isHighConfidenceInternalContinuedTailMessage(message: ClaudeMessage): boolean {
+  const normalizedContent = typeof message?.content === 'string' ? message.content.trim() : '';
+  if (!normalizedContent) {
+    return false;
+  }
+  if (CONTINUED_PENDING_TAIL_INTERNAL_PREFIXES.some((prefix) => normalizedContent.startsWith(prefix))) {
+    return true;
+  }
+  if (
+    normalizedContent.includes('SKILL.md')
+    && normalizedContent.includes('### Available skills')
+    && normalizedContent.includes('### How to use skills')
+  ) {
+    return true;
+  }
+  return normalizedContent.includes('Logical conversation id:')
+    && normalizedContent.includes('Previous segment session id:')
+    && normalizedContent.includes("Preserve the user's intent and continue from that context unless the latest request overrides it.");
+}
+
+/**
+ * 仅在 continued 首帧 sessionId 尚未绑定时，对待缓存 tail 做高置信内部消息过滤。
+ * 该过滤不会影响当前帧展示，只用于避免旧的污染消息被缓存并在后续 prefix merge 中再次拼回界面。
+ *
+ * @param messages 候选 continued pending tail
+ * @return 去除明显内部消息后的 tail
+ */
+function filterContinuedPendingTailMessages(messages: ClaudeMessage[]): ClaudeMessage[] {
+  return messages.filter((message) => !isHighConfidenceInternalContinuedTailMessage(message));
+}
+
+/**
+ * 统计消息列表中仍残留的相邻同内容 user 消息数量。
+ * 该诊断只用于判断 authoritative snapshot 是否还带着明显重复，不参与任何渲染分支。
+ *
+ * @param messages 待检查的消息列表
+ * @return 相邻重复 user 对的数量
+ */
+function countAdjacentDuplicateUserMessages(messages: ClaudeMessage[]): number {
+  if (!Array.isArray(messages) || messages.length < 2) {
+    return 0;
+  }
+  let duplicateCount = 0;
+  for (let index = 1; index < messages.length; index += 1) {
+    const previous = messages[index - 1];
+    const current = messages[index];
+    if (previous?.type !== 'user' || current?.type !== 'user') {
+      continue;
+    }
+    const previousContent = typeof previous.content === 'string' ? previous.content.trim() : '';
+    const currentContent = typeof current.content === 'string' ? current.content.trim() : '';
+    if (previousContent && previousContent === currentContent) {
+      duplicateCount += 1;
+    }
+  }
+  return duplicateCount;
 }
 
 export function registerMessageCallbacks(
@@ -368,6 +962,7 @@ export function registerMessageCallbacks(
       const mergedList = mergeContinuedSegmentPrefixIfNeeded(nextList);
       if (window.__continuedSegmentFirstSnapshotSessionId === currentSessionId) {
         emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued segment first snapshot applied', {
+          snapshotStage: 'transitional',
           currentSessionId,
           continuationPending: continuationPendingRef.current,
           previousMessageCount: prevList.length,
@@ -394,16 +989,31 @@ export function registerMessageCallbacks(
           nextList,
           window.__continuedSegmentPendingTailMessages,
         );
-        window.__continuedSegmentPendingTailMessages = cloneContinuedTailMessages(selectedPendingTail);
+        const highConfidenceFilteredPendingTail = filterContinuedPendingTailMessages(selectedPendingTail);
+        const filteredInternalCount = selectedPendingTail.length - highConfidenceFilteredPendingTail.length;
+        const sanitizedPendingTailResult = sanitizeFrontendVisibleMessages(highConfidenceFilteredPendingTail);
+        window.__continuedSegmentPendingTailMessages = sanitizedPendingTailResult.messages.length > 0
+          ? cloneContinuedTailMessages(sanitizedPendingTailResult.messages)
+          : null;
         emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued pending tail cached', {
+          snapshotStage: 'transitional',
           pendingTailCount: window.__continuedSegmentPendingTailMessages?.length ?? null,
           nextMessageCount: nextList.length,
+          filteredInternalCount,
+          sanitizedTailCount: sanitizedPendingTailResult.changedCount,
+          sanitizedToEmptyCount: sanitizedPendingTailResult.sanitizedToEmptyCount,
+          firstMessageType: selectedPendingTail[0]?.type ?? null,
+          firstMessagePreview: summarizeDiagnosticMessageContent(selectedPendingTail[0]?.content),
+          firstSanitizedPreview: summarizeDiagnosticMessageContent(
+            window.__continuedSegmentPendingTailMessages?.[0]?.content,
+          ),
           pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
           pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
           awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
         });
       }
       emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued prefix merge skipped', {
+        snapshotStage: 'transitional',
         currentSessionId,
         prefixSessionId: window.__continuedSegmentHistoryPrefixSessionId ?? null,
         prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
@@ -461,14 +1071,29 @@ export function registerMessageCallbacks(
     return { restoreKey, snapshotSignature, restoreKind };
   };
 
+  /**
+   * 判断当前 updateMessages 是否应该消费待恢复快照上下文。
+   * 普通 streaming 快照仍保留 rAF 合并策略；但 authoritative restore 是后端完整逻辑会话快照，
+   * 必须在 streaming 阶段也立即消费并覆盖旧缓存，避免 optimistic user 被重新拼回。
+   *
+   * @return true 表示本轮 updateMessages 应消费 prepared history restore 元数据
+   */
+  const shouldConsumePreparedHistoryRestoreSnapshot = (): boolean => (
+    !isStreamingRef.current || isAuthoritativeRestoreKind(window.__preparedHistoryRestoreKind)
+  );
+
   window.prepareHistoryRestoreSnapshot = (restoreKey, snapshotSignature, restoreKind) => {
     window.__preparedHistoryRestoreKey = restoreKey || null;
     window.__preparedHistoryRestoreSignature = snapshotSignature || null;
     window.__preparedHistoryRestoreKind = restoreKind || 'single_session';
+    const snapshotStage = restoreKind === 'runtime_continue_authoritative'
+      ? 'authoritative'
+      : 'transitional';
     emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'prepared snapshot context', {
       restoreKey: window.__preparedHistoryRestoreKey,
       snapshotSignature: window.__preparedHistoryRestoreSignature,
       restoreKind: window.__preparedHistoryRestoreKind,
+      snapshotStage,
     });
   };
 
@@ -491,7 +1116,7 @@ export function registerMessageCallbacks(
       return;
     }
 
-    const preparedHistoryRestore = !isStreamingRef.current
+    const preparedHistoryRestore = shouldConsumePreparedHistoryRestoreSnapshot()
       ? consumePreparedHistoryRestoreSnapshot()
       : null;
     if (
@@ -506,6 +1131,8 @@ export function registerMessageCallbacks(
 
     try {
       const parsed = JSON.parse(json) as ClaudeMessage[];
+      const sanitizedParsedResult = sanitizeFrontendVisibleMessages(parsed);
+      const sanitizedParsed = sanitizedParsedResult.messages;
       if (sequence != null) {
         window.__minAcceptedUpdateSequence = Math.max(minAcceptedSequence, sequence);
       }
@@ -524,7 +1151,8 @@ export function registerMessageCallbacks(
           restoreKey: preparedHistoryRestore.restoreKey,
           snapshotSignature: preparedHistoryRestore.snapshotSignature,
           restoreKind: preparedHistoryRestore.restoreKind,
-          messageCount: parsed.length,
+          messageCount: sanitizedParsed.length,
+          adjacentDuplicateUserCount: countAdjacentDuplicateUserMessages(sanitizedParsed),
           prefixCacheCleared,
         });
       }
@@ -533,10 +1161,22 @@ export function registerMessageCallbacks(
         const restoreKind = preparedHistoryRestore?.restoreKind ?? null;
         const isAuthoritativeRestore = isAuthoritativeRestoreKind(restoreKind);
 
+        if (isAuthoritativeRestore) {
+          clearContinuedSegmentTransitionCache();
+          emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'authoritative snapshot replaced messages', {
+            restoreKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKind,
+            previousMessageCount: prev.length,
+            nextMessageCount: sanitizedParsed.length,
+            streaming: isStreamingRef.current,
+          });
+          return sanitizedParsed;
+        }
+
         if (isStreamingRef.current) {
           if (useBackendStreamingRenderRef.current) {
-            let smartMerged = parsed.map((newMsg, i) => {
-              if (i === parsed.length - 1) return newMsg;
+            let smartMerged = sanitizedParsed.map((newMsg, i) => {
+              if (i === sanitizedParsed.length - 1) return newMsg;
               if (i < prev.length) {
                 const oldMsg = prev[i];
                 // 保留前端补写的耗时字段，避免被后端快照覆盖掉。
@@ -609,13 +1249,13 @@ export function registerMessageCallbacks(
             return finalizeMessageList(prev, result);
           }
 
-          const lastAssistantIdx = findLastAssistantIndex(parsed);
+          const lastAssistantIdx = findLastAssistantIndex(sanitizedParsed);
           if (lastAssistantIdx < 0) {
             return finalizeMessageList(
               prev,
               preserveShrinkIfNeeded(
                 prev,
-                appendOptimisticMessageIfMissing(prev, parsed),
+                appendOptimisticMessageIfMissing(prev, sanitizedParsed),
                 restoreKind,
               ),
             );
@@ -623,19 +1263,14 @@ export function registerMessageCallbacks(
         }
 
         if (!isStreamingRef.current) {
-          if (isAuthoritativeRestore) {
-            clearContinuedSegmentTransitionCache();
-            return parsed;
-          }
-
-          let smartMerged = parsed.map((newMsg, i) => {
+          let smartMerged = sanitizedParsed.map((newMsg, i) => {
             if (i < prev.length) {
               const oldMsg = prev[i];
               // 保留前端补写的耗时字段，避免非流式刷新或历史重载时丢失。
               if (typeof oldMsg.durationMs === 'number' && newMsg.type === 'assistant') {
                 newMsg = { ...newMsg, durationMs: oldMsg.durationMs };
               }
-              if (i < parsed.length - 1) {
+              if (i < sanitizedParsed.length - 1) {
                 if (
                   oldMsg.timestamp === newMsg.timestamp &&
                   oldMsg.type === newMsg.type &&
@@ -653,7 +1288,7 @@ export function registerMessageCallbacks(
           return finalizeMessageList(prev, appendOptimisticMessageIfMissing(prev, smartMerged));
         }
 
-        let patched = [...parsed];
+        let patched = [...sanitizedParsed];
         patched = appendOptimisticMessageIfMissing(prev, patched);
         patched = preserveLastAssistantIdentityIfSafe(prev, patched, restoreKind);
         patched = preserveStreamingAssistantContent(
@@ -723,6 +1358,12 @@ export function registerMessageCallbacks(
 
     if (isStreamingRef.current && window.__lastStreamActivityAt !== undefined) {
       window.__lastStreamActivityAt = Date.now();
+    }
+
+    if (isStreamingRef.current && isAuthoritativeRestoreKind(window.__preparedHistoryRestoreKind)) {
+      cancelPendingUpdateMessages();
+      processUpdateMessages(json, sequence);
+      return;
     }
 
     if (isStreamingRef.current) {
@@ -935,7 +1576,15 @@ export function registerMessageCallbacks(
 
   window.addHistoryMessage = (message: ClaudeMessage) => {
     if (window.__sessionTransitioning) return;
-    setMessages((prev) => [...prev, message]);
+    const sanitizedMessage = sanitizeFrontendVisibleMessage(message).message;
+    if (!sanitizedMessage) {
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'drop addHistoryMessage after sanitization', {
+        messageType: message.type,
+        messagePreview: summarizeDiagnosticMessageContent(message.content),
+      });
+      return;
+    }
+    setMessages((prev) => [...prev, sanitizedMessage]);
   };
 
   window.historyLoadComplete = () => {
@@ -956,21 +1605,32 @@ export function registerMessageCallbacks(
 
   window.addUserMessage = (content: string) => {
     if (window.__sessionTransitioning) return;
-    const userMessage: ClaudeMessage = {
+    const candidateUserMessage: ClaudeMessage = {
       type: 'user',
       content: content || '',
       timestamp: new Date().toISOString(),
+      raw: {
+        role: 'user',
+        content: toUserTextRawBlocks(content || ''),
+      },
     };
+    const sanitizedUserMessage = sanitizeFrontendVisibleMessage(candidateUserMessage).message;
+    if (!sanitizedUserMessage) {
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'drop addUserMessage after sanitization', {
+        messagePreview: summarizeDiagnosticMessageContent(content),
+      });
+      return;
+    }
     setMessages((prev) => {
       // If the last message is an optimistic message with matching content,
       // skip adding — the frontend already rendered the optimistic copy.
       // Otherwise addUserMessage + optimistic create a brief duplicate until
       // the next updateMessages deduplicates them.
       const lastMsg = prev[prev.length - 1];
-      if (lastMsg?.isOptimistic && lastMsg.type === 'user' && lastMsg.content === content) {
+      if (lastMsg?.isOptimistic && lastMsg.type === 'user' && lastMsg.content === sanitizedUserMessage.content) {
         return prev;
       }
-      return [...prev, userMessage];
+      return [...prev, sanitizedUserMessage];
     });
     userPausedRef.current = false;
     isUserAtBottomRef.current = true;

@@ -7,7 +7,6 @@ import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.remote.debug.RemoteCollabDebugActionDescriptor;
 import com.github.claudecodegui.remote.provider.RemoteCollabCapability;
 import com.github.claudecodegui.settings.CodemossSettingsService;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.junit.Test;
 

@@ -394,6 +394,22 @@ export function useSessionManagement({
       transitionToken: window.__sessionTransitionToken ?? null,
     });
 
+    if (!resolvedSourceSessionId?.trim()) {
+      // 中文注释：没有稳定 source anchor 时，continued 只会把旧前缀误绑到错误分段。
+      // 这里必须在进入任何过渡缓存与 pending 状态之前直接拒绝请求，保留当前会话不变。
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'createContinuedSegment aborted missing source anchor', {
+        requestSourceSessionId: request.sourceSessionId?.trim() || null,
+        activeSegmentSessionId: request.activeSegmentSessionId?.trim() || null,
+        currentSessionId,
+        continuationSourceSessionId: request.continuationSourceSessionId?.trim() || null,
+        logicalConversationId: request.logicalConversationId?.trim() || logicalConversationId?.trim() || null,
+      });
+      addToast(t('chat.continuedSegmentAnchorMissing', {
+        defaultValue: 'chat.continuedSegmentAnchorMissing',
+      }), 'warning');
+      return;
+    }
+
     if (loading) {
       sendBridgeEvent('interrupt_session');
     }

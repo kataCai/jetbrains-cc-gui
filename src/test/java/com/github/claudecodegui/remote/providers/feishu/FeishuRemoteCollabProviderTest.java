@@ -6,7 +6,6 @@ import com.github.claudecodegui.remote.RemoteRequestType;
 import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.remote.feishu.FeishuBindingService;
 import com.github.claudecodegui.remote.feishu.FeishuEventSubscriber;
-import com.github.claudecodegui.remote.feishu.FeishuIncomingMessage;
 import com.github.claudecodegui.remote.feishu.FeishuMessageClient;
 import com.github.claudecodegui.remote.feishu.FeishuMessageFormatter;
 import com.github.claudecodegui.remote.debug.RemoteCollabDebugActionDescriptor;
@@ -16,7 +15,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.junit.Test;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;

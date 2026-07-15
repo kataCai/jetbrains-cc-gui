@@ -49,6 +49,7 @@ import com.github.claudecodegui.taskstate.TaskStateService;
 import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.MessageJsonConverter;
 import com.github.claudecodegui.util.SoundNotificationService;
+import com.github.claudecodegui.util.UserVisibleTextGateway;
 import com.github.claudecodegui.ui.toolwindow.TabSessionRestoreState;
 import com.google.gson.JsonObject;
 import com.intellij.ide.util.PropertiesComponent;
@@ -500,8 +501,17 @@ public class ChatWindowDelegate {
     }
 
     private void executeQuickFixInternal(String prompt, MessageCallback callback) {
-        String escapedPrompt = JsUtils.escapeJs(prompt);
-        host.callJavaScript("addUserMessage", escapedPrompt);
+        String visiblePrompt = UserVisibleTextGateway.toVisibleUserText(prompt);
+        if (visiblePrompt == null || visiblePrompt.trim().isEmpty()) {
+            LOG.info("QuickFix: skip addUserMessage after sanitization, originalLength="
+                    + (prompt == null ? 0 : prompt.length()));
+        } else {
+            LOG.info("QuickFix: send sanitized addUserMessage, originalLength="
+                    + (prompt == null ? 0 : prompt.length())
+                    + ", sanitizedLength=" + visiblePrompt.length());
+            String escapedPrompt = JsUtils.escapeJs(visiblePrompt);
+            host.callJavaScript("addUserMessage", escapedPrompt);
+        }
         host.callJavaScript("showLoading", "true");
 
         host.getSession().send(prompt, null, (String) null).thenRun(() -> {

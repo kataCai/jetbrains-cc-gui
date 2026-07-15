@@ -10,7 +10,6 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
 
 /**
  * 验证 provider 注册表可以按 ID 和能力查询已注册的 provider。

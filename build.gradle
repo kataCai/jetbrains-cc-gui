@@ -143,6 +143,9 @@ intellijPlatform {
 
 sourceSets {
     main {
+        resources {
+            srcDir layout.buildDirectory.dir('generated/plugin-build-info')
+        }
         java {
             def targetIde = project.findProperty('targetIde') ?: 'IC'
             // PyCharm: exclude Java context collector
@@ -313,6 +316,74 @@ def enableVConsoleInWebview = requestedTasks.any { it.contains('runide') }
 def enableWebviewDebugInWebview = enableVConsoleInWebview || (project.findProperty('webviewDebug') ?: 'false').toString().toBoolean()
 def enableBridgeDiagnosticLogInWebview = requestedTasks.any { it.contains('runide') } || (project.findProperty('bridgeDiagnosticLog') ?: 'false').toString().toBoolean()
 def skipWebviewBuild = (project.findProperty('skipWebview') ?: 'false').toString().toBoolean()
+def generatedPluginBuildInfoDir = layout.buildDirectory.dir('generated/plugin-build-info')
+def webviewHtmlResource = file('src/main/resources/html/claude-chat.html')
+def webviewBundleSha256Placeholder = '__CC_GUI_WEBVIEW_BUNDLE_SHA256__'
+
+/**
+ * 执行一条 git 命令并返回精简输出。
+ * 该辅助只服务于构建指纹生成；失败时返回 unknown，避免没有 git 元数据的发布环境直接构建失败。
+ */
+def readGitOutput = { List<String> args ->
+    try {
+        def output = new ByteArrayOutputStream()
+        exec {
+            commandLine args
+            standardOutput = output
+            errorOutput = new ByteArrayOutputStream()
+            ignoreExitValue = true
+        }
+        def text = output.toString('UTF-8').trim()
+        return text ?: 'unknown'
+    } catch (Exception ignored) {
+        return 'unknown'
+    }
+}
+
+/**
+ * 计算指定文件的 SHA-256。
+ * 文件不存在时返回 unknown，保证首次配置或跳过 webview 构建的开发场景仍能继续执行。
+ */
+def sha256File = { File fileToHash ->
+    if (fileToHash == null || !fileToHash.exists() || !fileToHash.isFile()) {
+        return 'unknown'
+    }
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    fileToHash.withInputStream { input ->
+        byte[] buffer = new byte[8192]
+        int read
+        while ((read = input.read(buffer)) != -1) {
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
+
+/**
+ * 计算前端 HTML 的归一化 SHA-256。
+ * copy-dist 会把该摘要写回 HTML 自身，因此这里先把最终产物中的内嵌哈希回退成统一占位符，
+ * 保证构建资源指纹与前端日志使用同一份“模板态”摘要。
+ */
+def normalizedWebviewBundleSha256 = { File fileToHash ->
+    if (fileToHash == null || !fileToHash.exists() || !fileToHash.isFile()) {
+        return 'unknown'
+    }
+    String html = fileToHash.getText('UTF-8')
+    String normalizedHtml = html
+    if (!normalizedHtml.contains(webviewBundleSha256Placeholder)) {
+        def matcher = normalizedHtml =~ /(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/
+        if (matcher.find()) {
+            String stampedHash = matcher.group()
+            boolean hasAnotherHash = matcher.find()
+            if (!hasAnotherHash) {
+                normalizedHtml = normalizedHtml.replace(stampedHash, webviewBundleSha256Placeholder)
+            }
+        }
+    }
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    digest.update(normalizedHtml.getBytes('UTF-8'))
+    return digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+}
 
 // Get custom Node.js path from local properties
 def localNodePath = getLocalProperty('node.path')
@@ -382,6 +453,28 @@ tasks.register('buildWebview', Exec) {
     doLast { println "Webview build completed." }
 }
 
+tasks.register('generatePluginBuildInfo') {
+    dependsOn('buildWebview')
+    inputs.file(webviewHtmlResource).optional()
+    outputs.file(generatedPluginBuildInfoDir.map { new File(it.asFile, 'plugin-build-info.properties') })
+
+    doLast {
+        def outputDir = generatedPluginBuildInfoDir.get().asFile
+        outputDir.mkdirs()
+        def propertiesFile = new File(outputDir, 'plugin-build-info.properties')
+        def props = new Properties()
+        props.setProperty('pluginVersion', project.version.toString())
+        props.setProperty('gitCommit', readGitOutput(['git', 'rev-parse', '--short=12', 'HEAD']))
+        props.setProperty('gitBranch', readGitOutput(['git', 'rev-parse', '--abbrev-ref', 'HEAD']))
+        props.setProperty('buildTime', java.time.Instant.now().toString())
+        props.setProperty('webviewBundleSha256', normalizedWebviewBundleSha256(webviewHtmlResource))
+        propertiesFile.withWriter('UTF-8') { writer ->
+            props.store(writer, 'Generated plugin build fingerprint. Do not edit.')
+        }
+        println "Generated plugin build info: ${propertiesFile.absolutePath}"
+    }
+}
+
 /**
  * 安装 ai-bridge 运行时依赖。
  * 仅在 node_modules 缺失时执行，避免发布包缺少桥接层依赖导致插件启动失败。
@@ -425,6 +518,7 @@ tasks.named('compileJava') {
 }
 
 tasks.named('processResources') {
+    dependsOn('generatePluginBuildInfo')
     mustRunAfter('buildWebview')
 }
 

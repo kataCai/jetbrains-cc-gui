@@ -2,6 +2,7 @@ package com.github.claudecodegui.provider.codex;
 
 import com.github.claudecodegui.util.TagExtractor;
 import com.github.claudecodegui.util.TextSanitizer;
+import com.github.claudecodegui.util.UserVisibleTextGateway;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
@@ -16,7 +17,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Parses Codex history session files into DTOs used by the facade and collaborators.
+ * Codex 历史会话解析器。
+ * 该类负责把 JSONL 会话文件转换为历史面板和聚合服务可复用的 DTO，
+ * 同时在标题提取阶段清理 permissions、skills、AGENTS 等内部注入前缀，
+ * 避免历史列表标题泄露运行时内部上下文。
+ * 适用场景包括完整历史扫描、会话有效性判断和首条用户消息标题提取；
+ * 它只读取现有文件内容，不修改底层历史文件。
  */
 class CodexHistoryParser {
 
@@ -124,8 +130,12 @@ class CodexHistoryParser {
     }
 
     /**
-     * Extract the first user message title from a single message payload.
-     * Returns the truncated title or null if payload is not a user_message.
+     * 从单条 `event_msg/user_message` 载荷中提取历史标题。
+     * 这里会先走统一的用户可见文本净化入口，再补充命令消息裁剪与单行截断，
+     * 保证历史列表标题与前端真实可见文本保持一致，而不会带出 permissions、skills 或 AGENTS 残留。
+     *
+     * @param payload Codex 历史中的消息载荷
+     * @return 适合历史列表展示的单行标题；非 user_message 或净化后为空时返回 null
      */
     String extractUserMessageTitle(JsonObject payload) {
         if (payload == null) {
@@ -141,9 +151,11 @@ class CodexHistoryParser {
         if (text == null || text.isEmpty()) {
             return null;
         }
-        // Strip system/instruction tags that the Codex SDK prepends to user messages.
-        // These contain AGENTS.md content and should not appear in titles.
-        text = stripSystemTags(text);
+        // 中文注释：历史标题必须与前端用户可见文本语义一致，避免继续保留内部注入前缀。
+        text = UserVisibleTextGateway.toVisibleUserTextOrEmpty(text);
+        if (text.isEmpty()) {
+            return null;
+        }
         text = TagExtractor.extractCommandMessageContent(text);
         return TextSanitizer.sanitizeAndTruncateSingleLine(text, 45);
     }

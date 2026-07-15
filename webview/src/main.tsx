@@ -14,8 +14,15 @@ import { setupDollarCommandsCallback } from './components/ChatInputBox/providers
 import { applyLinkifyCapabilitiesPayload } from './utils/linkifyCapabilities';
 import { installRuntimeProviderDispatchers } from './utils/runtimeProviderCapabilities';
 import { sendBridgeEvent } from './utils/bridge';
-import { debugLog } from './utils/debug';
+import { debugLog, emitFrontendDiagnosticLog } from './utils/debug';
 import type { UiFontConfig } from './types/uiFontConfig';
+import {
+  APP_BUILD_TIME,
+  APP_GIT_BRANCH,
+  APP_GIT_COMMIT,
+  APP_VERSION,
+  APP_WEBVIEW_BUNDLE_SHA256,
+} from './version/version';
 
 const enableVConsole =
   import.meta.env.DEV || import.meta.env.VITE_ENABLE_VCONSOLE === 'true';
@@ -97,6 +104,15 @@ function createBridgeHeartbeatStarter() {
 }
 
 const startBridgeHeartbeat = createBridgeHeartbeatStarter();
+
+emitFrontendDiagnosticLog('FrontendBuildInfo', 'frontend bundle initialized', {
+  appVersion: APP_VERSION,
+  gitCommit: APP_GIT_COMMIT,
+  gitBranch: APP_GIT_BRANCH,
+  buildTime: APP_BUILD_TIME,
+  webviewBundleSha256: APP_WEBVIEW_BUNDLE_SHA256,
+});
+
 // vConsole debugging tool
 if (enableVConsole) {
   void import('vconsole').then(({ default: VConsole }) => {
@@ -525,9 +541,9 @@ if (typeof window !== 'undefined' && !window.setSessionId) {
 
 if (typeof window !== 'undefined' && !window.completeContinuedSegmentTransition) {
   debugLog('[Main] Pre-registering completeContinuedSegmentTransition placeholder');
-  window.completeContinuedSegmentTransition = (sessionId?: string) => {
-    debugLog('[Main] Storing pending continued transition completion:', sessionId ?? '');
-    window.__pendingCompleteContinuedSegmentTransitionSessionId = sessionId ?? '';
+  window.completeContinuedSegmentTransition = (payload?: string) => {
+    debugLog('[Main] Storing pending continued transition completion:', payload ?? '');
+    window.__pendingCompleteContinuedSegmentTransitionPayload = payload ?? '';
   };
 }
 

@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
+import com.github.claudecodegui.handler.CodexMessageConverter;
 import com.github.claudecodegui.handler.history.HistoryMessageInjector;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.settings.CodemossSettingsService;
@@ -235,6 +236,10 @@ public class CodexSDKBridge extends BaseSDKBridge {
             callback.onMessage("thinking_delta", delta);
         } else if (line.startsWith("[CONTENT]")) {
             String content = line.substring("[CONTENT]".length()).trim();
+            if (CodexMessageConverter.isBridgeDiagnosticNoise(content)) {
+                LOG.debug("[CodexSDKBridge] Filtered bridge diagnostic content: " + content);
+                return;
+            }
             // Avoid duplicate
             if (!assistantContent.toString().contains(content)) {
                 assistantContent.append(content);

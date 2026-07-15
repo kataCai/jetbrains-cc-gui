@@ -10,6 +10,7 @@ import {
   hasCommandMessageTag,
   hasTaskNotificationTag,
   isSyntheticToolMessageContent,
+  isHighConfidenceInternalVisibleResidue,
   HIDDEN_OUTPUT_TAGS,
   INTERNAL_METADATA_TAGS,
   MESSAGE_TYPES,
@@ -40,6 +41,7 @@ export {
   formatTaskNotificationForDisplay,
   extractCommandMessageContent,
   isSyntheticToolMessageContent,
+  isHighConfidenceInternalVisibleResidue,
   normalizeBlocks,
 } from './contentBlockNormalize';
 export type { LocalizeMessageFn } from './contentBlockNormalize';
@@ -346,6 +348,12 @@ export function shouldShowMessage(
   };
 
   const rawText = getRawTextContent();
+  if (
+    isHighConfidenceInternalVisibleResidue(message.content)
+    || isHighConfidenceInternalVisibleResidue(rawText)
+  ) {
+    return false;
+  }
 
   // CLI renders these messages with specific components:
   // - <command-message> → UserCommandMessage (skill/slash command)

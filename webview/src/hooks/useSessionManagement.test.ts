@@ -560,6 +560,37 @@ describe('useSessionManagement', () => {
     expect(mocks.setContinuationSourceSessionId).toHaveBeenCalledWith('active-segment-002');
   });
 
+  it('createContinuedSegment refuses to enter continued mode when no stable source anchor can be resolved', () => {
+    const mocks = createMocks();
+
+    const { result } = renderHook(() =>
+      useSessionManagement({
+        messages: [{ type: 'assistant', content: 'existing context', timestamp: new Date().toISOString() }],
+        loading: false,
+        historyData: null,
+        currentSessionId: null,
+        ...mocks,
+        t,
+      })
+    );
+
+    act(() => {
+      result.current.createContinuedSegment({
+        switchReason: 'model',
+        targetProvider: 'codex',
+        targetRuntimeFamily: 'codex',
+        targetModel: 'gpt-5.4',
+        logicalConversationId: 'logical-001',
+      });
+    });
+
+    expect(window.sendToJava).not.toHaveBeenCalledWith(expect.stringContaining('create_continued_segment:'));
+    expect(mocks.setCurrentSessionId).not.toHaveBeenCalledWith(null);
+    expect(mocks.setContinuationPending).not.toHaveBeenCalledWith(true);
+    expect(mocks.addToast).toHaveBeenCalledWith('chat.continuedSegmentAnchorMissing', 'warning');
+    expect(window.__continuedSegmentHistoryPrefixMessages).toBeNull();
+  });
+
   it('loadHistorySession writes codex runtime trace with logical conversation context', () => {
     const historyData = {
       success: true,

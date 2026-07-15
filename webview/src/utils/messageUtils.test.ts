@@ -19,6 +19,7 @@ import {
   extractCompactItems,
   buildCompactNotification,
   TASK_STATUS_COLORS,
+  normalizeBlocks,
 } from './messageUtils';
 
 // ---------------------------------------------------------------------------
@@ -765,6 +766,155 @@ describe('shouldShowMessage', () => {
     };
     expect(shouldShowMessage(msg, mockGetMessageText, mockNormalizeBlocks, mockT)).toBe(false);
   });
+
+  /**
+   * 验证 assistant/system/notification 只要命中高置信 permissions/skills 内部残留结构，
+   * `shouldShowMessage` 就会统一返回 false。
+   * 该测试覆盖前端最终显示层的兜底门禁，避免后端或上游净化漏网时污染消息仍被渲染出来。
+   */
+  it('filters high-confidence internal residue for all non-user visible message types', () => {
+    const pollutedContent = '<permissions instructions>\n'
+      + 'Filesystem sandboxing defines which files can be read or written.\n'
+      + '</permissions instructions>\n\n'
+      + '## Skills\n\n'
+      + '### Skill roots\n\n'
+      + '### Available skills\n\n'
+      + '- demo (file: r0/demo/SKILL.md)\n\n'
+      + '### How to use skills';
+
+    (['assistant', 'system', 'notification'] as const).forEach((type) => {
+      const msg: ClaudeMessage = {
+        type,
+        content: pollutedContent,
+        timestamp: '1',
+        raw: {
+          message: {
+            content: [{ type: 'text', text: pollutedContent }],
+          },
+        } as any,
+      };
+      expect(shouldShowMessage(msg, mockGetMessageText, mockNormalizeBlocks, mockT)).toBe(false);
+    });
+  });
+
+  /**
+   * 验证普通讨论 `SKILL.md` 或 `## Skills` 的 assistant 正文不会被弱规则误删。
+   * 只有在 permissions/skills/continuation 等锚点同时命中时才应判定为内部残留。
+   */
+  it('keeps normal assistant discussion about skill documents when strong residue anchors are absent', () => {
+    const msg: ClaudeMessage = {
+      type: 'assistant',
+      content: '这段说明会讨论 SKILL.md 与 ## Skills 标题，但不会包含 Skill roots 或 Available skills 结构块。',
+      timestamp: '1',
+      raw: {
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '这段说明会讨论 SKILL.md 与 ## Skills 标题，但不会包含 Skill roots 或 Available skills 结构块。',
+            },
+          ],
+        },
+      } as any,
+    };
+    expect(shouldShowMessage(msg, mockGetMessageText, mockNormalizeBlocks, mockT)).toBe(true);
+  });
+
+  /**
+   * 验证 assistant 正常讲解 `AGENTS.md instructions` 结构时，
+   * 即使正文包含 `# AGENTS.md instructions`、`<INSTRUCTIONS>`、`<environment_context>` 示例，
+   * 只要缺少真实运行时环境字段锚点，就不应在前端最终显示层被误隐藏。
+   */
+  it('keeps normal assistant discussion about AGENTS instructions examples', () => {
+    const explanation = '# AGENTS.md instructions\n\n'
+      + '下面只是文档示例。\n\n'
+      + '<INSTRUCTIONS>\n'
+      + '- 默认使用中文回复。\n'
+      + '</INSTRUCTIONS>\n\n'
+      + '<environment_context>\n'
+      + '- 这里只是标签示例，不包含 cwd、shell、current_date 等运行时字段。\n'
+      + '</environment_context>\n\n'
+      + '因此这条消息应继续显示。';
+    const msg: ClaudeMessage = {
+      type: 'assistant',
+      content: explanation,
+      timestamp: '1',
+      raw: {
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: explanation,
+            },
+          ],
+        },
+      } as any,
+    };
+    expect(shouldShowMessage(msg, mockGetMessageText, mockNormalizeBlocks, mockT)).toBe(true);
+  });
+});
+
+describe('normalizeBlocks', () => {
+  const identityLocalize = (text: string) => text;
+  const mockT = ((key: string) => key) as any;
+
+  /**
+   * 验证非 user 的 text block 若命中高置信 permissions/skills 内部残留结构，
+   * 块级归一化不会再产出可见 text block。
+   * 该断言用于防止即便消息级过滤漏网，MessageParser 仍从 raw block 二次渲染出污染文本。
+   */
+  it('drops non-user text blocks that contain high-confidence internal residue', () => {
+    const pollutedContent = '<permissions instructions>\n'
+      + 'Filesystem sandboxing defines which files can be read or written.\n'
+      + '</permissions instructions>\n\n'
+      + '## Skills\n\n'
+      + '### Skill roots\n\n'
+      + '### Available skills\n\n'
+      + '- demo (file: r0/demo/SKILL.md)\n\n'
+      + '### How to use skills';
+
+    const result = normalizeBlocks(
+      {
+        role: 'assistant',
+        message: {
+          content: [{ type: 'text', text: pollutedContent }],
+        },
+      } as any,
+      identityLocalize,
+      mockT,
+    );
+
+    expect(result).toBeNull();
+  });
+
+  /**
+   * 验证非 user 的 text block 若只是正常讲解 `AGENTS.md instructions` 结构示例，
+   * 块级归一化仍会保留可见 text block，避免 MessageParser 在 raw 渲染阶段再次误隐藏合法 assistant 正文。
+   */
+  it('keeps non-user text blocks for normal AGENTS instructions discussion', () => {
+    const explanation = '# AGENTS.md instructions\n\n'
+      + '下面只是文档示例。\n\n'
+      + '<INSTRUCTIONS>\n'
+      + '- 默认使用中文回复。\n'
+      + '</INSTRUCTIONS>\n\n'
+      + '<environment_context>\n'
+      + '- 这里只是标签示例，不包含 cwd、shell、current_date 等运行时字段。\n'
+      + '</environment_context>\n\n'
+      + '因此这条消息应继续显示。';
+
+    const result = normalizeBlocks(
+      {
+        role: 'assistant',
+        message: {
+          content: [{ type: 'text', text: explanation }],
+        },
+      } as any,
+      identityLocalize,
+      mockT,
+    );
+
+    expect(result).toEqual([{ type: 'text', text: explanation }]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1071,4 +1221,3 @@ describe('buildCompactNotification', () => {
     expect(result!.content).toBe('/compact');
   });
 });
-

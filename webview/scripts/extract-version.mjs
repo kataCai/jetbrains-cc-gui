@@ -3,6 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 // Get the current directory
 const __filename = fileURLToPath(import.meta.url);
@@ -37,6 +38,19 @@ if (!versionMatch) {
 const version = versionMatch[1];
 console.log(`Found version: ${version}`);
 
+const readGitValue = (command) => {
+  try {
+    return execSync(command, { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+};
+
+const gitCommit = readGitValue('git rev-parse --short=12 HEAD');
+const gitBranch = readGitValue('git rev-parse --abbrev-ref HEAD');
+const buildTime = new Date().toISOString();
+const webviewBundleSha256Placeholder = '__CC_GUI_WEBVIEW_BUNDLE_SHA256__';
+
 // Create the version file for the webview
 const versionDir = path.join(__dirname, '../src/version');
 if (!fs.existsSync(versionDir)) {
@@ -49,6 +63,10 @@ const versionFileContent = `// Auto-generated version file
 // Do not edit manually
 
 export const APP_VERSION = '${version}';
+export const APP_GIT_COMMIT = '${gitCommit}';
+export const APP_GIT_BRANCH = '${gitBranch}';
+export const APP_BUILD_TIME = '${buildTime}';
+export const APP_WEBVIEW_BUNDLE_SHA256 = '${webviewBundleSha256Placeholder}';
 `;
 
 fs.writeFileSync(versionFilePath, versionFileContent);

@@ -56,6 +56,40 @@ public class CodexHistoryReaderRefactorTest {
     }
 
     @Test
+    public void parserBuildsTitleFromUserVisibleTextInsteadOfPermissionsAndSkillsPrelude() throws IOException {
+        Path sessionsDir = Files.createTempDirectory("codex-history-parser-prelude");
+        try {
+            Path sessionFile = writeSessionFile(
+                    sessionsDir,
+                    "session-prelude",
+                    line("2026-03-10T10:00:00Z", "session_meta", "{\"cwd\":\"/workspace/demo\",\"timestamp\":\"2026-03-10T10:00:00Z\"}"),
+                    line("2026-03-10T10:01:00Z", "event_msg", "{\"type\":\"user_message\",\"message\":\""
+                            + "<permissions instructions>Filesystem sandboxing defines which files can be read or written.</permissions instructions>\\n\\n"
+                            + "## Skills\\n\\n"
+                            + "### Skill roots\\n\\n"
+                            + "- `r0` = `D:/Users/example/.agents/skills`\\n\\n"
+                            + "### Available skills\\n\\n"
+                            + "- firecrawl-search: Search the web. (file: r0/firecrawl-search/SKILL.md)\\n\\n"
+                            + "### How to use skills\\n\\n"
+                            + "1. Read the skill before doing work.\\n\\n"
+                            + "Continue the real task\"}"),
+                    line("2026-03-10T10:02:00Z", "response_item", "{\"type\":\"message\"}")
+            );
+
+            CodexHistoryParser parser = new CodexHistoryParser(new Gson());
+
+            SessionInfo session = parser.parseSessionFile(sessionFile);
+
+            assertNotNull(session);
+            assertTrue(session.title.contains("Continue the real task"));
+            assertFalse(session.title.contains("permissions instructions"));
+            assertFalse(session.title.contains("firecrawl-search"));
+        } finally {
+            deleteDirectory(sessionsDir);
+        }
+    }
+
+    @Test
     public void sessionServiceTransformsFileViewingShellCommandToRead() throws IOException {
         Path sessionsDir = Files.createTempDirectory("codex-history-messages");
         try {

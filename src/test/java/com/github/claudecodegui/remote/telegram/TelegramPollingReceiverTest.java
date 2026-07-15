@@ -79,7 +79,9 @@ public class TelegramPollingReceiverTest {
         JsonObject telegram = createBoundTelegramConfig();
         StubSettingsService settingsService = new StubSettingsService(telegram);
         RecordingTelegramClient client = new RecordingTelegramClient(
-            "{\"ok\":true,\"result\":[{\"update_id\":8,\"callback_query\":{\"id\":\"cb-1\",\"data\":\"tg1:approve:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},\"message\":{\"message_id\":11,\"chat\":{\"id\":42},\"text\":\"plan\"}}}]}"
+            "{\"ok\":true,\"result\":[{\"update_id\":8,\"callback_query\":{\"id\":\"cb-1\","
+                + "\"data\":\"tg1:approve:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},"
+                + "\"message\":{\"message_id\":11,\"chat\":{\"id\":42},\"text\":\"plan\"}}}]}"
         );
         RemoteRequestRegistry requestRegistry = new RemoteRequestRegistry();
         List<JsonObject> results = new ArrayList<>();
@@ -113,7 +115,9 @@ public class TelegramPollingReceiverTest {
         JsonObject telegram = createBoundTelegramConfig();
         StubSettingsService settingsService = new StubSettingsService(telegram);
         RecordingTelegramClient client = new RecordingTelegramClient(
-            "{\"ok\":true,\"result\":[{\"update_id\":9,\"callback_query\":{\"id\":\"cb-2\",\"data\":\"tg1:choice:req-ask:0:1\",\"from\":{\"id\":7,\"username\":\"alice\"},\"message\":{\"message_id\":12,\"chat\":{\"id\":42},\"text\":\"ask\"}}}]}"
+            "{\"ok\":true,\"result\":[{\"update_id\":9,\"callback_query\":{\"id\":\"cb-2\","
+                + "\"data\":\"tg1:choice:req-ask:0:1\",\"from\":{\"id\":7,\"username\":\"alice\"},"
+                + "\"message\":{\"message_id\":12,\"chat\":{\"id\":42},\"text\":\"ask\"}}}]}"
         );
         RemoteRequestRegistry requestRegistry = new RemoteRequestRegistry();
         List<JsonObject> results = new ArrayList<>();
@@ -145,7 +149,9 @@ public class TelegramPollingReceiverTest {
         JsonObject telegram = createBoundTelegramConfig();
         StubSettingsService settingsService = new StubSettingsService(telegram);
         RecordingTelegramClient client = new RecordingTelegramClient(
-            "{\"ok\":true,\"result\":[{\"update_id\":9,\"callback_query\":{\"id\":\"cb-4\",\"data\":\"tg1:cancel:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},\"message\":{\"message_id\":14,\"chat\":{\"id\":42},\"text\":\"plan\"}}}]}"
+            "{\"ok\":true,\"result\":[{\"update_id\":9,\"callback_query\":{\"id\":\"cb-4\","
+                + "\"data\":\"tg1:cancel:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},"
+                + "\"message\":{\"message_id\":14,\"chat\":{\"id\":42},\"text\":\"plan\"}}}]}"
         );
         RemoteRequestRegistry requestRegistry = new RemoteRequestRegistry();
         List<JsonObject> results = new ArrayList<>();
@@ -207,7 +213,9 @@ public class TelegramPollingReceiverTest {
         JsonObject telegram = createBoundTelegramConfig();
         StubSettingsService settingsService = new StubSettingsService(telegram);
         RecordingTelegramClient client = new RecordingTelegramClient(
-            "{\"ok\":true,\"result\":[{\"update_id\":11,\"callback_query\":{\"id\":\"cb-3\",\"data\":\"tg1:approve:req-missing\",\"from\":{\"id\":7,\"username\":\"alice\"},\"message\":{\"message_id\":13,\"chat\":{\"id\":42},\"text\":\"plan\"}}}]}"
+            "{\"ok\":true,\"result\":[{\"update_id\":11,\"callback_query\":{\"id\":\"cb-3\","
+                + "\"data\":\"tg1:approve:req-missing\",\"from\":{\"id\":7,\"username\":\"alice\"},"
+                + "\"message\":{\"message_id\":13,\"chat\":{\"id\":42},\"text\":\"plan\"}}}]}"
         );
         TelegramPollingReceiver receiver = new TelegramPollingReceiver(
             settingsService,
@@ -228,8 +236,12 @@ public class TelegramPollingReceiverTest {
         StubSettingsService settingsService = new StubSettingsService(telegram);
         RecordingTelegramClient client = new RecordingTelegramClient(
             "{\"ok\":true,\"result\":["
-                + "{\"update_id\":20,\"callback_query\":{\"id\":\"cb-20\",\"data\":\"tg1:approve:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},\"message\":{\"message_id\":21,\"chat\":{\"id\":42},\"text\":\"plan\"}}},"
-                + "{\"update_id\":21,\"callback_query\":{\"id\":\"cb-21\",\"data\":\"tg1:approve:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},\"message\":{\"message_id\":22,\"chat\":{\"id\":42},\"text\":\"plan\"}}}"
+                + "{\"update_id\":20,\"callback_query\":{\"id\":\"cb-20\","
+                + "\"data\":\"tg1:approve:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},"
+                + "\"message\":{\"message_id\":21,\"chat\":{\"id\":42},\"text\":\"plan\"}}},"
+                + "{\"update_id\":21,\"callback_query\":{\"id\":\"cb-21\","
+                + "\"data\":\"tg1:approve:req-plan\",\"from\":{\"id\":7,\"username\":\"alice\"},"
+                + "\"message\":{\"message_id\":22,\"chat\":{\"id\":42},\"text\":\"plan\"}}}"
                 + "]}"
         );
         RemoteRequestRegistry requestRegistry = new RemoteRequestRegistry();

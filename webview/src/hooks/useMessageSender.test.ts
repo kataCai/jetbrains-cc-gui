@@ -36,6 +36,39 @@ const createOptions = (currentProvider: string, permissionMode: PermissionMode) 
   continuationPending: false,
 });
 
+describe('useMessageSender continued guard', () => {
+  it('blocks first continued-segment submit when transition cache has no source anchor and only logical conversation metadata remains', () => {
+    // 中文注释：只剩 logicalConversationId 不足以支撑 continued 首发。
+    // 如果没有稳定 source anchor，就不能在空 sessionId 上继续首发，否则后端会把这轮请求绑定到错误分段。
+    const currentSessionIdRef: { current: string | null } = { current: null };
+    const continuationPendingRef: { current: boolean } = { current: true };
+    const options = {
+      ...createOptions('codex', 'default'),
+      currentSessionId: null,
+      continuationPending: true,
+      currentSessionIdRef,
+      continuationPendingRef,
+    };
+    window.__sessionTransitioning = false;
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+    ] as any;
+    (window as any).__continuedSegmentPendingSourceSessionId = null;
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    const { result } = renderHook(() => useMessageSender(options as any));
+
+    act(() => {
+      result.current.handleSubmit('再+1=?');
+    });
+
+    expect(sendBridgeEvent).not.toHaveBeenCalledWith('send_message', expect.anything());
+    expect(options.addToast).toHaveBeenCalledWith('chat.continuedSegmentNotReady', 'info');
+  });
+});
+
 describe('useMessageSender', () => {
   beforeEach(() => {
     vi.clearAllMocks();

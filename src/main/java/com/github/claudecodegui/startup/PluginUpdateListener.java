@@ -1,5 +1,6 @@
 package com.github.claudecodegui.startup;
 
+import com.github.claudecodegui.util.PluginBuildInfo;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.intellij.ide.plugins.IdeaPluginDescriptor;
 import com.intellij.ide.plugins.PluginManager;
@@ -55,6 +56,7 @@ public class PluginUpdateListener implements ProjectActivity {
             PropertiesComponent props = PropertiesComponent.getInstance();
             String lastVersion = props.getValue(LAST_VERSION_KEY);
 
+            LOG.info("[PluginUpdateListener] " + PluginBuildInfo.load().describeForLog());
             LOG.info("[PluginUpdateListener] Current version: " + currentVersion + ", Last version: " + lastVersion);
 
             if (lastVersion != null && !lastVersion.equals(currentVersion)) {

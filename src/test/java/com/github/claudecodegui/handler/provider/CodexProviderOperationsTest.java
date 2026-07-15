@@ -2,7 +2,6 @@ package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
-import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.settings.CodemossSettingsService;

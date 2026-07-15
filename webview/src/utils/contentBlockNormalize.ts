@@ -63,6 +63,79 @@ export function containsAnyTag(text: string, tags: readonly string[]): boolean {
 }
 
 /**
+ * 判断文本是否命中高置信后台内部 prompt / skills / continuation 残留。
+ * 这里只匹配完整结构锚点组合，不对单个 `SKILL.md` 或 `## Skills` 做弱包含过滤，
+ * 避免误删用户正常讨论技能文档或 assistant 返回的代码示例。
+ */
+export function isHighConfidenceInternalVisibleResidue(text: string | null | undefined): boolean {
+  if (!text || !text.trim()) {
+    return false;
+  }
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const hasPermissionsBlock = normalized.includes('<permissions instructions>')
+    && normalized.includes('</permissions instructions>')
+    && normalized.includes('Filesystem sandboxing defines which files can be read or written.');
+  const hasSkillsSection = normalized.includes('## Skills')
+    && normalized.includes('SKILL.md')
+    && normalized.includes('### Skill roots')
+    && normalized.includes('### Available skills')
+    && normalized.includes('### How to use skills');
+  const hasContinuationSection = normalized.includes('## Conversation Continuation')
+    && normalized.includes('Logical conversation id:')
+    && normalized.includes('Previous segment session id:')
+    && normalized.includes("Preserve the user's intent and continue from that context unless the latest request overrides it.");
+  const hasAgentsInstructionSection = isHighConfidenceAgentsResidue(normalized);
+  return hasPermissionsBlock || hasSkillsSection || hasContinuationSection || hasAgentsInstructionSection;
+}
+
+/**
+ * 判断文本是否包含 AGENTS 指令头或外层包装。
+ * 普通正文中提到 `AGENTS.md instructions` 不算高置信内部残留，必须和完整结构一起出现。
+ */
+function hasAgentsInstructionHeader(normalized: string): boolean {
+  return normalized.startsWith('# AGENTS.md instructions')
+    || normalized.startsWith('<agents-instructions>');
+}
+
+/**
+ * 判断文本是否包含完整的 `<INSTRUCTIONS>` 包裹块。
+ */
+function hasInstructionsEnvelope(normalized: string): boolean {
+  return normalized.includes('<INSTRUCTIONS>') && normalized.includes('</INSTRUCTIONS>');
+}
+
+/**
+ * 判断文本是否包含完整的 `<environment_context>` 包裹块。
+ */
+function hasEnvironmentContextEnvelope(normalized: string): boolean {
+  return normalized.includes('<environment_context>') && normalized.includes('</environment_context>');
+}
+
+/**
+ * 判断 environment_context 是否包含真实运行时环境字段。
+ * 只有出现这些字段，才认为文本高度疑似后台实际注入；仅展示标签示例不应被隐藏。
+ */
+function hasEnvironmentContextRuntimeFields(normalized: string): boolean {
+  return normalized.includes('<cwd>')
+    || normalized.includes('<shell>')
+    || normalized.includes('<current_date>')
+    || normalized.includes('<timezone>')
+    || normalized.includes('<current-date>');
+}
+
+/**
+ * 判断文本是否命中高置信 AGENTS 内部注入残留。
+ * 该判定要求同时满足 AGENTS 头、`<INSTRUCTIONS>`、`<environment_context>` 以及真实运行时字段，
+ * 以保持与后端 `CodexMessageConverter` 的 AGENTS 过滤语义一致。
+ */
+function isHighConfidenceAgentsResidue(normalized: string): boolean {
+  return hasAgentsInstructionHeader(normalized)
+    && hasInstructionsEnvelope(normalized)
+    && hasEnvironmentContextEnvelope(normalized)
+    && hasEnvironmentContextRuntimeFields(normalized);
+}
+
+/**
  * Check if text contains a <command-message> tag
  */
 export function hasCommandMessageTag(text: string): boolean {
@@ -292,6 +365,10 @@ export function normalizeBlocks(
           }
         }
 
+        if (!isUserMessage && isHighConfidenceInternalVisibleResidue(rawText)) {
+          return;
+        }
+
         // Only format <command-message> for user messages
         // Assistant messages may contain these tags in code examples
         if (isUserMessage && hasCommandMessageTag(rawText)) {
@@ -381,6 +458,10 @@ export function normalizeBlocks(
       if (hasTaskNotificationTag(content)) {
         const block = createTaskNotificationBlock(content);
         if (block) return [block];
+        return null;
+      }
+
+      if (!isUserMessage && isHighConfidenceInternalVisibleResidue(content)) {
         return null;
       }
 

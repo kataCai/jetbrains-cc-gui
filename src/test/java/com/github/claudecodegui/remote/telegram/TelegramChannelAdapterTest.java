@@ -5,7 +5,6 @@ import com.github.claudecodegui.remote.RemotePendingRequest;
 import com.github.claudecodegui.remote.RemoteRequestType;
 import com.github.claudecodegui.remote.RemoteTaskEvent;
 import com.github.claudecodegui.settings.CodemossSettingsService;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.junit.Test;
 

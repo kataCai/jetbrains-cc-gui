@@ -33,7 +33,9 @@ export function registerSessionAndSdkCallbacks(
     addToast,
     setCurrentSessionId,
     setCustomSessionTitle,
+    setLogicalConversationId,
     setActiveSegmentSessionId,
+    setParentSegmentSessionId,
     setContinuationPending,
     setContinuationSourceSessionId,
     setSdkStatus,
@@ -56,6 +58,38 @@ export function registerSessionAndSdkCallbacks(
   const applyCurrentSessionId = (sessionId: string | null) => {
     setCurrentSessionId(sessionId);
     currentSessionIdRef.current = sessionId;
+  };
+
+  /**
+   * 同步逻辑会话 ID 到 React state 与即时读取 ref。
+   * continued completion 可能早于下一轮 React render 到达，因此这里必须直接写 ref，
+   * 避免下一次 createContinuedSegment 仍读取到旧的空 logical id。
+   *
+   * @param logicalConversationId 后端确认的逻辑会话 ID；为空表示不更新
+   * @return 无返回值
+   */
+  const applyLogicalConversationId = (logicalConversationId: string | null) => {
+    if (!logicalConversationId) {
+      return;
+    }
+    setLogicalConversationId(logicalConversationId);
+    options.logicalConversationIdRef.current = logicalConversationId;
+    window.__continuedSegmentPendingLogicalConversationId = logicalConversationId;
+  };
+
+  /**
+   * 同步当前活动物理分段 ID 到 React state 与 ref。
+   * 该值是下一次 continued 切段的 source anchor 之一，不能只依赖异步 state 更新。
+   *
+   * @param activeSegmentSessionId 后端确认的活动分段 ID；为空表示不更新
+   * @return 无返回值
+   */
+  const applyActiveSegmentSessionId = (activeSegmentSessionId: string | null) => {
+    if (!activeSegmentSessionId) {
+      return;
+    }
+    setActiveSegmentSessionId(activeSegmentSessionId);
+    options.activeSegmentSessionIdRef.current = activeSegmentSessionId;
   };
 
   /**
@@ -85,6 +119,68 @@ export function registerSessionAndSdkCallbacks(
     window.__continuedSegmentAwaitingFirstSessionId = false;
   };
 
+  type ContinuedCompletionPayload = {
+    sessionId: string | null;
+    logicalConversationId: string | null;
+    activeSegmentSessionId: string | null;
+    sourceSessionId: string | null;
+    parentSegmentSessionId: string | null;
+  };
+
+  /**
+   * 解析 continued completion 载荷。
+   * 后端新版会传 JSON 字符串，旧版仍可能只传 sessionId；这里保持向后兼容，
+   * 并把空白字符串统一归一化为 null，避免后续分支重复做 trim 判定。
+   *
+   * @param payload 后端 bridge 传入的 completion 参数
+   * @return 归一化后的 continued completion 元数据
+   */
+  const parseContinuedCompletionPayload = (payload?: string): ContinuedCompletionPayload => {
+    const normalize = (value: unknown): string | null => (
+      typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+    );
+    const fallbackSessionId = normalize(payload);
+    if (!fallbackSessionId) {
+      return {
+        sessionId: null,
+        logicalConversationId: null,
+        activeSegmentSessionId: null,
+        sourceSessionId: null,
+        parentSegmentSessionId: null,
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(fallbackSessionId) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return {
+          sessionId: fallbackSessionId,
+          logicalConversationId: null,
+          activeSegmentSessionId: null,
+          sourceSessionId: null,
+          parentSegmentSessionId: null,
+        };
+      }
+      const sessionId = normalize(parsed.sessionId);
+      const sourceSessionId = normalize(parsed.sourceSessionId);
+      return {
+        sessionId,
+        logicalConversationId: normalize(parsed.logicalConversationId),
+        activeSegmentSessionId: normalize(parsed.activeSegmentSessionId) || sessionId,
+        sourceSessionId,
+        parentSegmentSessionId: normalize(parsed.parentSegmentSessionId) || sourceSessionId,
+      };
+    } catch {
+      return {
+        sessionId: fallbackSessionId,
+        logicalConversationId: null,
+        activeSegmentSessionId: null,
+        sourceSessionId: null,
+        parentSegmentSessionId: null,
+      };
+    }
+  };
+
   /**
    * 显式收口 continued segment 的前端运行态。
    * 这里既支持后端在 setSessionId 之后追加生命周期完成信号，
@@ -92,14 +188,17 @@ export function registerSessionAndSdkCallbacks(
    *
    * @param sessionId 若已知真实 sessionId，则同步刷新当前 session 与活动分段锚点
    */
-  const completeContinuedSegmentTransition = (sessionId?: string) => {
-    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0
-      ? sessionId.trim()
-      : null;
+  const completeContinuedSegmentTransition = (payload?: string) => {
+    const completion = parseContinuedCompletionPayload(payload);
+    const normalizedSessionId = completion.sessionId;
     releaseSessionTransition();
+    applyLogicalConversationId(completion.logicalConversationId);
+    if (completion.parentSegmentSessionId) {
+      setParentSegmentSessionId(completion.parentSegmentSessionId);
+    }
     if (normalizedSessionId) {
       applyCurrentSessionId(normalizedSessionId);
-      setActiveSegmentSessionId(normalizedSessionId);
+      applyActiveSegmentSessionId(completion.activeSegmentSessionId || normalizedSessionId);
       window.__continuedSegmentFirstSnapshotSessionId = normalizedSessionId;
       window.__continuedSegmentHistoryPrefixSessionId = normalizedSessionId;
       window.__continuedSegmentAwaitingFirstSessionId = false;
@@ -119,6 +218,8 @@ export function registerSessionAndSdkCallbacks(
     setContinuationSourceSessionId(null);
     emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.completeContinuedSegmentTransition applied', {
       sessionId: normalizedSessionId,
+      activeSegmentSessionId: completion.activeSegmentSessionId,
+      sourceSessionId: completion.sourceSessionId,
       logicalConversationId: options.logicalConversationIdRef.current,
       transitionToken: window.__sessionTransitionToken ?? null,
       hasPrefixCache: Array.isArray(window.__continuedSegmentHistoryPrefixMessages),
@@ -148,6 +249,7 @@ export function registerSessionAndSdkCallbacks(
     setContinuationSourceSessionId(null);
     clearContinuedTransitionCaches();
     emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.abortContinuedSegmentTransition applied', {
+      snapshotStage: 'degraded',
       restoredSessionId: normalizedSessionId,
       logicalConversationId: options.logicalConversationIdRef.current,
       transitionToken: window.__sessionTransitionToken ?? null,
@@ -164,7 +266,6 @@ export function registerSessionAndSdkCallbacks(
   const hasContinuedTransitionCache = (): boolean => !!(
     window.__continuedSegmentAwaitingFirstSessionId
     || window.__continuedSegmentPendingSourceSessionId?.trim()
-    || window.__continuedSegmentPendingLogicalConversationId?.trim()
   );
 
   /**
@@ -193,10 +294,17 @@ export function registerSessionAndSdkCallbacks(
     }
     const hasPrefixCache = Array.isArray(window.__continuedSegmentHistoryPrefixMessages)
       && window.__continuedSegmentHistoryPrefixMessages.length > 0;
+    const hasTransitionCache = hasContinuedTransitionCache();
+    const hasSourceAnchor = !!(
+      window.__continuedSegmentPendingSourceSessionId?.trim()
+      || options.activeSegmentSessionIdRef.current?.trim()
+    );
+    if (hasTransitionCache) {
+      return oldSessionId === null && hasPrefixCache && hasSourceAnchor && canBindPrefixCacheToSession(sessionId);
+    }
     const hasContinuationContext = !!(
       options.logicalConversationIdRef.current?.trim()
       || options.activeSegmentSessionIdRef.current?.trim()
-      || hasContinuedTransitionCache()
     );
     return oldSessionId === null && hasPrefixCache && hasContinuationContext && canBindPrefixCacheToSession(sessionId);
   };
@@ -206,9 +314,14 @@ export function registerSessionAndSdkCallbacks(
     const handleAsContinuedSegment = shouldHandleAsContinuedSegment(sessionId, oldId);
     const hasPrefixCache = Array.isArray(window.__continuedSegmentHistoryPrefixMessages);
     const prefixCacheCount = window.__continuedSegmentHistoryPrefixMessages?.length ?? null;
+    const hasSourceAnchor = !!(
+      window.__continuedSegmentPendingSourceSessionId?.trim()
+      || options.activeSegmentSessionIdRef.current?.trim()
+    );
     const hasSuspiciousContinuedPrefixCache = hasPrefixCache
       && (prefixCacheCount ?? 0) > 0
       && hasContinuedTransitionCache()
+      && hasSourceAnchor
       && canBindPrefixCacheToSession(sessionId);
     emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.setSessionId received', {
       sessionId,
@@ -286,18 +399,20 @@ export function registerSessionAndSdkCallbacks(
     }
   };
 
-  window.completeContinuedSegmentTransition = (sessionId?: string) => {
-    completeContinuedSegmentTransition(sessionId);
+  window.completeContinuedSegmentTransition = (payload?: string) => {
+    completeContinuedSegmentTransition(payload);
   };
 
   window.abortContinuedSegmentTransition = (sessionId?: string) => {
     abortContinuedSegmentTransition(sessionId);
   };
 
-  const pendingContinuedTransitionSessionId = window.__pendingCompleteContinuedSegmentTransitionSessionId;
-  if (typeof pendingContinuedTransitionSessionId === 'string') {
+  const pendingContinuedTransitionPayload = window.__pendingCompleteContinuedSegmentTransitionPayload
+    ?? window.__pendingCompleteContinuedSegmentTransitionSessionId;
+  if (typeof pendingContinuedTransitionPayload === 'string') {
+    delete window.__pendingCompleteContinuedSegmentTransitionPayload;
     delete window.__pendingCompleteContinuedSegmentTransitionSessionId;
-    window.completeContinuedSegmentTransition(pendingContinuedTransitionSessionId || undefined);
+    window.completeContinuedSegmentTransition(pendingContinuedTransitionPayload || undefined);
   }
 
   const pendingAbortContinuedTransitionSessionId = window.__pendingAbortContinuedSegmentTransitionSessionId;

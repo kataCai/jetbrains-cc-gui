@@ -1,6 +1,7 @@
 package com.github.claudecodegui.provider.codex;
 
 import com.github.claudecodegui.provider.common.SessionLiteReader;
+import com.github.claudecodegui.util.UserVisibleTextGateway;
 import com.intellij.openapi.diagnostic.Logger;
 
 import java.nio.file.Path;
@@ -8,8 +9,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Codex-specific lite session reader.
- * Extracts metadata from Codex JSONL session files using lite-read strategy.
+ * Codex 历史 lite 读取器。
+ * 该类只扫描会话文件的头尾和文件属性，快速提取 sessionId、cwd、创建时间、消息数量和首条用户摘要，
+ * 用于历史列表首屏加载等对性能敏感的场景。
+ * 边界约束是这里只做轻量字符串解析，不构建完整消息树，因此标题摘要必须复用统一净化规则，
+ * 避免 lite 列表和完整历史解析在用户可见文本上产生漂移。
  */
 public class CodexSessionLiteReader {
 
@@ -189,7 +193,12 @@ public class CodexSessionLiteReader {
     }
 
     /**
-     * Extracts the first user message title from event_msg.
+     * 从 lite 头部片段中提取首条用户消息摘要。
+     * 该摘要会在历史列表中直接展示，因此必须先去掉 permissions、skills、AGENTS 和 continuation 残留，
+     * 再压平成单行文本并截断，保证与完整解析链路的用户可见语义一致。
+     *
+     * @param head lite 读取到的文件头部文本
+     * @return 首条用户摘要；没有可展示文本时返回 null
      */
     private String extractFirstUserMessageTitle(String head) {
         int start = 0;
@@ -209,9 +218,11 @@ public class CodexSessionLiteReader {
 
             String message = this.liteReader.extractLastJsonStringField(line, "message");
             if (message != null && !message.isEmpty()) {
-                // Strip system tags
-                message = stripSystemTags(message);
-                message = message.replace("\n", " ").trim();
+                // 中文注释：lite 历史摘要需要和完整历史标题共用同一套净化口径，避免列表与详情显示不一致。
+                message = UserVisibleTextGateway.toSingleLineVisibleSummary(message);
+                if (message.isEmpty()) {
+                    continue;
+                }
 
                 // Skip auto-generated patterns
                 if (message.startsWith("<") && message.length() > 1) {
@@ -229,38 +240,6 @@ public class CodexSessionLiteReader {
             }
         }
         return null;
-    }
-
-    /**
-     * Remove known system/instruction XML tag blocks from text.
-     */
-    private String stripSystemTags(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        String[] systemTags = {"agents-instructions", "system-reminder", "system-prompt"};
-        String result = text;
-        for (String tag : systemTags) {
-            result = removeTagBlock(result, tag);
-        }
-        return result.trim();
-    }
-
-    /**
-     * Remove a complete XML tag block from text.
-     */
-    private String removeTagBlock(String text, String tagName) {
-        String openTag = "<" + tagName + ">";
-        String closeTag = "</" + tagName + ">";
-        int start = text.indexOf(openTag);
-        if (start == -1) {
-            return text;
-        }
-        int end = text.indexOf(closeTag, start);
-        if (end == -1) {
-            return text;
-        }
-        return text.substring(0, start) + text.substring(end + closeTag.length());
     }
 
     /**

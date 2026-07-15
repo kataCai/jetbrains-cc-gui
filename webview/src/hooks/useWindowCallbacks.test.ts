@@ -129,6 +129,7 @@ describe('useWindowCallbacks integration', () => {
     window.__sessionTransitioning = false;
     window.__sessionTransitionToken = null;
     window.__pendingSessionTransitionToast = undefined;
+    window.__pendingCompleteContinuedSegmentTransitionPayload = undefined;
     window.__pendingCompleteContinuedSegmentTransitionSessionId = undefined;
     window.__continuedSegmentFirstSnapshotSessionId = null;
     window.__continuedSegmentHistoryPrefixMessages = null;
@@ -428,6 +429,37 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
   });
 
+  it('setSessionId does not bind continued fallback when prefix cache lost its source anchor', () => {
+    // 中文注释：prefix cache 即使还在，也不能只靠 logicalConversationId 把新 session 误绑到 continued 首帧。
+    // 一旦 source anchor 已丢失，就必须回到普通分支并清理过渡缓存，避免旧前缀继续污染后续消息排序。
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: 'logical-001' },
+      activeSegmentSessionIdRef: { current: null },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    (window as any).__continuedSegmentPendingSourceSessionId = null;
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    act(() => {
+      window.setSessionId!('segment-002');
+    });
+
+    expect(opts.setActiveSegmentSessionId).not.toHaveBeenCalledWith('segment-002');
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBeNull();
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBeNull();
+    expect(window.__continuedSegmentHistoryPrefixMessages).toBeNull();
+    expect((window as any).__continuedSegmentPendingLogicalConversationId).toBeNull();
+  });
+
   it('setSessionId uses transition cache when continued refs were lost before the real session id arrives', () => {
     const opts = createOptions({
       currentSessionIdRef: { current: null },
@@ -511,6 +543,34 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-003');
   });
 
+  it('completeContinuedSegmentTransition accepts structured metadata payload and updates logical refs', () => {
+    const logicalConversationIdRef = { current: null as string | null };
+    const activeSegmentSessionIdRef = { current: null as string | null };
+    const opts = createOptions({
+      continuationPendingRef: { current: true },
+      logicalConversationIdRef,
+      activeSegmentSessionIdRef,
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.completeContinuedSegmentTransition?.(JSON.stringify({
+        sessionId: 'segment-004',
+        logicalConversationId: 'logical-004',
+        activeSegmentSessionId: 'segment-004',
+        sourceSessionId: 'segment-003',
+      }));
+    });
+
+    expect(opts.setCurrentSessionId).toHaveBeenCalledWith('segment-004');
+    expect(opts.setLogicalConversationId).toHaveBeenCalledWith('logical-004');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-004');
+    expect(opts.setParentSegmentSessionId).toHaveBeenCalledWith('segment-003');
+    expect(logicalConversationIdRef.current).toBe('logical-004');
+    expect(activeSegmentSessionIdRef.current).toBe('segment-004');
+    expect(window.__continuedSegmentPendingLogicalConversationId).toBe('logical-004');
+  });
+
   /**
    * 验证 continued 创建失败后，前端回滚入口会恢复旧会话锚点并清理 continued 过渡缓存。
    * 该场景用于约束“失败后不能继续保留 pending/source 状态，否则标签页会永久卡在 not ready”。
@@ -561,13 +621,14 @@ describe('useWindowCallbacks integration', () => {
   });
 
   it('consumes pending completeContinuedSegmentTransition signal registered before callbacks mount', () => {
-    window.__pendingCompleteContinuedSegmentTransitionSessionId = 'segment-early-1';
+    window.__pendingCompleteContinuedSegmentTransitionPayload = 'segment-early-1';
 
     const opts = createOptions({
       continuationPendingRef: { current: true },
     });
     renderHook(() => useWindowCallbacks(opts));
 
+    expect(window.__pendingCompleteContinuedSegmentTransitionPayload).toBeUndefined();
     expect(window.__pendingCompleteContinuedSegmentTransitionSessionId).toBeUndefined();
     expect(opts.setCurrentSessionId).toHaveBeenCalledWith('segment-early-1');
     expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-early-1');
@@ -963,6 +1024,426 @@ describe('useWindowCallbacks integration', () => {
     expect(opts.setMessages).not.toHaveBeenCalled();
   });
 
+  /**
+   * continued 首帧如果只收到 permissions/skills 污染消息，前端不应把它缓存成 pending tail。
+   * 否则等真实 sessionId 回推后，这类内部残留还会参与 prefix merge，再次污染界面。
+   */
+  it('does not cache internal permissions and skills message as continued pending tail', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-09T09:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-09T09:00:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingSourceSessionId = 'segment-001';
+    window.__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+
+    const pollutedPendingTail: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: 'Filesystem sandboxing defines which files can be read or written.\n\n'
+          + '## Skills A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. '
+          + '### Skill roots - `r0` = `D:/Users/example/.agents/skills` '
+          + '### Available skills - demo (file: r0/demo/SKILL.md) '
+          + '### How to use skills - read the skill first.',
+        timestamp: '2026-07-09T09:01:00.000Z',
+      },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(pollutedPendingTail));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([]);
+
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+  });
+
+  /**
+   * 验证 continued 过渡态收到“真实用户问题 + permissions/skills 内部尾巴”混合消息时，
+   * 前端会只缓存净化后的真实问题，而不会把后台注入残留继续带入后续 prefix merge。
+   */
+  it('sanitizes mixed continued pending tail down to visible user text', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-09T09:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-09T09:00:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingSourceSessionId = 'segment-001';
+    window.__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+
+    const mixedPendingTail: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '再+1=?\n\n'
+          + '<permissions instructions>\n'
+          + 'Filesystem sandboxing defines which files can be read or written.\n'
+          + '</permissions instructions>\n\n'
+          + '## Skills A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. '
+          + '### Skill roots - `r0` = `D:/Users/example/.agents/skills` '
+          + '### Available skills - demo (file: r0/demo/SKILL.md) '
+          + '### How to use skills - read the skill first.',
+        timestamp: '2026-07-09T09:01:00.000Z',
+        raw: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '再+1=?\n\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>',
+            },
+          ],
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(mixedPendingTail));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([]);
+
+    expect(window.__continuedSegmentPendingTailMessages).toEqual([
+      expect.objectContaining({
+        type: 'user',
+        content: '再+1=?',
+      }),
+    ]);
+  });
+
+  /**
+   * 验证直接前端追加 user 消息时，如果内容净化后为空，则不会把纯后台注入文本渲染到聊天列表。
+   */
+  it('does not cache pure continuation carryover block as continued pending tail', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: null },
+      continuationPendingRef: { current: false },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: 'Need follow-up', timestamp: '2026-07-09T09:00:00.000Z' },
+      { type: 'assistant', content: 'Sure.', timestamp: '2026-07-09T09:00:01.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingSourceSessionId = 'segment-001';
+    window.__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+
+    const continuationOnlyTail: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '## Conversation Continuation\n'
+          + 'You are continuing an existing conversation in a new runtime segment.\n'
+          + 'Logical conversation id: logical-001\n'
+          + 'Previous segment session id: segment-001\n'
+          + 'Recent conversation turns: User: hello\n'
+          + "Preserve the user's intent and continue from that context unless the latest request overrides it.\n\n",
+        timestamp: '2026-07-09T09:01:00.000Z',
+      },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(continuationOnlyTail));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([]);
+
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+  });
+
+  it('drops addUserMessage payload when only internal prompt text remains after sanitization', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.addUserMessage?.(
+        '<permissions instructions>\n'
+        + 'Filesystem sandboxing defines which files can be read or written.\n'
+        + '</permissions instructions>\n\n'
+        + '## Skills A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. '
+        + '### Available skills - demo (file: r0/demo/SKILL.md) '
+        + '### How to use skills - read the skill first.',
+      );
+    });
+
+    expect(opts.setMessages).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 验证历史追加链路收到混合 user 消息时，会只保留真实用户可见文本，并同步裁剪 raw.content，
+   * 避免后续 MessageParser 再从 raw block 把污染文本重新渲染出来。
+   */
+  it('sanitizes addHistoryMessage user payload and keeps raw content in sync', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const pollutedHistoryMessage: ClaudeMessage = {
+      type: 'user',
+      content: '继续分析\n\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>',
+      timestamp: '2026-07-09T09:10:00.000Z',
+      raw: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '继续分析\n\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>',
+          },
+        ],
+      } as any,
+    };
+
+    act(() => {
+      window.addHistoryMessage?.(pollutedHistoryMessage);
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([]);
+
+    expect(nextMessages).toEqual([
+      expect.objectContaining({
+        type: 'user',
+        content: '继续分析',
+        raw: expect.objectContaining({
+          content: [{ type: 'text', text: '继续分析' }],
+        }),
+      }),
+    ]);
+  });
+
+  /**
+   * 验证 addHistoryMessage 收到 assistant 的 `AGENTS.md instructions` 正常讲解消息时，
+   * 历史追加链路不会把它误判成后台残留而隐藏。
+   * 这样历史恢复与实时追加两条前端入口在 AGENTS 场景下保持一致。
+   */
+  it('keeps assistant AGENTS instructions explanation in addHistoryMessage', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const explanation = '# AGENTS.md instructions\n\n'
+      + '下面只是文档示例。\n\n'
+      + '<INSTRUCTIONS>\n'
+      + '- 默认使用中文回复。\n'
+      + '</INSTRUCTIONS>\n\n'
+      + '<environment_context>\n'
+      + '- 这里只是标签示例，不包含 cwd、shell、current_date 等运行时字段。\n'
+      + '</environment_context>\n\n'
+      + '因此这条消息应继续显示。';
+    const historyMessage: ClaudeMessage = {
+      type: 'assistant',
+      content: explanation,
+      timestamp: '2026-07-10T09:12:00.000Z',
+      raw: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: explanation,
+          },
+        ],
+      } as any,
+    };
+
+    act(() => {
+      window.addHistoryMessage?.(historyMessage);
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([]);
+
+    expect(nextMessages).toEqual([historyMessage]);
+  });
+
+  /**
+   * 验证 `processUpdateMessages` 在处理 authoritative/update 快照时，
+   * 会直接丢弃 assistant 形态的高置信 permissions/skills 内部残留消息。
+   * 这样即使后端某处仍把污染消息放进数组，前端统一净化入口也不会再把它渲染成聊天气泡。
+   */
+  it('preserves image blocks when sanitizing addHistoryMessage user payload', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const pollutedHistoryMessage: ClaudeMessage = {
+      type: 'user',
+      content: 'Continue analysis\n\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>',
+      timestamp: '2026-07-09T09:10:00.000Z',
+      raw: {
+        role: 'user',
+        content: [
+          { type: 'image', src: 'data:image/png;base64,AAAA', mediaType: 'image/png', alt: 'diagram.png' },
+          {
+            type: 'text',
+            text: 'Continue analysis\n\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>',
+          },
+        ],
+      } as any,
+    };
+
+    act(() => {
+      window.addHistoryMessage?.(pollutedHistoryMessage);
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([]);
+    const rawContent = (nextMessages[0].raw as any).content;
+
+    expect(nextMessages[0]).toEqual(expect.objectContaining({
+      type: 'user',
+      content: 'Continue analysis',
+    }));
+    expect(rawContent[0]).toEqual(expect.objectContaining({
+      type: 'image',
+      src: 'data:image/png;base64,AAAA',
+    }));
+    expect(rawContent[1]).toEqual(expect.objectContaining({
+      type: 'text',
+      text: 'Continue analysis',
+    }));
+  });
+
+  it('keeps user message with only image block during updateMessages sanitization', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const imageOnlyMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '',
+        timestamp: '2026-07-10T16:00:00.000Z',
+        raw: {
+          role: 'user',
+          content: [
+            { type: 'image', src: 'data:image/png;base64,BBBB', mediaType: 'image/png', alt: 'chart.png' },
+          ],
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(imageOnlyMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([]);
+
+    expect(nextMessages).toHaveLength(1);
+    expect((nextMessages[0].raw as any).content).toEqual([
+      expect.objectContaining({
+        type: 'image',
+        src: 'data:image/png;base64,BBBB',
+      }),
+    ]);
+  });
+
+  it('filters non-user internal residue during updateMessages processing', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const pollutedAssistantMessages: ClaudeMessage[] = [
+      {
+        type: 'assistant',
+        content: '<permissions instructions>\n'
+          + 'Filesystem sandboxing defines which files can be read or written.\n'
+          + '</permissions instructions>\n\n'
+          + '## Skills\n\n'
+          + '### Skill roots\n\n'
+          + '### Available skills\n\n'
+          + '- demo (file: r0/demo/SKILL.md)\n\n'
+          + '### How to use skills',
+        timestamp: '2026-07-10T16:00:00.000Z',
+        raw: {
+          role: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: '<permissions instructions>\n'
+                  + 'Filesystem sandboxing defines which files can be read or written.\n'
+                  + '</permissions instructions>\n\n'
+                  + '## Skills\n\n'
+                  + '### Skill roots\n\n'
+                  + '### Available skills\n\n'
+                  + '- demo (file: r0/demo/SKILL.md)\n\n'
+                  + '### How to use skills',
+              },
+            ],
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(pollutedAssistantMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([]);
+
+    expect(nextMessages).toEqual([]);
+  });
+
+  /**
+   * 验证 authoritative/update 快照中的 assistant 若只是正常讲解 `AGENTS.md instructions` 示例，
+   * 前端统一净化入口不会把它误判成内部残留而丢弃。
+   * 该断言用于防止后端已放行、前端 updateMessages 兜底层仍继续隐藏消息。
+   */
+  it('keeps assistant AGENTS instructions explanation during updateMessages processing', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    const explanation = '# AGENTS.md instructions\n\n'
+      + '下面只是文档示例。\n\n'
+      + '<INSTRUCTIONS>\n'
+      + '- 默认使用中文回复。\n'
+      + '</INSTRUCTIONS>\n\n'
+      + '<environment_context>\n'
+      + '- 这里只是标签示例，不包含 cwd、shell、current_date 等运行时字段。\n'
+      + '</environment_context>\n\n'
+      + '因此这条消息应继续显示。';
+    const assistantMessages: ClaudeMessage[] = [
+      {
+        type: 'assistant',
+        content: explanation,
+        timestamp: '2026-07-10T16:05:00.000Z',
+        raw: {
+          role: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: explanation,
+              },
+            ],
+          },
+        } as any,
+      },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(assistantMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([]);
+
+    expect(nextMessages).toEqual(assistantMessages);
+  });
+
   it('accepts history snapshot again when snapshot signature changes under the same restore key', () => {
     const opts = createOptions();
     renderHook(() => useWindowCallbacks(opts));
@@ -1172,6 +1653,104 @@ describe('useWindowCallbacks integration', () => {
     expect((window as any).__continuedSegmentPendingCreatedAt).toBeNull();
     expect((window as any).__continuedSegmentPendingReason).toBeNull();
     expect((window as any).__continuedSegmentAwaitingFirstSessionId).toBe(false);
+  });
+
+  it('authoritative continued restore does not append optimistic user while streaming', () => {
+    const opts = createOptions({
+      isStreamingRef: { current: true },
+      streamingContentRef: { current: '' },
+      streamingTurnIdRef: { current: 7 },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    const authoritativeMessages: ClaudeMessage[] = [
+      { type: 'user', content: '净化后的问题', timestamp: '2026-07-08T12:10:00.000Z' },
+      { type: 'assistant', content: '净化后的回答', timestamp: '2026-07-08T12:10:01.000Z' },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-002',
+        'snapshot-signature-authoritative-streaming',
+        'runtime_continue_authoritative',
+      );
+      window.updateMessages!(JSON.stringify(authoritativeMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const previousMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '## Conversation Continuation\n\n污染的 optimistic user',
+        timestamp: '2026-07-08T12:10:02.000Z',
+      },
+    ];
+
+    const nextMessages = updater(previousMessages);
+
+    expect(nextMessages).toHaveLength(2);
+    expect(nextMessages.map((message) => message.content)).toEqual(['净化后的问题', '净化后的回答']);
+  });
+
+  /**
+   * authoritative continued restore 到来后，应完全以权威快照替换界面。
+   * 即便 pending tail 缓存里残留过内部污染消息，也不能再被拼回 authoritative snapshot。
+   */
+  it('authoritative continued restore does not stitch filtered internal pending tail back', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: 'old prefix', timestamp: '2026-07-09T10:00:00.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = 'segment-001';
+    window.__continuedSegmentFirstSnapshotSessionId = 'segment-002';
+    window.__continuedSegmentPendingTailMessages = [
+      {
+        type: 'user',
+        content: 'Filesystem sandboxing defines which files can be read or written.\n\n'
+          + '## Skills A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. '
+          + '### Skill roots - `r0` = `D:/Users/example/.agents/skills` '
+          + '### Available skills - demo (file: r0/demo/SKILL.md) '
+          + '### How to use skills - read the skill first.',
+        timestamp: '2026-07-09T10:00:10.000Z',
+      },
+    ];
+    (window as any).__continuedSegmentPendingSourceSessionId = 'segment-001';
+    (window as any).__continuedSegmentPendingLogicalConversationId = 'logical-001';
+    (window as any).__continuedSegmentPendingCreatedAt = Date.now();
+    (window as any).__continuedSegmentPendingReason = 'provider_switch';
+    (window as any).__continuedSegmentAwaitingFirstSessionId = true;
+
+    const authoritativeMessages: ClaudeMessage[] = [
+      { type: 'user', content: '继续分析当前问题', timestamp: '2026-07-09T10:00:20.000Z' },
+      { type: 'assistant', content: '好的，先看重复消息根因。', timestamp: '2026-07-09T10:00:21.000Z' },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-009',
+        'snapshot-signature-authoritative-filtered-tail',
+        'runtime_continue_authoritative',
+      );
+      window.updateMessages!(JSON.stringify(authoritativeMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([
+      { type: 'user', content: 'old prefix', timestamp: '2026-07-09T10:00:00.000Z' },
+      {
+        type: 'user',
+        content: 'Filesystem sandboxing defines which files can be read or written.',
+        timestamp: '2026-07-09T10:00:10.000Z',
+      },
+    ]);
+
+    expect(nextMessages).toEqual(authoritativeMessages);
+    expect(nextMessages.some((message) => message.content?.includes('Filesystem sandboxing'))).toBe(false);
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
   });
 
   it('patchMessageUuid updates the latest unresolved user message using raw text fallback', () => {

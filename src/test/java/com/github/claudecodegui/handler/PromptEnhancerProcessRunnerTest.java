@@ -1,6 +1,7 @@
 package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.bridge.ProcessManager;
+import com.intellij.openapi.diagnostic.Logger;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -26,6 +27,7 @@ import static org.junit.Assert.fail;
  * 测试通过当前 JVM 启动内部辅助 main 类，避免依赖系统外部命令导致跨平台不稳定。
  */
 public class PromptEnhancerProcessRunnerTest {
+    private static final Logger LOG = Logger.getInstance(PromptEnhancerProcessRunnerTest.class);
 
     /**
      * 记录 register/unregister 调用的测试型 ProcessManager。
@@ -174,7 +176,7 @@ public class PromptEnhancerProcessRunnerTest {
          */
         public static void main(String[] args) {
             for (String a : args) {
-                System.out.println(a);
+                LOG.info(a);
             }
         }
     }
@@ -194,6 +196,7 @@ public class PromptEnhancerProcessRunnerTest {
          */
         public static void main(String[] args) throws InterruptedException {
             long ms = Long.parseLong(args[0]);
+            LOG.info("ready");
             Thread.sleep(ms);
         }
     }

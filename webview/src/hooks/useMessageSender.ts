@@ -86,10 +86,7 @@ export function isContinuedSegmentReadyForFirstSend(): boolean {
     && window.__continuedSegmentHistoryPrefixMessages.length > 0;
   return window.__continuedSegmentAwaitingFirstSessionId === true
     && hasPrefixCache
-    && !!(
-      window.__continuedSegmentPendingSourceSessionId?.trim()
-      || window.__continuedSegmentPendingLogicalConversationId?.trim()
-    );
+    && !!window.__continuedSegmentPendingSourceSessionId?.trim();
 }
 
 /**

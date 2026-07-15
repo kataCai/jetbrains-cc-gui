@@ -38,6 +38,8 @@ public class HistoryMessageInjector {
 
     private static final Logger LOG = Logger.getInstance(HistoryMessageInjector.class);
     private static final String CODEX_RUNTIME_TRACE_PREFIX = "[CODEX_RUNTIME_TRACE]";
+    private static final String USER_HISTORY_SHAPE_EVENT = "event_msg_user_message";
+    private static final String USER_HISTORY_SHAPE_RESPONSE = "response_item_user_message";
 
     private final HandlerContext context;
 
@@ -404,6 +406,13 @@ public class HistoryMessageInjector {
      * @return true 表示新增了一条逻辑消息；false 表示只是合并到上一条重复消息
      */
     private static boolean addCodexFrontendMessage(List<JsonObject> frontendMessages, JsonObject incoming) {
+        if (shouldDropNonUserInternalResidueMessage(incoming)) {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.dropNonUserInternalResidue"
+                    + ", key=" + firstNonBlank(extractMessageIdentityKey(incoming))
+                    + ", type=" + firstNonBlank(getStringProperty(incoming, "type"))
+                    + ", contentDigest=" + buildContentDigest(getStringProperty(incoming, "content")));
+            return false;
+        }
         if (frontendMessages.isEmpty()) {
             frontendMessages.add(incoming);
             return true;
@@ -412,7 +421,16 @@ public class HistoryMessageInjector {
         int lastIndex = frontendMessages.size() - 1;
         JsonObject previous = frontendMessages.get(lastIndex);
         if (isDuplicateAdjacentCodexUserMessage(previous, incoming)) {
-            frontendMessages.set(lastIndex, inheritStableFrontendMetadata(previous, preferRicherUserMessage(previous, incoming)));
+            JsonObject preferred = preferRicherUserMessage(previous, incoming);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.foldDuplicateUserMessage"
+                    + ", previousKey=" + firstNonBlank(extractMessageIdentityKey(previous))
+                    + ", incomingKey=" + firstNonBlank(extractMessageIdentityKey(incoming))
+                    + ", previousHistorySourceKind=" + firstNonBlank(extractUserHistorySourceKind(previous))
+                    + ", incomingHistorySourceKind=" + firstNonBlank(extractUserHistorySourceKind(incoming))
+                    + ", previousContentDigest=" + buildContentDigest(getStringProperty(previous, "content"))
+                    + ", incomingContentDigest=" + buildContentDigest(getStringProperty(incoming, "content"))
+                    + ", keptContentDigest=" + buildContentDigest(getStringProperty(preferred, "content")));
+            frontendMessages.set(lastIndex, inheritStableFrontendMetadata(previous, preferred));
             return false;
         }
 
@@ -431,16 +449,24 @@ public class HistoryMessageInjector {
             return true;
         }
 
+        String previousContent = normalizeDuplicateUserContent(getStringProperty(previous, "content"));
+        String incomingContent = normalizeDuplicateUserContent(getStringProperty(incoming, "content"));
+        if (previousContent.isEmpty() || !previousContent.equals(incomingContent)) {
+            return false;
+        }
+
+        // 中文注释：同一轮 Codex user turn 可能同时落成 response_item/message 与 event_msg/user_message 两条相邻记录，
+        // 这两条记录的时间戳并不稳定一致，不能继续只依赖 timestamp 判重，否则 authoritative restore 仍会把同一句用户输入展示两次。
+        if (isComplementaryDualRecordedCodexUserMessage(previous, incoming)) {
+            return true;
+        }
+
         String previousTimestamp = getStringProperty(previous, "timestamp");
         String incomingTimestamp = getStringProperty(incoming, "timestamp");
         if (previousTimestamp == null || !previousTimestamp.equals(incomingTimestamp)) {
             return false;
         }
-
-        String previousContent = getStringProperty(previous, "content");
-        String incomingContent = getStringProperty(incoming, "content");
-        return previousContent != null
-            && normalizeDuplicateUserContent(previousContent).equals(normalizeDuplicateUserContent(incomingContent));
+        return true;
     }
 
     private static JsonObject preferRicherUserMessage(JsonObject previous, JsonObject incoming) {
@@ -471,6 +497,36 @@ public class HistoryMessageInjector {
             return null;
         }
         return object.get(propertyName).getAsString();
+    }
+
+    /**
+     * 判断两条相邻 user 消息是否正好来自 Codex 同轮双录的两种历史形态。
+     * 这里只接受 response_item/user 与 event_msg/user_message 的互补组合，
+     * 避免把用户真实连续发送的两条相同 event_msg 或两条相同 response_item 误折叠。
+     *
+     * @param previous 已存在的上一条用户消息
+     * @param incoming 当前待写入的用户消息
+     * @return true 表示命中 Codex 同轮双录互补形态
+     */
+    private static boolean isComplementaryDualRecordedCodexUserMessage(JsonObject previous, JsonObject incoming) {
+        String previousShape = extractUserHistorySourceKind(previous);
+        String incomingShape = extractUserHistorySourceKind(incoming);
+        return (USER_HISTORY_SHAPE_RESPONSE.equals(previousShape) && USER_HISTORY_SHAPE_EVENT.equals(incomingShape))
+                || (USER_HISTORY_SHAPE_EVENT.equals(previousShape) && USER_HISTORY_SHAPE_RESPONSE.equals(incomingShape));
+    }
+
+    /**
+     * 读取注解到前端消息上的 Codex user 历史来源形态。
+     * 该元数据只用于 restore 阶段识别 provider 同轮双录，不参与普通前端展示。
+     *
+     * @param message 前端消息
+     * @return user 历史来源形态；缺失时返回空串
+     */
+    private static String extractUserHistorySourceKind(JsonObject message) {
+        if (message == null || !message.has("messageIdentity") || !message.get("messageIdentity").isJsonObject()) {
+            return "";
+        }
+        return firstNonBlank(getStringProperty(message.getAsJsonObject("messageIdentity"), "historySourceKind"));
     }
 
     /**
@@ -512,6 +568,10 @@ public class HistoryMessageInjector {
         messageIdentity.addProperty("role", role);
         if (hasText(sourceId)) {
             messageIdentity.addProperty("sourceId", sourceId);
+        }
+        String historySourceKind = extractCodexUserHistoryShape(sourceMsg, role);
+        if (hasText(historySourceKind)) {
+            messageIdentity.addProperty("historySourceKind", historySourceKind);
         }
         if (hasText(segmentSessionId)) {
             messageIdentity.addProperty("segmentSessionId", segmentSessionId);
@@ -678,6 +738,36 @@ public class HistoryMessageInjector {
             }
         }
         return extractToolIdentityFromFrontendMessage(frontendMsg);
+    }
+
+    /**
+     * 根据原始 Codex 历史消息判断 user 消息来源于哪种持久化形态。
+     * 该信息仅用于 restore 去重，区分同一轮 user turn 的 response_item 与 event_msg 双记录。
+     *
+     * @param sourceMsg 原始 Codex 历史消息
+     * @param role 前端消息角色
+     * @return user 历史来源形态；非 user 或非已知形态时返回空串
+     */
+    private static String extractCodexUserHistoryShape(JsonObject sourceMsg, String role) {
+        if (!"user".equals(role) || sourceMsg == null || !sourceMsg.has("type") || sourceMsg.get("type").isJsonNull()) {
+            return "";
+        }
+        String sourceType = sourceMsg.get("type").getAsString();
+        JsonObject payload = sourceMsg.has("payload") && sourceMsg.get("payload").isJsonObject()
+                ? sourceMsg.getAsJsonObject("payload")
+                : null;
+        if (payload == null || !payload.has("type") || payload.get("type").isJsonNull()) {
+            return "";
+        }
+        String payloadType = payload.get("type").getAsString();
+        if ("event_msg".equals(sourceType) && "user_message".equals(payloadType)) {
+            return USER_HISTORY_SHAPE_EVENT;
+        }
+        if ("response_item".equals(sourceType) && "message".equals(payloadType)) {
+            String payloadRole = getStringProperty(payload, "role");
+            return "user".equals(payloadRole) ? USER_HISTORY_SHAPE_RESPONSE : "";
+        }
+        return "";
     }
 
     /**
@@ -906,11 +996,15 @@ public class HistoryMessageInjector {
      * @return 语义丰富度分数，越高越应该被保留
      */
     private static int getUserMessageSemanticScore(JsonObject message) {
-        if (message == null || !message.has("raw") || !message.get("raw").isJsonObject()) {
+        if (message == null) {
             return 0;
         }
+        int score = scoreVisibleUserContent(message);
+        if (!message.has("raw") || !message.get("raw").isJsonObject()) {
+            return score;
+        }
         JsonObject raw = message.getAsJsonObject("raw");
-        int score = getRawContentBlockCount(message);
+        score += getRawContentBlockCount(message);
         if (raw.has("__hasDeclaredLocalImages") && !raw.get("__hasDeclaredLocalImages").isJsonNull()
                 && raw.get("__hasDeclaredLocalImages").getAsBoolean()) {
             score += 1000;
@@ -922,6 +1016,176 @@ public class HistoryMessageInjector {
             score += raw.get("__missingLocalImageCount").getAsInt() * 10;
         }
         return score;
+    }
+
+    /**
+     * 根据用户可见文本对候选 user 消息做基础排序。
+     * 真实用户文本越长越优先；若仍残留 AGENTS、skills 或 continuation 痕迹，则施加强惩罚，
+     * 用于双录冲突时尽量保留干净副本。
+     *
+     * @param message 候选用户消息
+     * @return 基于可见文本的排序分数
+     */
+    private static int scoreVisibleUserContent(JsonObject message) {
+        String content = normalizeDuplicateUserContent(getStringProperty(message, "content"));
+        if (content.isEmpty()) {
+            return 0;
+        }
+        int score = Math.min(content.length(), 200);
+        return containsInternalPromptResidue(content) ? score - 10000 : score;
+    }
+
+    /**
+     * 检测文本中是否仍保留明显的内部 prompt 残留特征。
+     * 这里只匹配高置信固定前缀，避免把用户普通讨论误判成污染文本。
+     *
+     * @param content 用户可见文本
+     * @return true 表示仍疑似存在内部注入残留
+     */
+    private static boolean containsInternalPromptResidue(String content) {
+        return CodexMessageConverter.containsHighConfidenceInternalResidue(content);
+    }
+
+    /**
+     * 判断非 user 可见消息是否仍明显带有内部 prompt 残留。
+     * 这里专门作为历史恢复末端兜底，防止上游角色感知提取或 raw 块约束漏网时，污染消息继续混入前端快照。
+     *
+     * @param message 已转换完成的前端消息
+     * @return true 表示该消息应在进入前端数组前直接丢弃
+     */
+    private static boolean shouldDropNonUserInternalResidueMessage(JsonObject message) {
+        if (message == null || isUserMessage(message)) {
+            return false;
+        }
+        return containsInternalPromptResidue(getStringProperty(message, "content"));
+    }
+
+    /**
+     * 统计快照里仍残留的“相邻同内容 user 消息”数量，供 authoritative restore 诊断输出。
+     *
+     * @param frontendMessages 待检查的前端消息列表
+     * @return 相邻重复 user 对的数量
+     */
+    public static int countAdjacentDuplicateVisibleUserMessages(List<JsonObject> frontendMessages) {
+        if (frontendMessages == null || frontendMessages.size() < 2) {
+            return 0;
+        }
+        int duplicateCount = 0;
+        for (int i = 1; i < frontendMessages.size(); i++) {
+            JsonObject previous = frontendMessages.get(i - 1);
+            JsonObject current = frontendMessages.get(i);
+            if (!isUserMessage(previous) || !isUserMessage(current)) {
+                continue;
+            }
+            String previousContent = normalizeDuplicateUserContent(getStringProperty(previous, "content"));
+            String currentContent = normalizeDuplicateUserContent(getStringProperty(current, "content"));
+            if (!previousContent.isEmpty() && previousContent.equals(currentContent)) {
+                duplicateCount++;
+            }
+        }
+        return duplicateCount;
+    }
+
+    /**
+     * 构建 user 消息的紧凑诊断摘要，便于在日志里快速观察 authoritative snapshot 的身份来源与文本指纹。
+     *
+     * @param frontendMessages 待检查的前端消息列表
+     * @return 截断后的 user 消息摘要
+     */
+    public static String buildUserMessageTraceSummary(List<JsonObject> frontendMessages) {
+        if (frontendMessages == null || frontendMessages.isEmpty()) {
+            return "[]";
+        }
+        List<String> parts = new ArrayList<>();
+        int userCount = 0;
+        for (JsonObject message : frontendMessages) {
+            if (!isUserMessage(message)) {
+                continue;
+            }
+            userCount++;
+            if (parts.size() >= 8) {
+                continue;
+            }
+            parts.add("{key=" + firstNonBlank(extractMessageIdentityKey(message))
+                    + ",historySourceKind=" + firstNonBlank(extractUserHistorySourceKind(message))
+                    + ",contentDigest=" + buildContentDigest(getStringProperty(message, "content"))
+                    + "}");
+        }
+        if (userCount > parts.size()) {
+            parts.add("...+" + (userCount - parts.size()) + " more");
+        }
+        return parts.toString();
+    }
+
+    /**
+     * 统计快照中仍保留的非 user 内部残留消息数量。
+     * 该计数专门服务 authoritative snapshot 诊断输出，用于验证“非 user 污染是否已在进入前端前被清零”。
+     *
+     * @param frontendMessages 当前快照中的前端消息列表
+     * @return 命中高置信内部残留的非 user 消息数
+     */
+    public static int countInternalResidueVisibleMessages(List<JsonObject> frontendMessages) {
+        if (frontendMessages == null || frontendMessages.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (JsonObject message : frontendMessages) {
+            if (message == null || isUserMessage(message)) {
+                continue;
+            }
+            if (containsInternalPromptResidue(getStringProperty(message, "content"))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 构造非 user 消息的快照摘要，显式标记每条消息是否命中内部残留。
+     * 这样日志里即使只剩 assistant/system/notification，也能快速定位是谁仍在把后台上下文推到前端。
+     *
+     * @param frontendMessages 当前快照中的前端消息列表
+     * @return 截断后的非 user 消息摘要
+     */
+    public static String buildNonUserMessageTraceSummary(List<JsonObject> frontendMessages) {
+        if (frontendMessages == null || frontendMessages.isEmpty()) {
+            return "[]";
+        }
+        List<String> parts = new ArrayList<>();
+        int nonUserCount = 0;
+        for (JsonObject message : frontendMessages) {
+            if (message == null || isUserMessage(message)) {
+                continue;
+            }
+            nonUserCount++;
+            if (parts.size() >= 8) {
+                continue;
+            }
+            boolean internalResidue = containsInternalPromptResidue(getStringProperty(message, "content"));
+            parts.add("{key=" + firstNonBlank(extractMessageIdentityKey(message))
+                    + ",role=" + firstNonBlank(getStringProperty(message, "type"))
+                    + ",contentDigest=" + buildContentDigest(getStringProperty(message, "content"))
+                    + ",internalResidue=" + internalResidue
+                    + "}");
+        }
+        if (nonUserCount > parts.size()) {
+            parts.add("...+" + (nonUserCount - parts.size()) + " more");
+        }
+        return parts.toString();
+    }
+
+    /**
+     * 为日志构建稳定的文本指纹，避免直接输出完整用户文本。
+     *
+     * @param content 待摘要的文本
+     * @return `len-hexCrc32` 形式的内容摘要
+     */
+    private static String buildContentDigest(String content) {
+        String normalized = normalizeDuplicateUserContent(content);
+        CRC32 checksum = new CRC32();
+        byte[] bytes = normalized.getBytes(StandardCharsets.UTF_8);
+        checksum.update(bytes, 0, bytes.length);
+        return normalized.length() + "-" + Long.toHexString(checksum.getValue());
     }
 
     /**

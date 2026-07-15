@@ -371,6 +371,10 @@ public class CodexMessageHandler implements MessageCallback {
         }
 
         String content = extractMessageContent(msg);
+        if (CodexMessageConverter.isBridgeDiagnosticNoise(content)) {
+            LOG.debug("Codex diagnostic noise filtered before adding message");
+            return null;
+        }
         if (messageType == Message.Type.USER) {
             return buildUserMessage(msg, content);
         }

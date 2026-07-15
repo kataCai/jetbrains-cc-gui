@@ -497,8 +497,10 @@ interface Window {
    */
   __pendingSessionId?: string;
   /**
-   * Pending continued transition completion signal before React callbacks mount.
+   * Pending continued transition completion payload before React callbacks mount.
+   * 新版后端会传 JSON payload，旧版裸 sessionId 仍通过兼容字段消费。
    */
+  __pendingCompleteContinuedSegmentTransitionPayload?: string;
   __pendingCompleteContinuedSegmentTransitionSessionId?: string;
   /**
    * Pending continued transition abort signal before React callbacks mount.

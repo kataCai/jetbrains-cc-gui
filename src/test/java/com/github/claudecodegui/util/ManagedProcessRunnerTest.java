@@ -1,6 +1,7 @@
 package com.github.claudecodegui.util;
 
 import com.github.claudecodegui.bridge.ProcessManager;
+import com.intellij.openapi.diagnostic.Logger;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -28,6 +29,7 @@ import static org.junit.Assert.fail;
  * 3. 需要同时验证 register/unregister 对称性与超时强杀行为的入口。
  */
 public class ManagedProcessRunnerTest {
+    private static final Logger LOG = Logger.getInstance(ManagedProcessRunnerTest.class);
 
     /**
      * 记录 register/unregister 调用细节的测试型 ProcessManager。
@@ -192,7 +194,7 @@ public class ManagedProcessRunnerTest {
          */
         public static void main(String[] args) {
             for (String arg : args) {
-                System.out.println(arg);
+                LOG.info(arg);
             }
         }
     }
@@ -212,8 +214,7 @@ public class ManagedProcessRunnerTest {
          */
         public static void main(String[] args) throws InterruptedException {
             long sleepMs = Long.parseLong(args[0]);
-            System.out.println("ready");
-            System.out.flush();
+            LOG.info("ready");
             Thread.sleep(sleepMs);
         }
     }
