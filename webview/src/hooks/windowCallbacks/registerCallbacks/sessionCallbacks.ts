@@ -10,6 +10,11 @@ import type { MutableRefObject } from 'react';
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import { downloadJSON } from '../../../utils/exportMarkdown';
 import { emitFrontendDiagnosticLog } from '../../../utils/debug';
+import {
+  buildFrontendTranscriptDiagnosticSnapshot,
+  buildTranscriptDiagnosticMessageDump,
+  FULL_TRANSCRIPT_SNAPSHOT_KIND,
+} from '../../../utils/transcriptDiagnostics';
 import { releaseSessionTransition } from '../sessionTransition';
 import { drainAndRequestDependencyStatus } from '../settingsBootstrap';
 
@@ -48,6 +53,58 @@ export function registerSessionAndSdkCallbacks(
     updateHistoryTitle,
     applyHistoryTitleLocal,
   } = options;
+
+  /**
+   * 导出当前前端完整 transcript 诊断快照。
+   * 该入口只服务于问题排查：直接读取 React 当前 message array，并明确标记为完整 transcript，
+   * 用来和滚动文本采样日志区分，避免把折叠窗口状态误判成真实消息数组异常。
+   *
+   * @param payload 可选 JSON 字符串；当前仅用于附带触发原因，非法 JSON 会自动忽略并回退默认行为
+   * @return 无返回值
+   */
+  const exportFrontendTranscriptDiagnosticSnapshot = (payload?: string) => {
+    let exportReason: string | null = null;
+    if (typeof payload === 'string' && payload.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(payload) as Record<string, unknown>;
+        exportReason = typeof parsed.reason === 'string' && parsed.reason.trim().length > 0
+          ? parsed.reason.trim()
+          : null;
+      } catch {
+        exportReason = payload.trim();
+      }
+    }
+
+    const exportedAt = new Date().toISOString();
+    const snapshot = buildFrontendTranscriptDiagnosticSnapshot({
+      messages: options.messagesRef.current,
+      exportedAt,
+      provider: options.currentProviderRef.current || null,
+      sessionId: currentSessionIdRef.current,
+      logicalConversationId: options.logicalConversationIdRef.current,
+      activeSegmentSessionId: options.activeSegmentSessionIdRef.current,
+    });
+    const filenameSessionPart = (snapshot.logicalConversationId || snapshot.sessionId || 'unsaved-session')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-')
+      .slice(0, 48) || 'unsaved-session';
+    const filename = `frontend-transcript-${filenameSessionPart}-${exportedAt
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .replace('Z', '_utc')}.json`;
+
+    downloadJSON(JSON.stringify(snapshot, null, 2), filename);
+    emitFrontendDiagnosticLog('TranscriptDiagnostics.Frontend', 'export full transcript snapshot', {
+      reason: exportReason,
+      snapshotKind: FULL_TRANSCRIPT_SNAPSHOT_KIND,
+      transcriptSource: snapshot.transcriptSource,
+      provider: snapshot.provider,
+      sessionId: snapshot.sessionId,
+      logicalConversationId: snapshot.logicalConversationId,
+      activeSegmentSessionId: snapshot.activeSegmentSessionId,
+      messageCount: snapshot.messageCount,
+      messageDump: buildTranscriptDiagnosticMessageDump(snapshot.messages),
+    });
+  };
 
   /**
    * 同步当前会话 ID 到 React state 与即时读取 ref。
@@ -311,7 +368,9 @@ export function registerSessionAndSdkCallbacks(
 
   window.setSessionId = (sessionId: string) => {
     const oldId = currentSessionIdRef.current;
+    const continuationPendingBeforeApply = options.continuationPendingRef.current;
     const handleAsContinuedSegment = shouldHandleAsContinuedSegment(sessionId, oldId);
+    const hasTransitionCache = hasContinuedTransitionCache();
     const hasPrefixCache = Array.isArray(window.__continuedSegmentHistoryPrefixMessages);
     const prefixCacheCount = window.__continuedSegmentHistoryPrefixMessages?.length ?? null;
     const hasSourceAnchor = !!(
@@ -320,14 +379,14 @@ export function registerSessionAndSdkCallbacks(
     );
     const hasSuspiciousContinuedPrefixCache = hasPrefixCache
       && (prefixCacheCount ?? 0) > 0
-      && hasContinuedTransitionCache()
+      && hasTransitionCache
       && hasSourceAnchor
       && canBindPrefixCacheToSession(sessionId);
     emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.setSessionId received', {
       sessionId,
       oldSessionId: oldId,
-      continuationPending: options.continuationPendingRef.current,
-      continuedFallbackMatched: handleAsContinuedSegment && !options.continuationPendingRef.current,
+      continuationPending: continuationPendingBeforeApply,
+      continuedFallbackMatched: handleAsContinuedSegment && !continuationPendingBeforeApply,
       hasPrefixCache,
       prefixCacheCount,
       pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
@@ -350,7 +409,12 @@ export function registerSessionAndSdkCallbacks(
       window.__continuedSegmentAwaitingFirstSessionId = false;
       emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.setSessionId marked continued segment first snapshot', {
         sessionId,
-        fallbackMatched: !options.continuationPendingRef.current,
+        fallbackMatched: !continuationPendingBeforeApply,
+        fallbackBindingSource: continuationPendingBeforeApply
+          ? 'continuation_pending'
+          : hasTransitionCache
+            ? 'transition_cache'
+            : 'prefix_cache_context',
         logicalConversationId: options.logicalConversationIdRef.current,
         transitionToken: window.__sessionTransitionToken ?? null,
         pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
@@ -361,7 +425,7 @@ export function registerSessionAndSdkCallbacks(
       emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.setSessionId used ordinary session branch', {
         sessionId,
         oldSessionId: oldId,
-        continuationPending: options.continuationPendingRef.current,
+        continuationPending: continuationPendingBeforeApply,
         hasPrefixCache,
         prefixCacheCount,
         preservedSuspiciousContinuedPrefixCache: hasSuspiciousContinuedPrefixCache,
@@ -370,6 +434,18 @@ export function registerSessionAndSdkCallbacks(
         awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
       });
       if (!hasSuspiciousContinuedPrefixCache) {
+        emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued transition cache cleared', {
+          cleanupReason: 'ordinary_session_branch_without_continued_context',
+          prefixCacheCount,
+          prefixSessionId: window.__continuedSegmentHistoryPrefixSessionId ?? null,
+          pendingTailCount: Array.isArray(window.__continuedSegmentPendingTailMessages)
+            ? window.__continuedSegmentPendingTailMessages.length
+            : null,
+          firstSnapshotSessionId: window.__continuedSegmentFirstSnapshotSessionId ?? null,
+          pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
+          pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
+          awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
+        });
         window.__continuedSegmentFirstSnapshotSessionId = null;
         window.__continuedSegmentHistoryPrefixSessionId = null;
         window.__continuedSegmentHistoryPrefixMessages = null;
@@ -445,6 +521,10 @@ export function registerSessionAndSdkCallbacks(
       console.error('[Frontend] Failed to process export data:', error);
       addToast(tRef.current('history.exportFailed'), 'error');
     }
+  };
+
+  window.exportFrontendTranscriptDiagnosticSnapshot = (json?: string) => {
+    exportFrontendTranscriptDiagnosticSnapshot(json);
   };
 
   // =========================================================================

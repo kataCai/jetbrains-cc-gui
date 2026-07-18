@@ -436,6 +436,12 @@ export function useSessionManagement({
     }
     // 中文注释：continued segment 切换必须在 reset 之后写入前缀缓存。
     // 这样既能清掉 streaming/loading 等瞬时状态，又不会让 reset 的默认清理逻辑覆盖旧历史前缀。
+    // 2026-07-16 复盘结论：
+    // 1. `__continuedSegmentHistoryPrefixMessages` 仍用于保留旧逻辑会话前缀，等待新分段首帧补齐；
+    // 2. `__continuedSegmentPendingTailMessages` 仍用于承接“尾部消息先到、真实 sessionId 后到”的显式 continued 竞态；
+    // 3. `__continuedSegmentAwaitingFirstSessionId` 仍用于界定首发放行窗口与 pending tail 采集窗口。
+    // send-time silent switch 主链路已经不再写入这些 legacy cache，但显式 `createContinuedSegment(...)`
+    // 兼容路径仍依赖它们，当前阶段只能继续保留并把作用域限制在该旧链路内。
     window.__continuedSegmentFirstSnapshotSessionId = null;
     window.__continuedSegmentHistoryPrefixMessages = messages.slice();
     window.__continuedSegmentHistoryPrefixSessionId = null;

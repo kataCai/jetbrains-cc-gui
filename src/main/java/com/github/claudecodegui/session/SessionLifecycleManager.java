@@ -155,6 +155,7 @@ public class SessionLifecycleManager {
             newSession.setProvider(previousProvider);
             newSession.setModel(previousModel);
             copyCodexSessionBindingIfPresent(oldSession, newSession);
+            logActiveRuntimeMutated(newSession, "createNewSession.restorePreviousRuntime");
             LOG.info("Restored session state to new session: mode=" + previousPermissionMode
                              + ", provider=" + previousProvider + ", model=" + previousModel);
             LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " createNewSession restored newSession provider="
@@ -239,6 +240,7 @@ public class SessionLifecycleManager {
 
             CodexSessionBinding targetBinding = buildContinuedSegmentCodexBinding(request);
             newSession.getState().setCodexSessionBinding(targetBinding);
+            logActiveRuntimeMutated(newSession, "createContinuedSessionWithRuntimeSwitch.prepareNewSession");
             primeContinuationMetadata(oldSession, newSession, request, resolvedSourceSessionId);
 
             host.clearPendingPermissionRequests();
@@ -293,6 +295,343 @@ public class SessionLifecycleManager {
      * @param failedSession 已经挂到 host 上但随后初始化失败的新会话
      * @param errorMessage 失败原因
      */
+    /**
+     * 在真正发送前，根据本条消息携带的 runtimeIntent 准备应复用的会话。
+     * 当目标 runtime 与当前活动 runtime 一致时直接复用当前会话；
+     * 当本次发送需要静默切段时，则在后端内部完成 continued 新分段创建，并把新会话直接返回给发送链路。
+     *
+     * @param runtimeIntent 当前发送请求解析出的运行时意图；为空或无效时表示沿用当前会话
+     * @return 已准备完成、可直接用于本次发送的会话
+     */
+    public CompletableFuture<ClaudeSession> prepareSessionForSend(SendRuntimeIntent runtimeIntent) {
+        ClaudeSession currentSession = host.getSession();
+        if (currentSession == null) {
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchDecision skipped because current session is null");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        SendRuntimeIntent effectiveRuntimeIntent = runtimeIntent != null ? runtimeIntent : SendRuntimeIntent.empty();
+        String currentRuntimeFamily = SessionRuntimeFamily.resolve(
+                currentSession.getProvider(),
+                null,
+                currentSession.getState().getCodexSessionBinding()
+        );
+        if (!effectiveRuntimeIntent.isMeaningful()) {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchDecision"
+                    + ", requiresSwitch=false"
+                    + ", switchReason=runtime_intent_empty"
+                    + ", runtimeIntent=" + effectiveRuntimeIntent.toLogString()
+                    + ", currentProvider=" + firstNonBlank(currentSession.getProvider())
+                    + ", currentRuntimeFamily=" + firstNonBlank(currentRuntimeFamily)
+                    + ", currentModel=" + firstNonBlank(currentSession.getModel()));
+            return CompletableFuture.completedFuture(currentSession);
+        }
+
+        String switchReason;
+        try {
+            switchReason = effectiveRuntimeIntent.determineSwitchReason(currentSession);
+        } catch (IllegalArgumentException error) {
+            // 中文注释：这里显式把参数缺失类错误收敛成 failed future，
+            // 让 SessionHandler 仍然沿用既有的异步发送失败链路，而不是被同步异常直接打断。
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchFailed"
+                    + ", switchReason=runtime_intent_invalid"
+                    + ", runtimeIntent=" + effectiveRuntimeIntent.toLogString()
+                    + ", currentProvider=" + firstNonBlank(currentSession.getProvider())
+                    + ", currentRuntimeFamily=" + firstNonBlank(currentRuntimeFamily)
+                    + ", currentModel=" + firstNonBlank(currentSession.getModel())
+                    + ", error=" + error.getMessage(), error);
+            CompletableFuture<ClaudeSession> failed = new CompletableFuture<>();
+            failed.completeExceptionally(error);
+            return failed;
+        }
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchDecision"
+                + ", requiresSwitch=" + hasText(switchReason)
+                + ", switchReason=" + firstNonBlank(switchReason, "(none)")
+                + ", runtimeIntent=" + effectiveRuntimeIntent.toLogString()
+                + ", currentProvider=" + firstNonBlank(currentSession.getProvider())
+                + ", currentRuntimeFamily=" + firstNonBlank(currentRuntimeFamily)
+                + ", currentModel=" + firstNonBlank(currentSession.getModel()));
+        if (!hasText(switchReason)) {
+            return CompletableFuture.completedFuture(currentSession);
+        }
+
+        String sourceSessionId = resolveContinuationSourceSessionId(currentSession, null);
+        if (!hasText(sourceSessionId) && canApplyRuntimeIntentInPlace(currentSession)) {
+            applyRuntimeIntentToSession(
+                    currentSession,
+                    effectiveRuntimeIntent,
+                    "prepareSessionForSend.applyInPlace"
+            );
+            currentSession.getState().setSendTimeRuntimeSwitchPending(false);
+            syncHandlerRuntimeState(currentSession);
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchCompleted"
+                    + ", mode=apply_in_place"
+                    + ", switchReason=" + switchReason
+                    + ", sessionId=" + firstNonBlank(currentSession.getSessionId())
+                    + ", runtimeIntent=" + effectiveRuntimeIntent.toLogString()
+                    + ", provider=" + firstNonBlank(currentSession.getProvider())
+                    + ", model=" + firstNonBlank(currentSession.getModel())
+                    + ", binding=" + describeBinding(currentSession.getState().getCodexSessionBinding()));
+            return CompletableFuture.completedFuture(currentSession);
+        }
+
+        if (!hasText(sourceSessionId)) {
+            String errorMessage = "Failed to prepare send-time runtime switch: missing source session anchor";
+            LOG.warn(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchFailed"
+                    + ", switchReason=" + switchReason
+                    + ", runtimeIntent=" + effectiveRuntimeIntent.toLogString()
+                    + ", sessionId=" + firstNonBlank(currentSession.getSessionId())
+                    + ", activeSegmentSessionId=" + firstNonBlank(currentSession.getState().getActiveSegmentSessionId())
+                    + ", continuationSourceSessionId="
+                    + firstNonBlank(currentSession.getState().getContinuationSourceSessionId())
+                    + ", parentSegmentSessionId=" + firstNonBlank(currentSession.getState().getParentSegmentSessionId())
+                    + ", error=" + errorMessage);
+            CompletableFuture<ClaudeSession> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new IllegalStateException(errorMessage));
+            return failed;
+        }
+
+        return createSilentContinuedSessionForSend(currentSession, effectiveRuntimeIntent, switchReason, sourceSessionId);
+    }
+
+    /**
+     * 判断当前会话是否仍然是“尚未真正落地到任何 source session”的空白会话。
+     * 这种场景下用户只是先切了选择器、再发送首条消息，此时不需要创建 continued 分段，
+     * 直接把目标 runtime 应用到当前空白 session 即可。
+     *
+     * @param session 当前准备发送的会话
+     * @return true 表示可安全原地应用 runtimeIntent，而无需创建新分段
+     */
+    private boolean canApplyRuntimeIntentInPlace(ClaudeSession session) {
+        if (session == null) {
+            return false;
+        }
+        SessionState state = session.getState();
+        boolean hasAnySourceAnchor = hasText(firstNonBlank(
+                session.getSessionId(),
+                state != null ? state.getActiveSegmentSessionId() : null,
+                state != null ? state.getContinuationSourceSessionId() : null,
+                state != null ? state.getParentSegmentSessionId() : null
+        ));
+        boolean hasMessages = session.getMessages() != null && !session.getMessages().isEmpty();
+        return !hasAnySourceAnchor && !hasMessages && (state == null || !state.isContinuationPending());
+    }
+
+    /**
+     * 执行发送时静默 runtime 切段。
+     * 该链路只在真正发送前触发：先基于当前活动分段构建最小 continued 元数据，再把新 session 直接返回给发送链路复用，
+     * 整个过程中不进入前端显式 pending/clearMessages 过渡态。
+     *
+     * @param oldSession 当前活动会话
+     * @param runtimeIntent 本条消息声明的目标 runtime
+     * @param switchReason 触发切段的首个差异原因
+     * @param sourceSessionId 续接链路应绑定的稳定 source sessionId
+     * @return 已准备好的新会话；失败时以异常结束并回滚到旧会话
+     */
+    private CompletableFuture<ClaudeSession> createSilentContinuedSessionForSend(
+            ClaudeSession oldSession,
+            SendRuntimeIntent runtimeIntent,
+            String switchReason,
+            String sourceSessionId
+    ) {
+        CompletableFuture<ClaudeSession> result = new CompletableFuture<>();
+        ContinuedSegmentRequest request = buildSendTimeContinuedSegmentRequest(
+                oldSession,
+                runtimeIntent,
+                switchReason,
+                sourceSessionId
+        );
+        String previousPermissionMode = oldSession.getPermissionMode();
+        String workingDirectory = determineWorkingDirectory();
+        StreamMessageCoalescer streamCoalescer = host.getStreamCoalescer();
+        if (streamCoalescer != null) {
+            streamCoalescer.resetStreamState();
+        }
+        host.invalidateSessionCallbacks();
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchBegin"
+                + ", switchReason=" + switchReason
+                + ", sourceSessionId=" + sourceSessionId
+                + ", runtimeIntent=" + runtimeIntent.toLogString());
+
+        oldSession.interrupt().thenRun(() -> {
+            try {
+                if (host.getClaudeSDKBridge() != null) {
+                    host.getClaudeSDKBridge().resetPersistentRuntime(oldSession.getRuntimeSessionEpoch());
+                }
+
+                ClaudeSession newSession = createDefaultSession();
+                newSession.setPermissionMode(previousPermissionMode);
+                applyRuntimeIntentToSession(
+                        newSession,
+                        runtimeIntent,
+                        "prepareSessionForSend.prepareNewSession"
+                );
+                primeContinuationMetadata(oldSession, newSession, request, sourceSessionId);
+                newSession.getState().setSendTimeRuntimeSwitchPending(true);
+
+                attachPreparedSession(newSession);
+                newSession.setSessionInfo(null, workingDirectory);
+                fetchSlashCommandsOnStartup();
+                ApplicationManager.getApplication().invokeLater(this::resetTokenUsage);
+
+                LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchCompleted"
+                        + ", mode=continued_segment_prepared"
+                        + ", switchReason=" + switchReason
+                        + ", sourceSessionId=" + sourceSessionId
+                        + ", runtimeIntent=" + runtimeIntent.toLogString()
+                        + ", provider=" + firstNonBlank(newSession.getProvider())
+                        + ", model=" + firstNonBlank(newSession.getModel())
+                        + ", reasoningEffort=" + firstNonBlank(newSession.getReasoningEffort())
+                        + ", binding=" + describeBinding(newSession.getState().getCodexSessionBinding()));
+                result.complete(newSession);
+            } catch (Exception e) {
+                rollbackFailedPreparedSessionForSend(oldSession, host.getSession(), e.getMessage());
+                LOG.error(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchFailed"
+                        + ", switchReason=" + switchReason
+                        + ", runtimeIntent=" + runtimeIntent.toLogString()
+                        + ", error=" + e.getMessage(), e);
+                result.completeExceptionally(e);
+            }
+        }).exceptionally(ex -> {
+            Throwable cause = ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null
+                    ? ex.getCause()
+                    : ex;
+            rollbackFailedPreparedSessionForSend(oldSession, host.getSession(), cause != null ? cause.getMessage() : null);
+            LOG.error(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchFailed"
+                    + ", switchReason=" + switchReason
+                    + ", runtimeIntent=" + runtimeIntent.toLogString()
+                    + ", error=" + (cause != null ? cause.getMessage() : "unknown error"), cause);
+            result.completeExceptionally(cause != null ? cause : ex);
+            return null;
+        });
+
+        return result;
+    }
+
+    /**
+     * 构建 send-time silent switch 使用的 continued 请求对象。
+     * 与前端显式 `create_continued_segment` 不同，这里不依赖前端缓存中的过渡态，只从当前会话与 runtimeIntent 生成最小闭环请求。
+     *
+     * @param oldSession 作为来源的当前活动会话
+     * @param runtimeIntent 本条消息声明的目标 runtime
+     * @param switchReason 触发切段的首个差异原因
+     * @param sourceSessionId 已解析出的稳定 source sessionId
+     * @return 可直接复用现有 continued 元数据逻辑的请求对象
+     */
+    private ContinuedSegmentRequest buildSendTimeContinuedSegmentRequest(
+            ClaudeSession oldSession,
+            SendRuntimeIntent runtimeIntent,
+            String switchReason,
+            String sourceSessionId
+    ) {
+        String targetRuntimeFamily = runtimeIntent.resolveTargetRuntimeFamily();
+        String targetProvider = SessionRuntimeFamily.CODEX.equals(targetRuntimeFamily)
+                ? SessionRuntimeFamily.CODEX
+                : firstNonBlank(runtimeIntent.getTargetProvider(), SessionRuntimeFamily.CLAUDE);
+        return new ContinuedSegmentRequest(
+                firstNonBlank(
+                        oldSession != null ? oldSession.getState().getLogicalConversationId() : null,
+                        resolveLogicalConversationIdBySessionId(sourceSessionId)
+                ),
+                sourceSessionId,
+                targetProvider,
+                targetRuntimeFamily,
+                runtimeIntent.getTargetModel(),
+                runtimeIntent.getTargetReasoningEffort(),
+                runtimeIntent.getTargetCodexProviderId(),
+                "send_time_" + firstNonBlank(switchReason, "unknown")
+        );
+    }
+
+    /**
+     * 将 runtimeIntent 应用到指定会话。
+     * 该入口统一负责 provider/model/reasoning 与 Codex binding 的写入，避免 send-time 原地切换与 continued 新分段初始化各写一套逻辑。
+     *
+     * @param session 待写入目标 runtime 的会话
+     * @param runtimeIntent 本条消息声明的目标 runtime
+     * @param source 本次 live runtime 改写的调用来源，便于区分发送前原地切换与新分段初始化
+     */
+    private void applyRuntimeIntentToSession(
+            ClaudeSession session,
+            SendRuntimeIntent runtimeIntent,
+            String source
+    ) {
+        if (session == null || runtimeIntent == null) {
+            return;
+        }
+        String targetRuntimeFamily = runtimeIntent.resolveTargetRuntimeFamily();
+        String targetProvider = SessionRuntimeFamily.CODEX.equals(targetRuntimeFamily)
+                ? SessionRuntimeFamily.CODEX
+                : firstNonBlank(runtimeIntent.getTargetProvider(), SessionRuntimeFamily.CLAUDE);
+        session.setProvider(targetProvider);
+        if (hasText(runtimeIntent.getTargetModel())) {
+            session.setModel(runtimeIntent.getTargetModel());
+        }
+        if (hasText(runtimeIntent.getTargetReasoningEffort())) {
+            session.setReasoningEffort(runtimeIntent.getTargetReasoningEffort());
+        }
+        session.getState().setCodexSessionBinding(
+                SessionRuntimeFamily.CODEX.equals(targetRuntimeFamily)
+                        ? buildCodexBindingFromProvider(
+                                runtimeIntent.getTargetCodexProviderId(),
+                                runtimeIntent.getTargetModel()
+                        )
+                        : null
+        );
+        logActiveRuntimeMutated(session, source);
+    }
+
+    /**
+     * 把准备好的新会话挂到当前窗口上下文。
+     * 该入口与显式 continued 流程保持同一套 host/handlerContext/runtimeState 同步动作，避免发送链路绕开现有会话回调安装逻辑。
+     *
+     * @param session 已初始化 runtime 与 continued 元数据、等待复用的目标会话
+     */
+    private void attachPreparedSession(ClaudeSession session) {
+        host.clearPendingPermissionRequests();
+        host.clearPermissionDecisionMemory();
+        host.setSession(session);
+        if (host.getHandlerContext() != null) {
+            host.getHandlerContext().setSession(session);
+        }
+        syncHandlerRuntimeState(session);
+        host.setupSessionCallbacks();
+    }
+
+    /**
+     * 在 send-time silent switch 失败时回滚到旧会话。
+     * 与显式 continued 失败不同，这里不能向前端发送 abort/historyLoadComplete 等旧过渡回调，
+     * 否则会把本应“用户无感知”的发送前准备暴露成显式切段失败提示。
+     *
+     * @param previousSession 切段前的旧会话
+     * @param failedSession 已挂到 host 上、但后续准备失败的新会话
+     * @param errorMessage 失败原因摘要
+     */
+    private void rollbackFailedPreparedSessionForSend(
+            ClaudeSession previousSession,
+            ClaudeSession failedSession,
+            String errorMessage
+    ) {
+        boolean shouldRestorePreviousSession = previousSession != null
+                && failedSession != null
+                && host.getSession() == failedSession;
+        if (shouldRestorePreviousSession) {
+            host.setSession(previousSession);
+            if (host.getHandlerContext() != null) {
+                host.getHandlerContext().setSession(previousSession);
+            }
+            host.clearPendingPermissionRequests();
+            host.clearPermissionDecisionMemory();
+            syncHandlerRuntimeState(previousSession);
+            host.setupSessionCallbacks();
+        }
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " rollbackFailedPreparedSessionForSend"
+                + ", restoredPreviousSession=" + shouldRestorePreviousSession
+                + ", previousSessionId=" + firstNonBlank(previousSession != null ? previousSession.getSessionId() : null)
+                + ", failedSessionId=" + firstNonBlank(failedSession != null ? failedSession.getSessionId() : null)
+                + ", error=" + firstNonBlank(errorMessage, "unknown error"));
+    }
+
     protected void rollbackFailedContinuedSessionCreation(
             ClaudeSession previousSession,
             ClaudeSession failedSession,
@@ -384,6 +723,7 @@ public class SessionLifecycleManager {
             }
             newSession.getState().setPsiContextEnabled(template.isPsiContextEnabled());
             copyCodexSessionBindingIfPresent(oldSession, newSession);
+            logActiveRuntimeMutated(newSession, "createNewSessionFromTemplate.applyTemplate");
 
             LOG.info("Applied template settings to new session: provider=" + template.getProvider()
                     + ", model=" + template.getModel() + ", mode=" + template.getPermissionMode());
@@ -532,6 +872,7 @@ public class SessionLifecycleManager {
                                     ? projectPath : determineWorkingDirectory();
             newSession.setSessionInfo(sessionId, workingDir);
             restoreCodexSessionBindingIfPresent(newSession, sessionId);
+            logActiveRuntimeMutated(newSession, "loadHistorySession.prepareLoadedSession");
             LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " loadHistorySession prepared newSession sessionId="
                     + firstNonBlank(sessionId)
                     + ", resolvedProvider=" + firstNonBlank(resolvedProvider)
@@ -934,6 +1275,7 @@ public class SessionLifecycleManager {
                 session.setModel(binding.getModel());
             }
             session.getState().setCodexSessionBinding(binding);
+            logActiveRuntimeMutated(session, "restoreCodexSessionBindingIfPresent");
             LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " restoreCodexSessionBindingIfPresent sessionId="
                     + sessionId + ", binding=" + describeBinding(binding));
             LOG.info("[CODEX_RUNTIME] Restored Codex session binding during history load. sessionId="
@@ -1153,6 +1495,7 @@ public class SessionLifecycleManager {
         if (SessionRuntimeFamily.CODEX.equals(targetRuntimeFamily) || hasText(targetCodexProviderId)) {
             session.getState().setCodexSessionBinding(buildCodexBindingFromProvider(targetCodexProviderId, targetModel));
         }
+        logActiveRuntimeMutated(session, "completeContinuedSegment.applyResolvedRuntime");
         refreshContinuedLogicalConversationMessages(
                 newSessionId,
                 logicalConversationId,
@@ -2198,6 +2541,36 @@ public class SessionLifecycleManager {
                 + "}";
     }
 
+    /**
+     * 记录当前会话的 live runtime 已被真实改写。
+     * 这里与 `selectionPersistedOnly` 形成明确区分：前者表示当前活动会话或即将挂载的新会话运行态已变化，
+     * 后者只表示聊天区“目标选择态”被记住但尚未污染 live session。
+     *
+     * @param session 已发生 provider/model/reasoning/binding 改写的会话
+     * @param source 触发本次改写的调用来源
+     */
+    private void logActiveRuntimeMutated(ClaudeSession session, String source) {
+        if (session == null) {
+            return;
+        }
+        SessionState state = session.getState();
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " activeRuntimeMutated"
+                + ", source=" + firstNonBlank(source, "unknown")
+                + ", sessionId=" + firstNonBlank(session.getSessionId())
+                + ", provider=" + firstNonBlank(session.getProvider())
+                + ", runtimeFamily=" + firstNonBlank(SessionRuntimeFamily.resolve(
+                session.getProvider(),
+                null,
+                state != null ? state.getCodexSessionBinding() : null
+        ))
+                + ", model=" + firstNonBlank(session.getModel())
+                + ", reasoningEffort=" + firstNonBlank(session.getReasoningEffort())
+                + ", logicalConversationId=" + firstNonBlank(state != null ? state.getLogicalConversationId() : null)
+                + ", activeSegmentSessionId=" + firstNonBlank(state != null ? state.getActiveSegmentSessionId() : null)
+                + ", continuationPending=" + (state != null && state.isContinuationPending())
+                + ", binding=" + describeBinding(state != null ? state.getCodexSessionBinding() : null));
+    }
+
     private void completeNewSessionBootstrap(ClaudeSession newSession, String workingDirectory, String successLogPrefix) {
         host.clearPendingPermissionRequests();
         host.clearPermissionDecisionMemory();
@@ -2234,10 +2607,12 @@ public class SessionLifecycleManager {
         }
 
         SessionState state = session.getState();
+        boolean sendTimeRuntimeSwitchPending = state.isSendTimeRuntimeSwitchPending();
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " onSessionIdAssigned continuationPending sessionId="
                 + firstNonBlank(newSessionId)
                 + ", logicalConversationId=" + firstNonBlank(state.getLogicalConversationId())
                 + ", sourceSessionId=" + firstNonBlank(state.getContinuationSourceSessionId())
+                + ", sendTimeRuntimeSwitchPending=" + sendTimeRuntimeSwitchPending
                 + ", provider=" + firstNonBlank(session.getProvider())
                 + ", runtimeFamily=" + SessionRuntimeFamily.resolve(session.getProvider(), null, state.getCodexSessionBinding())
                 + ", model=" + firstNonBlank(session.getModel())
@@ -2253,26 +2628,77 @@ public class SessionLifecycleManager {
                 "session_id_assigned"
         );
 
-        Application continuationApplication = ApplicationManager.getApplication();
+        dispatchContinuedSegmentReadySignal(state, sendTimeRuntimeSwitchPending);
+    }
+
+    /**
+     * 在 continued 元数据收口完成后，向前端补发所需的收口信号。
+     * 显式 continued 仍沿用旧的异步 ready/toast 提示链路；而 send-time silent switch
+     * 只需要同步 logicalConversationId / activeSegmentSessionId，不应再把本次无感切段暴露成显式过渡提示。
+     *
+     * @param state 已完成 continued 元数据补齐的会话状态
+     * @param sendTimeRuntimeSwitchPending true 表示本次收口来源于发送时静默 runtime 切段
+     */
+    private void dispatchContinuedSegmentReadySignal(
+            SessionState state,
+            boolean sendTimeRuntimeSwitchPending
+    ) {
         Runnable notifyContinuedSegmentReady = () -> {
-            // 中文注释：显式桥接 continued 生命周期完成信号，避免前端继续把“首帧消息到达”
-            // 当作唯一的收口条件。这样即使首帧快照延迟，continued 的 pending/source 状态也能先正确收口。
-            host.callJavaScript(
-                    "window.completeContinuedSegmentTransition",
-                    JsUtils.escapeJs(buildContinuedSegmentCompletionPayload(state))
-            );
-            // continued segment 只有在真实 sessionId 已经落地后才能释放前端 guard，
-            // 否则前端会把“继续”误当成可发送状态，进而在空 sessionId 上启动新一轮发送。
-            host.callJavaScript("historyLoadComplete");
-            host.callJavaScript("updateStatus",
-                    JsUtils.escapeJs(ClaudeCodeGuiBundle.message("toast.conversationContinuedReady")));
-            resetTokenUsage();
+            try {
+                notifyContinuedSegmentReady(state, sendTimeRuntimeSwitchPending);
+            } finally {
+                if (state != null) {
+                    state.setSendTimeRuntimeSwitchPending(false);
+                }
+            }
         };
+
+        if (sendTimeRuntimeSwitchPending) {
+            // 中文注释：发送时静默切段本来就没有进入前端显式 pending 过渡态，
+            // 因此这里直接同步收口即可，避免再依赖 invokeLater/ready toast 暴露旧的 continued 体验。
+            notifyContinuedSegmentReady.run();
+            return;
+        }
+
+        Application continuationApplication = ApplicationManager.getApplication();
         if (continuationApplication != null) {
             continuationApplication.invokeLater(notifyContinuedSegmentReady);
         } else {
             notifyContinuedSegmentReady.run();
         }
+    }
+
+    /**
+     * 执行 continued 收口后的具体前端通知。
+     * 无论显式 continued 还是 send-time silent switch，都需要补齐结构化会话元数据；
+     * 只有显式 continued 才需要释放旧的历史加载 guard 并展示 ready toast。
+     *
+     * @param state 已完成 continued 元数据补齐的会话状态
+     * @param sendTimeRuntimeSwitchPending true 表示当前收口属于发送时静默切段
+     */
+    private void notifyContinuedSegmentReady(
+            SessionState state,
+            boolean sendTimeRuntimeSwitchPending
+    ) {
+        // 中文注释：无论是否静默切段，都要把最新 logicalConversationId / activeSegmentSessionId
+        // 明确同步给前端，避免下一轮发送仍然使用旧的活动分段锚点。
+        host.callJavaScript(
+                "window.completeContinuedSegmentTransition",
+                JsUtils.escapeJs(buildContinuedSegmentCompletionPayload(state))
+        );
+
+        if (!sendTimeRuntimeSwitchPending) {
+            // continued segment 只有在真实 sessionId 已经落地后才能释放前端 guard，
+            // 否则前端会把“继续”误当成可发送状态，进而在空 sessionId 上启动新一轮发送。
+            host.callJavaScript("historyLoadComplete");
+            host.callJavaScript("updateStatus",
+                    JsUtils.escapeJs(ClaudeCodeGuiBundle.message("toast.conversationContinuedReady")));
+        } else {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " onSessionIdAssigned silent switch skip explicit ready signals"
+                    + ", sessionId=" + firstNonBlank(state != null ? state.getActiveSegmentSessionId() : null)
+                    + ", logicalConversationId=" + firstNonBlank(state != null ? state.getLogicalConversationId() : null));
+        }
+        resetTokenUsage();
     }
 
     /**

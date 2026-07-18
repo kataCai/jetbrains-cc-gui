@@ -69,6 +69,12 @@ interface Window {
   onExportSessionData?: (json: string) => void;
 
   /**
+   * 仅用于诊断的完整 transcript 导出入口。
+   * 该入口直接导出前端真实 message array，不受 MessageList 折叠窗口和可视滚动区域限制。
+   */
+  exportFrontendTranscriptDiagnosticSnapshot?: (json?: string) => void;
+
+  /**
    * Clear all messages
    */
   clearMessages?: () => void;

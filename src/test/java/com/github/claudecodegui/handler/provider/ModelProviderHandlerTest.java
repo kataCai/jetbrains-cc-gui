@@ -142,7 +142,7 @@ public class ModelProviderHandlerTest {
     }
 
     @Test
-    public void shouldKeepSelectCodexModelScopedToCurrentTab() {
+    public void shouldKeepSelectCodexModelScopedToCurrentTabWithoutMutatingActiveSession() {
         RecordingJsCallback jsCallback = new RecordingJsCallback();
         TabScopedSettingsService settingsService = new TabScopedSettingsService();
         settingsService.addProvider("provider-a", "gpt-5.4");
@@ -160,24 +160,18 @@ public class ModelProviderHandlerTest {
         assertFalse(settingsService.selectCodexModelCalled);
         assertEquals("provider-a", settingsService.lastSetSelectedProviderId);
         assertEquals("gpt-5.4", settingsService.lastSetSelectedModelId);
-        assertEquals("codex", session.getProvider());
-        assertEquals("gpt-5.4", session.getModel());
-        CodexSessionBinding binding = session.getState().getCodexSessionBinding();
-        assertNotNull(binding);
-        assertEquals("provider-a", binding.getProviderId());
-        assertEquals("gpt-5.4", binding.getModel());
-        assertEquals(1, persistCount.get());
-        assertTrue(jsCallback.functionNames.contains("window.restoreTabRuntimeState"));
-
-        JsonObject runtimePayload = jsCallback.findFirstPayload("window.restoreTabRuntimeState");
-        assertEquals("codex", runtimePayload.get("provider").getAsString());
-        assertEquals("codex", runtimePayload.get("runtimeFamily").getAsString());
-        assertEquals("gpt-5.4", runtimePayload.get("model").getAsString());
-        assertEquals("provider-a", runtimePayload.get("codexProviderId").getAsString());
+        assertEquals("codex", context.getCurrentProvider());
+        assertEquals("gpt-5.4", context.getCurrentModel());
+        // 中文注释：聊天区下拉切换只更新“下一条消息想用的目标模型”，
+        // 当前正在运行的物理 session 必须保持原样，避免选择器立刻污染 live runtime。
+        assertTrue(session.getState().getCodexSessionBinding() == null);
+        assertFalse("gpt-5.4".equals(session.getModel()));
+        assertEquals(0, persistCount.get());
+        assertFalse(jsCallback.functionNames.contains("window.restoreTabRuntimeState"));
     }
 
     @Test
-    public void shouldSwitchTabCodexProviderWithoutMutatingGlobalCurrentProvider() {
+    public void shouldSwitchTabCodexProviderWithoutMutatingActiveSession() {
         RecordingJsCallback jsCallback = new RecordingJsCallback();
         TabScopedSettingsService settingsService = new TabScopedSettingsService();
         settingsService.addProvider("provider-a", "gpt-5.4");
@@ -205,15 +199,15 @@ public class ModelProviderHandlerTest {
         handler.handleSetTabCodexProvider("{\"providerId\":\"provider-b\"}");
 
         assertFalse(settingsService.selectCodexModelCalled);
-        assertEquals("", settingsService.lastSetSelectedProviderId);
-        assertEquals("provider-b", session.getState().getCodexSessionBinding().getProviderId());
-        assertEquals("gpt-5.5", session.getModel());
-        assertEquals(1, persistCount.get());
-
-        JsonObject runtimePayload = jsCallback.findFirstPayload("window.restoreTabRuntimeState");
-        assertEquals("codex", runtimePayload.get("runtimeFamily").getAsString());
-        assertEquals("provider-b", runtimePayload.get("codexProviderId").getAsString());
-        assertEquals("gpt-5.5", runtimePayload.get("model").getAsString());
+        assertEquals("provider-b", settingsService.lastSetSelectedProviderId);
+        assertEquals("gpt-5.5", settingsService.lastSetSelectedModelId);
+        assertEquals("codex", context.getCurrentProvider());
+        assertEquals("gpt-5.5", context.getCurrentModel());
+        // 中文注释：provider 下拉同样属于 desired selection，旧 session 绑定仍应保持 provider-a。
+        assertEquals("provider-a", session.getState().getCodexSessionBinding().getProviderId());
+        assertEquals("gpt-5.4", session.getModel());
+        assertEquals(0, persistCount.get());
+        assertFalse(jsCallback.functionNames.contains("window.restoreTabRuntimeState"));
     }
 
     @Test
@@ -245,8 +239,30 @@ public class ModelProviderHandlerTest {
         ModelProviderHandler handler = new ModelProviderHandler(context, new UsagePushService(context));
         handler.handleSetReasoningEffort("{\"reasoningEffort\":\"low\"}");
 
-        assertEquals("low", context.getSession().getReasoningEffort());
         assertEquals("low", settingsService.lastReasoningEffort);
+        assertFalse("low".equals(context.getSession().getReasoningEffort()));
+    }
+
+    @Test
+    public void shouldKeepSelectionOnlyEventsOutOfActiveSessionForClaudeProviderAndModel() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TabScopedSettingsService settingsService = new TabScopedSettingsService();
+        HandlerContext context = new HandlerContext(createProject(), null, null, settingsService, jsCallback);
+        ClaudeSession session = new ClaudeSession(createProject(), null, null);
+        session.setProvider("claude");
+        session.setModel("claude-sonnet-4-6");
+        context.setSession(session);
+
+        ModelProviderHandler handler = new ModelProviderHandler(context, new UsagePushService(context));
+        handler.handleSetProvider("{\"provider\":\"codex\"}");
+        handler.handleSetModel("{\"model\":\"gpt-5.5\"}");
+
+        // 中文注释：上下文中的 desired provider/model 可以更新，供新会话或发送时 runtime intent 解析使用；
+        // 但当前活动 session 仍必须保留旧运行态，不能被聊天区选择器即时改写。
+        assertEquals("codex", context.getCurrentProvider());
+        assertEquals("gpt-5.5", context.getCurrentModel());
+        assertEquals("claude", session.getProvider());
+        assertEquals("claude-sonnet-4-6", session.getModel());
     }
 
     private static Project createProject() {

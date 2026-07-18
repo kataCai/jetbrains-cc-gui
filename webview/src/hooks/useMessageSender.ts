@@ -3,8 +3,21 @@ import type { TFunction } from 'i18next';
 import { sendBridgeEvent } from '../utils/bridge';
 import type { ClaudeContentBlock, ClaudeMessage } from '../types';
 import { apply1MContextSuffix } from '../components/ChatInputBox/types';
-import type { Attachment, ChatInputBoxHandle, PermissionMode, SelectedAgent } from '../components/ChatInputBox/types';
+import type {
+  Attachment,
+  ChatInputBoxHandle,
+  PermissionMode,
+  ReasoningEffort,
+  SelectedAgent,
+} from '../components/ChatInputBox/types';
 import type { ViewMode } from './useModelProviderState';
+import { debugLog } from '../utils/debug';
+import { buildRuntimeSelectionState, type RuntimeSelectionState } from '../types/runtimeSelection';
+import {
+  resolveRuntimeIntentForMessage,
+  type RuntimeIntent,
+  type RuntimeIntentMessageSource,
+} from '../types/runtimeIntent';
 
 /**
  * Command sets for local handling (shared with App.tsx to avoid duplication)
@@ -54,6 +67,9 @@ export interface UseMessageSenderOptions {
   continuationPending?: boolean;
   currentSessionIdRef?: MutableRefObject<string | null>;
   continuationPendingRef?: MutableRefObject<boolean>;
+  reasoningEffort?: ReasoningEffort;
+  desiredRuntimeSelectionRef?: MutableRefObject<RuntimeSelectionState>;
+  activeSessionRuntimeSnapshotRef?: MutableRefObject<RuntimeSelectionState>;
 }
 
 /**
@@ -122,6 +138,9 @@ export function useMessageSender({
   continuationPending = false,
   currentSessionIdRef,
   continuationPendingRef,
+  reasoningEffort,
+  desiredRuntimeSelectionRef,
+  activeSessionRuntimeSnapshotRef,
 }: UseMessageSenderOptions) {
   /**
    * Check if the input is a new session command
@@ -278,18 +297,20 @@ export function useMessageSender({
     attachments: Attachment[] | undefined,
     agentInfo: { id: string; name: string; prompt?: string } | null,
     fileTagsInfo: { displayPath: string; absolutePath: string }[] | null,
-    requestedPermissionMode: PermissionMode
+    requestedPermissionMode: PermissionMode,
+    runtimeIntent: RuntimeIntent,
   ) => {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-    const effectivePermissionMode: PermissionMode = currentProvider === 'codex' && requestedPermissionMode === 'plan'
+    const effectivePermissionMode: PermissionMode = runtimeIntent.targetProvider === 'codex' && requestedPermissionMode === 'plan'
       ? 'default'
       : requestedPermissionMode;
     const requestedUsageMode = requestedPermissionMode === 'plan' ? 'plan' : 'chat';
     console.debug('[ModeSync][Frontend] send request mode', {
-      provider: currentProvider,
+      provider: runtimeIntent.targetProvider,
       requestedMode: requestedPermissionMode,
       effectiveMode: effectivePermissionMode,
       requestedUsageMode,
+      runtimeIntent,
     });
 
     if (hasAttachments) {
@@ -305,6 +326,7 @@ export function useMessageSender({
           fileTags: fileTagsInfo,
           permissionMode: effectivePermissionMode,
           requestedUsageMode,
+          runtimeIntent,
         });
         sendBridgeEvent('send_message_with_attachments', payload);
       } catch (error) {
@@ -315,6 +337,7 @@ export function useMessageSender({
           fileTags: fileTagsInfo,
           permissionMode: effectivePermissionMode,
           requestedUsageMode,
+          runtimeIntent,
         });
         sendBridgeEvent('send_message', fallbackPayload);
       }
@@ -325,20 +348,65 @@ export function useMessageSender({
         fileTags: fileTagsInfo,
         permissionMode: effectivePermissionMode,
         requestedUsageMode,
+        runtimeIntent,
       });
       sendBridgeEvent('send_message', payload);
     }
-  }, [currentProvider]);
+  }, []);
 
   /**
-   * Execute message sending (from queue or directly)
+   * 在真正执行发送前解析本条消息的 runtime intent。
+   * 普通聊天走“执行时动态解析”，锁定任务则直接复用入队时保存的 `lockedRuntimeIntent`；
+   * 这里优先读取最新 ref，而不是依赖 render 时闭包里的 provider/model，
+   * 以保证排队消息出队时跟随“最终选择”的运行时。
+   *
+   * @param source 本条消息的来源；普通聊天传 `{ kind: 'chat' }`，锁定任务传显式 `locked_task`
+   * @return 包含 runtime intent 与切换决策的解析结果
    */
-  const executeMessage = useCallback((content: string, attachments?: Attachment[]) => {
+  const resolveSendRuntimeIntent = useCallback((source: RuntimeIntentMessageSource) => {
+    const fallbackSelection = buildRuntimeSelectionState({
+      provider: currentProvider,
+      model: selectedModel,
+      reasoningEffort,
+    });
+    const desiredSelection = buildRuntimeSelectionState(
+      desiredRuntimeSelectionRef?.current ?? fallbackSelection,
+      fallbackSelection,
+    );
+    const activeSelection = buildRuntimeSelectionState(
+      activeSessionRuntimeSnapshotRef?.current ?? desiredSelection,
+      desiredSelection,
+    );
+    return resolveRuntimeIntentForMessage(source, desiredSelection, activeSelection);
+  }, [
+    activeSessionRuntimeSnapshotRef,
+    currentProvider,
+    desiredRuntimeSelectionRef,
+    reasoningEffort,
+    selectedModel,
+  ]);
+
+  /**
+   * 执行一条消息发送。
+   * 该入口同时服务直接提交和队列出队；若第三个参数显式传入 `locked_task`，
+   * 则必须沿用锁定 runtime，不得再被当前聊天区选择器覆盖。
+   *
+   * @param content 消息文本
+   * @param attachments 可选附件
+   * @param source 消息来源；默认按普通聊天处理
+   * @return 无返回值
+   */
+  const executeMessage = useCallback((
+    content: string,
+    attachments?: Attachment[],
+    source: RuntimeIntentMessageSource = { kind: 'chat' },
+  ) => {
     const text = content.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
 
     if (!text && !hasAttachments) return;
 
+    const resolvedRuntimeIntent = resolveSendRuntimeIntent(source);
     const effectiveCurrentSessionId = currentSessionIdRef ? currentSessionIdRef.current : currentSessionId;
     const effectiveContinuationPending = continuationPendingRef ? continuationPendingRef.current : continuationPending;
     const allowContinuedFirstSendWithoutSessionId = isContinuedSegmentReadyForFirstSend();
@@ -356,6 +424,15 @@ export function useMessageSender({
       );
       return;
     }
+
+    debugLog('[CODEX_RUNTIME_TRACE][Webview] resolveRuntimeIntentForMessage', {
+      sourceKind: resolvedRuntimeIntent.runtimeIntent.sourceKind,
+      resolutionPolicy: resolvedRuntimeIntent.runtimeIntent.resolutionPolicy,
+      desiredSelection: resolvedRuntimeIntent.desiredSelection,
+      activeSelection: resolvedRuntimeIntent.activeSelection,
+      willSwitchRuntime: resolvedRuntimeIntent.willSwitchRuntime,
+      switchReason: resolvedRuntimeIntent.switchReason,
+    });
 
     // Check SDK status
     if (!sdkStatusLoaded) {
@@ -417,9 +494,6 @@ export function useMessageSender({
       }
     });
 
-    // Sync provider setting
-    sendBridgeEvent('set_provider', currentProvider);
-
     // Build agent info
     const agentInfo = selectedAgent ? {
       id: selectedAgent.id,
@@ -435,7 +509,14 @@ export function useMessageSender({
     })) : null;
 
     // Send message to backend
-    sendMessageToBackend(text, attachments, agentInfo, fileTagsInfo, permissionMode);
+    sendMessageToBackend(
+      text,
+      attachments,
+      agentInfo,
+      fileTagsInfo,
+      permissionMode,
+      resolvedRuntimeIntent.runtimeIntent,
+    );
   }, [
     addToast,
     sdkStatusLoaded,
@@ -448,6 +529,7 @@ export function useMessageSender({
     permissionMode,
     selectedAgent,
     buildUserContentBlocks,
+    resolveSendRuntimeIntent,
     sendMessageToBackend,
     t,
   ]);

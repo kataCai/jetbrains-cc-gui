@@ -37,6 +37,7 @@ export interface ResetTransientUiStateOptions {
  */
 export interface ResetTransientUiStateRunOptions {
   preserveContinuedPrefix?: boolean;
+  preservePreparedHistoryRestore?: boolean;
 }
 
 /**
@@ -68,9 +69,14 @@ export const buildResetTransientUiState = (opts: ResetTransientUiStateOptions) =
     opts.streamingTurnIdRef.current = -1;
     // Clear stream-end idempotency guard to avoid stale state across sessions.
     window.__streamEndProcessedTurnId = undefined;
-    // 清理尚未消费的历史恢复快照上下文，避免跨会话误复用。
-    window.__preparedHistoryRestoreKey = null;
-    window.__preparedHistoryRestoreSignature = null;
+    // 中文注释：普通 reset 仍需清空待消费的 restore 元数据，避免跨会话误复用；
+    // 但 authoritative restore 链路固定会先 `prepareHistoryRestoreSnapshot -> clearMessages -> updateMessages`，
+    // 因此 clearMessages 可显式要求在下一次 updateMessages 消费前保留这份上下文。
+    if (!runOptions.preservePreparedHistoryRestore) {
+      window.__preparedHistoryRestoreKey = null;
+      window.__preparedHistoryRestoreSignature = null;
+      window.__preparedHistoryRestoreKind = null;
+    }
     if (!runOptions.preserveContinuedPrefix) {
       // 中文注释：普通 session transition 复位时必须同时清掉 continued segment 的前缀缓存，
       // 否则旧分段消息可能在后续独立会话或历史恢复里被错误拼回界面。
@@ -107,4 +113,5 @@ export const releaseSessionTransition = (): void => {
   // 历史恢复链路在结束时清理待消费上下文，避免后续普通快照误命中历史 restore 逻辑。
   window.__preparedHistoryRestoreKey = null;
   window.__preparedHistoryRestoreSignature = null;
+  window.__preparedHistoryRestoreKind = null;
 };

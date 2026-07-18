@@ -4,7 +4,6 @@ import com.github.claudecodegui.handler.UsagePushService;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import com.github.claudecodegui.session.CodexSessionBinding;
-import com.github.claudecodegui.session.SessionRuntimeFamily;
 import com.github.claudecodegui.skill.SlashCommandRegistry;
 import com.github.claudecodegui.settings.CodexProviderManager;
 import com.github.claudecodegui.util.EditorFileUtils;
@@ -91,6 +90,13 @@ public class ModelProviderHandler {
                 + "}";
     }
 
+    /**
+     * 持久化聊天区当前选择的模型。
+     * 该入口只更新 handler 上下文中的“目标选择态”，供后续新建会话、发送时 runtime intent 解析和上下文容量展示使用；
+     * 不再直接改写当前活动 session 的 live runtime，避免用户仅切下拉框就污染正在运行的旧会话。
+     *
+     * @param content 模型 id 或包含 model 字段的 JSON 字符串
+     */
     public void handleSetModel(String content) {
         try {
             String model = content;
@@ -107,13 +113,12 @@ public class ModelProviderHandler {
 
             LOG.info("[ModelProviderHandler] Setting model to: " + model);
             context.setCurrentModel(model);
-
-            if (context.getSession() != null) {
-                context.getSession().setModel(model);
-                syncCodexSessionBindingModelIfNeeded(model);
-                LOG.info("[ModelProviderHandler] Updated session model to canonical ID: " + model);
-            }
-            context.requestTabSessionPersistence();
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " selectionPersistedOnly"
+                    + ", source=handleSetModel"
+                    + ", provider=" + safe(context.getCurrentProvider())
+                    + ", model=" + safe(model)
+                    + ", activeSessionId=" + currentSessionIdForTrace()
+                    + ", activeBinding=" + currentBindingForTrace());
 
             com.github.claudecodegui.notifications.ClaudeNotifier.setModel(context.getProject(), model);
 
@@ -125,7 +130,9 @@ public class ModelProviderHandler {
 
             final String confirmedModel = model;
             final String confirmedProvider = context.getCurrentProvider();
-            ApplicationManager.getApplication().invokeLater(() -> {
+            // 中文注释：模型选择确认本质上仍属于“目标选择态”回写，
+            // 单测环境没有 IDE Application 时应允许同步回调，避免 UI 调度掩盖真正的状态断言。
+            invokeLaterOrRun(() -> {
                 context.callJavaScript("window.onModelConfirmed", context.escapeJs(confirmedModel), context.escapeJs(confirmedProvider));
                 usagePushService.pushUsageUpdateAfterModelChange(newMaxTokens);
             });
@@ -202,9 +209,9 @@ public class ModelProviderHandler {
     }
 
     /**
-     * 原子切换 Codex provider 与 model。
-     * 该入口用于聊天区统一模型目录的选择事件，除更新配置外，还会同步刷新当前 session 上的 provider/model，
-     * 并清空旧 thread 绑定，确保下一条消息新建线程而不是复用旧 provider 的会话。
+     * 持久化聊天区当前选中的 Codex provider/model 组合。
+     * 该入口只收敛“下一条消息想发送到哪里”的目标选择态，并把结果写入 CC-GUI 自有配置；
+     * 不会直接改写当前活动 session 的 provider/model/binding，真正的 runtime 切换必须延后到发送链路。
      *
      * @param content 包含 providerId 与 modelId 的 JSON
      */
@@ -222,8 +229,7 @@ public class ModelProviderHandler {
                     + ", modelId=" + modelId
                     + ", sessionId=" + currentSessionIdForTrace()
                     + ", beforeBinding=" + currentBindingForTrace());
-            context.getSettingsService().setSelectedCodexModel(providerId, modelId);
-            applyTabScopedCodexRuntimeSelection(providerId, modelId);
+            persistTabScopedCodexSelection(providerId, modelId, "handleSelectCodexModel");
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to select Codex model atomically: " + e.getMessage(), e);
             ApplicationManager.getApplication().invokeLater(() ->
@@ -233,9 +239,9 @@ public class ModelProviderHandler {
     }
 
     /**
-     * 切换当前标签页的 Codex runtime provider。
-     * 这里只更新当前标签的会话绑定与前端运行态，不写全局 codex.current，
-     * 从而避免不同标签页之间互相覆盖对方的 provider 选择。
+     * 持久化当前标签页想使用的 Codex provider。
+     * 这里会基于 provider 配置解析一个对应模型并更新“目标选择态”，
+     * 但不会改写当前活动 session 的 live runtime，避免旧任务执行中被即时切 provider 污染。
      *
      * @param content 包含 providerId 的 JSON
      */
@@ -250,7 +256,7 @@ public class ModelProviderHandler {
                     + ", sessionId=" + currentSessionIdForTrace()
                     + ", beforeBinding=" + currentBindingForTrace());
             String modelId = resolveModelForTabCodexProvider(providerId);
-            applyTabScopedCodexRuntimeSelection(providerId, modelId);
+            persistTabScopedCodexSelection(providerId, modelId, "handleSetTabCodexProvider");
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to switch tab-scoped Codex provider: " + e.getMessage(), e);
             invokeLaterOrRun(() ->
@@ -259,6 +265,13 @@ public class ModelProviderHandler {
         }
     }
 
+    /**
+     * 持久化聊天区当前选择的 provider。
+     * 该入口只更新 handler 上下文中的目标 provider，并刷新依赖当前 provider 的 slash command/上下文展示；
+     * 不会直接修改当前活动 session 的 provider 或 thread 绑定，避免选择器路径误触发 live runtime 切换。
+     *
+     * @param content provider id 或包含 provider 字段的 JSON 字符串
+     */
     public void handleSetProvider(String content) {
         try {
             String provider = content;
@@ -275,14 +288,11 @@ public class ModelProviderHandler {
 
             LOG.info("[ModelProviderHandler] Setting provider to: " + provider);
             context.setCurrentProvider(provider);
-
-            if (context.getSession() != null) {
-                context.getSession().setProvider(provider);
-                if (!CODEX_PROVIDER.equalsIgnoreCase(provider)) {
-                    context.getSession().getState().setCodexSessionBinding(null);
-                }
-            }
-            context.requestTabSessionPersistence();
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " selectionPersistedOnly"
+                    + ", source=handleSetProvider"
+                    + ", provider=" + safe(provider)
+                    + ", activeSessionId=" + currentSessionIdForTrace()
+                    + ", activeBinding=" + currentBindingForTrace());
 
             refreshSlashCommandsForProvider(provider);
             usagePushService.refreshContextBar();
@@ -291,6 +301,13 @@ public class ModelProviderHandler {
         }
     }
 
+    /**
+     * 持久化聊天区当前选择的 Codex reasoning effort。
+     * reasoning 现在属于发送时动态解析的目标选择态，因此这里只记住用户偏好，
+     * 不再把值即时写入当前活动 session，避免旧任务执行阶段被 selector 直接改写。
+     *
+     * @param content reasoning 值或包含 reasoningEffort 字段的 JSON 字符串
+     */
     public void handleSetReasoningEffort(String content) {
         try {
             String effort = content;
@@ -306,12 +323,12 @@ public class ModelProviderHandler {
             }
 
             LOG.info("[ModelProviderHandler] Setting reasoning effort to: " + effort);
-
-            if (context.getSession() != null) {
-                context.getSession().setReasoningEffort(effort);
-            }
             context.getSettingsService().setLastCodexReasoningEffort(effort);
-            context.requestTabSessionPersistence();
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " selectionPersistedOnly"
+                    + ", source=handleSetReasoningEffort"
+                    + ", reasoningEffort=" + safe(effort)
+                    + ", activeSessionId=" + currentSessionIdForTrace()
+                    + ", activeBinding=" + currentBindingForTrace());
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to set reasoning effort: " + e.getMessage(), e);
         }
@@ -342,21 +359,25 @@ public class ModelProviderHandler {
      * @param action 待执行的 bridge 回调
      */
     /**
-     * 将标签页级 Codex provider/model 选择写入当前会话运行态，并同步回前端。
-     * 该方法不会改动全局 active Codex provider，只会更新当前标签的 runtime binding。
+     * 持久化当前标签页的 Codex provider/model 目标选择态。
+     * 这里显式禁止触碰当前活动 session，只允许更新 handler 上下文与设置层持久化，
+     * 从而把“目标选择态”和“活动运行态”拆开，避免聊天区下拉直接污染 live runtime。
      *
      * @param providerId 当前标签命中的 Codex provider id
      * @param modelId 当前标签命中的 Codex model id
-     * @throws Exception provider 读取或状态同步失败时抛出
+     * @param source 触发本次持久化的入口名称，便于日志排查
+     * @throws Exception provider 读取或状态保存失败时抛出
      */
-    private void applyTabScopedCodexRuntimeSelection(String providerId, String modelId) throws Exception {
+    private void persistTabScopedCodexSelection(String providerId, String modelId, String source) throws Exception {
         String normalizedProviderId = safe(providerId);
         String normalizedModelId = safe(modelId);
         if (normalizedProviderId.isEmpty()) {
             throw new IllegalArgumentException("Codex providerId is required");
         }
 
-        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " applyTabScopedCodexRuntimeSelection start sessionId="
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " persistTabScopedCodexSelection start"
+                + ", source=" + safe(source)
+                + ", sessionId="
                 + currentSessionIdForTrace()
                 + ", providerId=" + normalizedProviderId
                 + ", modelId=" + normalizedModelId
@@ -366,31 +387,14 @@ public class ModelProviderHandler {
         if (!normalizedModelId.isEmpty()) {
             context.setCurrentModel(normalizedModelId);
         }
-
-        if (context.getSession() != null) {
-            context.getSession().setProvider(CODEX_PROVIDER);
-            if (!normalizedModelId.isEmpty()) {
-                context.getSession().setModel(normalizedModelId);
-            }
-            context.getSession().getState().setCodexSessionBinding(
-                    buildTabScopedCodexSessionBinding(normalizedProviderId, normalizedModelId)
-            );
-        }
-
-        context.requestTabSessionPersistence();
-        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " applyTabScopedCodexRuntimeSelection updated sessionId="
-                + currentSessionIdForTrace()
-                + ", provider=" + safe(context.getSession() != null ? context.getSession().getProvider() : context.getCurrentProvider())
-                + ", model=" + safe(context.getSession() != null ? context.getSession().getModel() : context.getCurrentModel())
-                + ", binding=" + currentBindingForTrace());
-        pushTabRuntimeStateToFrontend();
-
-        final String confirmedModel = normalizedModelId;
-        invokeLaterOrRun(() -> {
-            if (!confirmedModel.isEmpty()) {
-                context.callJavaScript("window.onModelConfirmed", context.escapeJs(confirmedModel), context.escapeJs(CODEX_PROVIDER));
-            }
-        });
+        context.getSettingsService().setSelectedCodexModel(normalizedProviderId, normalizedModelId);
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " selectionPersistedOnly"
+                + ", source=" + safe(source)
+                + ", provider=" + CODEX_PROVIDER
+                + ", providerId=" + normalizedProviderId
+                + ", modelId=" + normalizedModelId
+                + ", activeSessionId=" + currentSessionIdForTrace()
+                + ", activeBinding=" + currentBindingForTrace());
     }
 
     /**
@@ -469,60 +473,6 @@ public class ModelProviderHandler {
         );
     }
 
-    /**
-     * 将当前会话的标签页运行态快照回推给前端。
-     */
-    private void pushTabRuntimeStateToFrontend() {
-        JsonObject payload = new JsonObject();
-        String provider = context.getSession() != null ? safe(context.getSession().getProvider()) : safe(context.getCurrentProvider());
-        String model = context.getSession() != null ? safe(context.getSession().getModel()) : safe(context.getCurrentModel());
-        String permissionMode = context.getSession() != null ? safe(context.getSession().getPermissionMode()) : "";
-        String reasoningEffort = context.getSession() != null ? safe(context.getSession().getReasoningEffort()) : "";
-        CodexSessionBinding binding = context.getSession() != null
-                ? context.getSession().getState().getCodexSessionBinding()
-                : null;
-
-        payload.addProperty("provider", provider);
-        // 中文注释：聊天区即时切换与窗口重建恢复共用同一个 restoreTabRuntimeState 回调，
-        // 必须显式带上 runtimeFamily，避免两条入口对同一前端状态协议产生分叉。
-        payload.addProperty("runtimeFamily", SessionRuntimeFamily.resolve(provider, null, binding));
-        payload.addProperty("model", model);
-        payload.addProperty("permissionMode", permissionMode);
-        payload.addProperty("reasoningEffort", reasoningEffort);
-        payload.addProperty("codexProviderId", binding != null ? binding.getProviderId() : "");
-
-        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " pushTabRuntimeStateToFrontend sessionId="
-                + currentSessionIdForTrace()
-                + ", payload=" + payload
-                + ", binding=" + describeCodexBindingForTrace(binding));
-
-        invokeLaterOrRun(() ->
-                context.callJavaScript("window.restoreTabRuntimeState", context.escapeJs(payload.toString()))
-        );
-    }
-
-    /**
-     * 当当前标签 provider 为 Codex 时，同步更新会话绑定中的模型字段。
-     *
-     * @param model 最新模型 id
-     */
-    private void syncCodexSessionBindingModelIfNeeded(String model) {
-        if (context.getSession() == null || !CODEX_PROVIDER.equalsIgnoreCase(context.getSession().getProvider())) {
-            return;
-        }
-        CodexSessionBinding existingBinding = context.getSession().getState().getCodexSessionBinding();
-        if (existingBinding == null) {
-            return;
-        }
-        context.getSession().getState().setCodexSessionBinding(new CodexSessionBinding(
-                existingBinding.getProviderId(),
-                model,
-                existingBinding.getRequestMode(),
-                existingBinding.getBaseUrlSource(),
-                existingBinding.getEffectiveConfigSource()
-        ));
-    }
-
     private void invokeLaterOrRun(Runnable action) {
         com.intellij.openapi.application.Application application = ApplicationManager.getApplication();
         // 统一目录与状态回调在单元测试里需要立即可见；
@@ -572,7 +522,7 @@ public class ModelProviderHandler {
                 codexJson = null;
             }
 
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterOrRun(() -> {
                 try {
                     context.callJavaScript("updateSlashCommands", context.escapeJs(json));
                     if (codexJson != null) {

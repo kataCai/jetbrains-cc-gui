@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import type { ClaudeContentBlock, ClaudeMessage, ClaudeRawMessage, CompactSummaryMetadata } from '../types';
 import { isCompactSummaryMetadata } from '../types';
+import { debugLog } from './debug';
 import {
   containsAnyTag,
   createTaskNotificationBlock,
@@ -48,13 +49,36 @@ export type { LocalizeMessageFn } from './contentBlockNormalize';
 
 /**
  * Generate a stable key for a message, used for React list keys and anchor navigation.
- * Prefer raw.uuid > __turnId > type-timestamp > fallback to type-index.
+ * Prefer messageIdentity.key > raw.uuid > __turnId > type-timestamp > fallback to type-index.
  */
 export function getMessageKey(message: ClaudeMessage, index: number): string {
+  const identityKey = typeof message.messageIdentity?.key === 'string'
+    ? message.messageIdentity.key.trim()
+    : '';
   const rawObj = typeof message.raw === 'object' ? message.raw as Record<string, unknown> : null;
-  if (rawObj?.uuid) return rawObj.uuid as string;
-  if (message.__turnId !== undefined) return `turn-${message.__turnId}`;
-  return message.timestamp ? `${message.type}-${message.timestamp}` : `${message.type}-${index}`;
+  const rawUuid = typeof rawObj?.uuid === 'string' ? rawObj.uuid.trim() : '';
+  const resolvedKey = identityKey
+    || rawUuid
+    || (message.__turnId !== undefined ? `turn-${message.__turnId}` : '')
+    || (message.timestamp ? `${message.type}-${message.timestamp}` : '')
+    || `${message.type}-${index}`;
+  // 中文注释：该日志默认只在 DEBUG 打开时输出，用于排查 authoritative restore 和 continued merge
+  // 场景里“为什么 React 复用了错误节点”的问题，避免正常渲染路径刷屏。
+  debugLog('[CODEX_RUNTIME_TRACE][Webview] messageKeyResolved', {
+    messageIdentityKeyPresent: identityKey.length > 0,
+    rawUuidPresent: rawUuid.length > 0,
+    turnIdPresent: message.__turnId !== undefined,
+    fallbackLevel: identityKey
+      ? 'messageIdentity.key'
+      : rawUuid
+        ? 'raw.uuid'
+        : message.__turnId !== undefined
+          ? '__turnId'
+          : message.timestamp
+            ? 'type-timestamp'
+            : 'type-index',
+  });
+  return resolvedKey;
 }
 
 // ---------------------------------------------------------------------------

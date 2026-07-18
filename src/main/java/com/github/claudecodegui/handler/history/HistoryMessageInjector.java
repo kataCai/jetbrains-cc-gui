@@ -1494,6 +1494,7 @@ public class HistoryMessageInjector {
                 context.getSession().setModel(binding.getModel());
             }
             context.getSession().getState().setCodexSessionBinding(binding);
+            logActiveRuntimeMutated("HistoryMessageInjector.applyCodexSessionBinding");
             LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " HistoryMessageInjector.applyCodexSessionBinding restored threadId="
                     + threadIdToUse + ", binding=" + describeBinding(binding));
             LOG.info("[HistoryHandler] Restored Codex session binding for threadId=" + threadIdToUse
@@ -1521,6 +1522,32 @@ public class HistoryMessageInjector {
                 + ", baseUrlSource=" + binding.getBaseUrlSource()
                 + ", effectiveConfigSource=" + binding.getEffectiveConfigSource()
                 + "}";
+    }
+
+    /**
+     * 记录历史恢复链路对当前活动会话 runtime 的直接改写。
+     * 历史恢复会把 provider/model/binding 写回当前标签页持有的 session，
+     * 因此这里必须显式落日志，避免排查时把历史恢复误读成聊天区选择器或发送前切段导致的 live runtime 变化。
+     *
+     * @param source 本次 live runtime 改写来源
+     */
+    private void logActiveRuntimeMutated(String source) {
+        if (context.getSession() == null) {
+            return;
+        }
+        CodexSessionBinding binding = context.getSession().getState().getCodexSessionBinding();
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " activeRuntimeMutated"
+                + ", source=" + (source == null ? "" : source)
+                + ", sessionId=" + (context.getSession().getSessionId() == null ? "" : context.getSession().getSessionId())
+                + ", provider=" + (context.getSession().getProvider() == null ? "" : context.getSession().getProvider())
+                + ", runtimeFamily=" + SessionRuntimeFamily.resolve(
+                context.getSession().getProvider(),
+                null,
+                binding
+        )
+                + ", model=" + (context.getSession().getModel() == null ? "" : context.getSession().getModel())
+                + ", reasoningEffort=" + (context.getSession().getReasoningEffort() == null ? "" : context.getSession().getReasoningEffort())
+                + ", binding=" + describeBinding(binding));
     }
 
     private void injectBatchToFrontend(List<JsonObject> frontendMessages) {

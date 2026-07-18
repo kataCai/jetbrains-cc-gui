@@ -3,6 +3,8 @@
  * Feature: 004-refactor-input-box
  */
 
+import type { QueuedMessage as HookQueuedMessage } from '../../hooks/useMessageQueue';
+
 // ============================================================
 // Core Entity Types
 // ============================================================
@@ -852,16 +854,8 @@ export interface DropdownItemProps {
 // ============================================================
 
 /**
- * Queued message item
- * When AI is processing (loading), new messages are queued here
+ * 聊天输入框展示的排队消息类型。
+ * 这里直接复用 `useMessageQueue` 的统一队列结构，避免 UI 侧再维护一份旧的简化定义，
+ * 从而保证锁定任务 envelope 新增字段后，队列展示与发送链路始终使用同一套类型语义。
  */
-export interface QueuedMessage {
-  /** Unique identifier */
-  id: string;
-  /** Message content */
-  content: string;
-  /** Attachments (optional) */
-  attachments?: Attachment[];
-  /** Timestamp when queued */
-  queuedAt: number;
-}
+export type QueuedMessage = HookQueuedMessage;

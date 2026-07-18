@@ -9,6 +9,7 @@ import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.SelectionModel;
@@ -81,8 +82,9 @@ public class UsagePushService {
 
         String usageJson = gson.toJson(usageUpdate);
 
-        // Push to frontend (must be executed on the EDT thread)
-        ApplicationManager.getApplication().invokeLater(() -> {
+        // 中文注释：生产环境继续走 EDT，单测环境没有 IDE Application 时直接同步执行，
+        // 避免“仅刷新 usage UI”反向打断选择态相关单测。
+        invokeLaterOrRun(() -> {
             if (context.getBrowser() != null && !context.isDisposed()) {
                 String js = "(function() {" +
                         "  if (typeof window.onUsageUpdate === 'function') {" +
@@ -100,7 +102,13 @@ public class UsagePushService {
      * Refresh the context bar with the currently open editor file.
      */
     public void refreshContextBar() {
-        ApplicationManager.getApplication().invokeLater(() -> {
+        com.intellij.openapi.application.Application application = ApplicationManager.getApplication();
+        // 中文注释：无 IDE Application 的单测环境不需要刷新编辑器上下文栏，直接跳过即可，
+        // 避免选择器路径在纯单测中因为 UI 刷新副作用而被误判为失败。
+        if (application == null || application.isDisposed()) {
+            return;
+        }
+        application.invokeLater(() -> {
             try {
                 if (context.getProject() == null) {
                     return;
@@ -174,5 +182,21 @@ public class UsagePushService {
                 LOG.warn("[UsagePushService] Failed to refresh context bar: " + e.getMessage());
             }
         });
+    }
+
+    /**
+     * 中文注释：统一封装前端 usage 回调的调度策略。
+     * 有 IDE Application 时走 EDT；单测或轻量运行环境没有 Application 时直接执行，
+     * 避免把运行时状态断言与 UI 线程设施强耦合。
+     *
+     * @param action 需要执行的前端回调逻辑
+     */
+    private void invokeLaterOrRun(Runnable action) {
+        com.intellij.openapi.application.Application application = ApplicationManager.getApplication();
+        if (application == null || application.isDisposed() || application.isUnitTestMode()) {
+            action.run();
+            return;
+        }
+        application.invokeLater(action, ModalityState.any());
     }
 }

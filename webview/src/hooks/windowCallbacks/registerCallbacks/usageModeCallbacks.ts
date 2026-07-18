@@ -2,6 +2,7 @@ import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { PermissionMode, ReasoningEffort } from '../../../components/ChatInputBox/types';
 import { isValidPermissionMode, normalizeClaudeModelId } from '../../../components/ChatInputBox/types';
 import { buildCodexSelectedModelKey } from '../../../types/provider';
+import { buildRuntimeSelectionState } from '../../../types/runtimeSelection';
 import { clampPermissionDialogTimeoutSeconds } from '../../../utils/permissionDialogTimeout';
 import { debugLog } from '../../../utils/debug';
 import { updateFrontendDebugRuntimeConfig } from '../../../utils/debug';
@@ -37,6 +38,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setCodexBaseUrl,
     setCodexUsesCustomBaseUrl,
     setReasoningEffort,
+    setActiveSessionRuntimeSnapshot,
     setProviderConfigVersion,
     setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled,
@@ -51,6 +53,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     activeCodexProviderIdRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
+    shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef,
     syncActiveProviderModelMapping,
   } = options;
 
@@ -113,6 +116,34 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     }
   };
 
+  /**
+   * 根据后端回推构建并保存“当前活动分段真实运行态”快照。
+   * 该快照只描述当前物理 session 的真实 provider/model/reasoning/providerId，
+   * 不直接代表聊天区选择器当前想要发送到哪个运行时。
+   *
+   * @param data 后端回推的运行态字段
+   * @return 无返回值
+   */
+  const updateActiveRuntimeSnapshot = (data: {
+    provider?: string;
+    model?: string;
+    reasoningEffort?: ReasoningEffort;
+    codexProviderId?: string;
+  }) => {
+    setActiveSessionRuntimeSnapshot(buildRuntimeSelectionState({
+      provider: data.provider === 'codex' ? 'codex' : 'claude',
+      model: typeof data.model === 'string' ? data.model.trim() : '',
+      reasoningEffort:
+        data.reasoningEffort === 'low'
+        || data.reasoningEffort === 'medium'
+        || data.reasoningEffort === 'high'
+        || data.reasoningEffort === 'xhigh'
+          ? data.reasoningEffort
+          : undefined,
+      codexProviderId: typeof data.codexProviderId === 'string' ? data.codexProviderId.trim() : '',
+    }));
+  };
+
   window.onModeChanged = (mode) => updateMode(mode as PermissionMode);
   window.onModeReceived = (mode) => updateMode(mode as PermissionMode);
 
@@ -164,25 +195,28 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       });
 
       const nextProvider = data.provider === 'codex' ? 'codex' : 'claude';
-      setCurrentProvider(nextProvider);
-      currentProviderRef.current = nextProvider;
+      updateActiveRuntimeSnapshot(data);
+      if (shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef.current) {
+        setCurrentProvider(nextProvider);
+        currentProviderRef.current = nextProvider;
 
-      if (nextProvider === 'claude' && typeof data.model === 'string' && data.model.trim().length > 0) {
-        setSelectedClaudeModel(normalizeClaudeModelId(data.model));
-      }
+        if (nextProvider === 'claude' && typeof data.model === 'string' && data.model.trim().length > 0) {
+          setSelectedClaudeModel(normalizeClaudeModelId(data.model));
+        }
 
-      if (nextProvider === 'codex' && typeof data.model === 'string' && data.model.trim().length > 0) {
-        const normalizedModel = data.model.trim();
-        setSelectedCodexModel(normalizedModel);
-        // 恢复标签页快照时同步重建复合 key，避免前端退化成仅凭 modelId 判断勾选状态。
-        setSelectedCodexSelectionKey(buildCodexSelectedModelKey(data.codexProviderId, normalizedModel));
-        shouldAdoptCodexDefaultModelRef.current = false;
-      }
+        if (nextProvider === 'codex' && typeof data.model === 'string' && data.model.trim().length > 0) {
+          const normalizedModel = data.model.trim();
+          setSelectedCodexModel(normalizedModel);
+          // 恢复标签页快照时同步重建复合 key，避免前端退化成仅凭 modelId 判断勾选状态。
+          setSelectedCodexSelectionKey(buildCodexSelectedModelKey(data.codexProviderId, normalizedModel));
+          shouldAdoptCodexDefaultModelRef.current = false;
+        }
 
-      if (typeof data.codexProviderId === 'string') {
-        const normalizedProviderId = data.codexProviderId.trim();
-        activeCodexProviderIdRef.current = normalizedProviderId;
-        setActiveCodexProviderId(normalizedProviderId);
+        if (typeof data.codexProviderId === 'string') {
+          const normalizedProviderId = data.codexProviderId.trim();
+          activeCodexProviderIdRef.current = normalizedProviderId;
+          setActiveCodexProviderId(normalizedProviderId);
+        }
       }
 
       // 中文注释：Tab 恢复阶段需要把逻辑会话与 continued segment 运行态一起恢复，
@@ -221,16 +255,18 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
         shouldNormalizeStaleContinuationPending ? null : restoredContinuationSourceSessionId,
       );
 
-      updateMode(data.permissionMode, nextProvider);
+      if (shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef.current) {
+        updateMode(data.permissionMode, nextProvider);
 
-      if (
-        data.reasoningEffort === 'low'
-        || data.reasoningEffort === 'medium'
-        || data.reasoningEffort === 'high'
-        || data.reasoningEffort === 'xhigh'
-      ) {
-        setReasoningEffort(data.reasoningEffort);
-        shouldAdoptCodexDefaultReasoningEffortRef.current = false;
+        if (
+          data.reasoningEffort === 'low'
+          || data.reasoningEffort === 'medium'
+          || data.reasoningEffort === 'high'
+          || data.reasoningEffort === 'xhigh'
+        ) {
+          setReasoningEffort(data.reasoningEffort);
+          shouldAdoptCodexDefaultReasoningEffortRef.current = false;
+        }
       }
     } catch (error) {
       console.error('[Frontend] Failed to restore tab runtime state:', error);
@@ -265,6 +301,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       });
 
       const nextProvider = data.provider === 'codex' ? 'codex' : 'claude';
+      updateActiveRuntimeSnapshot(data);
       setCurrentProvider(nextProvider);
       currentProviderRef.current = nextProvider;
 

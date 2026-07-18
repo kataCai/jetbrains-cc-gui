@@ -5,6 +5,7 @@ import type { ClaudeMessage, ClaudeRawMessage, HistoryData, SubagentHistoryRespo
 import type { PermissionMode, SelectedAgent } from '../components/ChatInputBox/types';
 import type { ReasoningEffort } from '../components/ChatInputBox/types';
 import type { ProviderConfig } from '../types/provider';
+import type { RuntimeSelectionState } from '../types/runtimeSelection';
 import type { PermissionRequest } from '../components/PermissionDialog';
 import type { AskUserQuestionRequest } from '../components/AskUserQuestionDialog';
 import type { PlanApprovalRequest } from '../components/PlanApprovalDialog';
@@ -56,6 +57,7 @@ export interface UseWindowCallbacksOptions {
   setCodexBaseUrl: React.Dispatch<React.SetStateAction<string | null>>;
   setCodexUsesCustomBaseUrl: React.Dispatch<React.SetStateAction<boolean>>;
   setReasoningEffort: React.Dispatch<React.SetStateAction<ReasoningEffort>>;
+  setActiveSessionRuntimeSnapshot: React.Dispatch<React.SetStateAction<RuntimeSelectionState>>;
   setProviderConfigVersion: React.Dispatch<React.SetStateAction<number>>;
   setActiveProviderConfig: React.Dispatch<React.SetStateAction<ProviderConfig | null>>;
   setClaudeSettingsAlwaysThinkingEnabled: React.Dispatch<React.SetStateAction<boolean>>;
@@ -81,10 +83,13 @@ export interface UseWindowCallbacksOptions {
   activeCodexProviderIdRef: MutableRefObject<string>;
   shouldAdoptCodexDefaultModelRef: MutableRefObject<boolean>;
   shouldAdoptCodexDefaultReasoningEffortRef: MutableRefObject<boolean>;
+  shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef: MutableRefObject<boolean>;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   isUserAtBottomRef: MutableRefObject<boolean>;
   userPausedRef: MutableRefObject<boolean>;
   suppressNextStatusToastRef: MutableRefObject<boolean>;
+  /** 诊断导出读取的完整前端 message array 快照引用，必须始终指向当前真实消息列表。 */
+  messagesRef: MutableRefObject<ClaudeMessage[]>;
 
   // Streaming refs from useStreamingMessages
   streamingContentRef: MutableRefObject<string>;

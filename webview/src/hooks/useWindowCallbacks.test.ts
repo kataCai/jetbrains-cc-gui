@@ -3,6 +3,7 @@ import { useWindowCallbacks } from './useWindowCallbacks.js';
 import type { UseWindowCallbacksOptions } from './useWindowCallbacks.js';
 import type { ClaudeMessage } from '../types/index.js';
 import * as debugModule from '../utils/debug.js';
+import * as exportMarkdownModule from '../utils/exportMarkdown.js';
 
 vi.mock('./windowCallbacks/settingsBootstrap', async () => {
   const actual = await vi.importActual<typeof import('./windowCallbacks/settingsBootstrap')>('./windowCallbacks/settingsBootstrap');
@@ -13,6 +14,14 @@ vi.mock('./windowCallbacks/settingsBootstrap', async () => {
     startModeRequest: vi.fn(),
     startThinkingEnabledRequest: vi.fn(),
     drainAndRequestDependencyStatus: vi.fn(),
+  };
+});
+
+vi.mock('../utils/exportMarkdown.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/exportMarkdown.js')>('../utils/exportMarkdown.js');
+  return {
+    ...actual,
+    downloadJSON: vi.fn(),
   };
 });
 
@@ -62,6 +71,7 @@ describe('useWindowCallbacks integration', () => {
     setCodexBaseUrl: vi.fn(),
     setCodexUsesCustomBaseUrl: vi.fn(),
     setReasoningEffort: vi.fn(),
+    setActiveSessionRuntimeSnapshot: vi.fn(),
     setProviderConfigVersion: vi.fn(),
     setActiveProviderConfig: vi.fn(),
     setClaudeSettingsAlwaysThinkingEnabled: vi.fn(),
@@ -82,10 +92,12 @@ describe('useWindowCallbacks integration', () => {
     activeCodexProviderIdRef: { current: '' },
     shouldAdoptCodexDefaultModelRef: { current: true },
     shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
+    shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef: { current: true },
     messagesContainerRef: { current: null },
     isUserAtBottomRef: { current: true },
     userPausedRef: { current: false },
     suppressNextStatusToastRef: { current: false },
+    messagesRef: { current: [] },
     streamingContentRef: { current: '' },
     streamingThinkingRef: { current: '' },
     isStreamingRef: { current: false },
@@ -147,6 +159,7 @@ describe('useWindowCallbacks integration', () => {
     window.__lastAppliedHistoryRestoreKey = null;
     window.__lastAppliedHistoryRestoreSignature = null;
     window.__lastAppliedHistoryRestoreKind = null;
+    window.exportFrontendTranscriptDiagnosticSnapshot = undefined;
     window.sendToJava = vi.fn();
   });
 
@@ -291,6 +304,45 @@ describe('useWindowCallbacks integration', () => {
     expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith(null);
   });
 
+  it('restoreTabRuntimeState only refreshes active runtime snapshot after the user customized desired selection', () => {
+    /**
+     * 中文注释：
+     * 该用例覆盖 Task 1 Step 6 的关键约束：一旦用户已经手动改过聊天区选择器，
+     * 后端 restore 只能刷新 active runtime snapshot，不能再把聊天区 provider/model/reasoning 改回旧运行态。
+     * 这也是后续锁定任务或 continued 回推不应覆盖当前选择器的基础保护。
+     */
+    const opts = createOptions({
+      shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef: { current: false },
+      currentProviderRef: { current: 'claude' },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.restoreTabRuntimeState?.(JSON.stringify({
+        provider: 'codex',
+        model: 'gpt-5.4',
+        permissionMode: 'default',
+        reasoningEffort: 'low',
+        codexProviderId: 'managed-openai',
+        logicalConversationId: 'logical-locked-001',
+        activeSegmentSessionId: 'segment-locked-002',
+      }));
+    });
+
+    expect(opts.setActiveSessionRuntimeSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'codex',
+      model: 'gpt-5.4',
+      reasoningEffort: 'low',
+      codexProviderId: 'managed-openai',
+    }));
+    expect(opts.setCurrentProvider).not.toHaveBeenCalled();
+    expect(opts.setSelectedCodexModel).not.toHaveBeenCalled();
+    expect(opts.setSelectedCodexSelectionKey).not.toHaveBeenCalled();
+    expect(opts.setReasoningEffort).not.toHaveBeenCalled();
+    expect(opts.setLogicalConversationId).toHaveBeenCalledWith('logical-locked-001');
+    expect(opts.setActiveSegmentSessionId).toHaveBeenCalledWith('segment-locked-002');
+  });
+
   // ===== historyLoadComplete releases transition guard =====
 
   it('historyLoadComplete releases __sessionTransitioning guard', () => {
@@ -411,6 +463,7 @@ describe('useWindowCallbacks integration', () => {
       continuationPendingRef: { current: false },
       logicalConversationIdRef: { current: 'logical-001' },
     });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
     renderHook(() => useWindowCallbacks(opts));
 
     window.__continuedSegmentHistoryPrefixMessages = [
@@ -427,6 +480,15 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-002');
     expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-002');
     expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'window.setSessionId marked continued segment first snapshot',
+      expect.objectContaining({
+        sessionId: 'segment-002',
+        fallbackMatched: true,
+        fallbackBindingSource: 'prefix_cache_context',
+      }),
+    );
   });
 
   it('setSessionId does not bind continued fallback when prefix cache lost its source anchor', () => {
@@ -438,6 +500,7 @@ describe('useWindowCallbacks integration', () => {
       logicalConversationIdRef: { current: 'logical-001' },
       activeSegmentSessionIdRef: { current: null },
     });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
     renderHook(() => useWindowCallbacks(opts));
 
     window.__continuedSegmentHistoryPrefixMessages = [
@@ -458,6 +521,13 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__continuedSegmentHistoryPrefixSessionId).toBeNull();
     expect(window.__continuedSegmentHistoryPrefixMessages).toBeNull();
     expect((window as any).__continuedSegmentPendingLogicalConversationId).toBeNull();
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued transition cache cleared',
+      expect.objectContaining({
+        cleanupReason: 'ordinary_session_branch_without_continued_context',
+      }),
+    );
   });
 
   it('setSessionId uses transition cache when continued refs were lost before the real session id arrives', () => {
@@ -846,6 +916,7 @@ describe('useWindowCallbacks integration', () => {
       logicalConversationIdRef: { current: null },
       activeSegmentSessionIdRef: { current: null },
     });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
     renderHook(() => useWindowCallbacks(opts));
 
     // 中文注释：覆盖真实日志链路：guard timeout 后先收到“再+1=？”局部快照，
@@ -864,6 +935,14 @@ describe('useWindowCallbacks integration', () => {
         { type: 'user', content: '再+1=？', timestamp: '2026-07-04T15:20:00.000Z' },
       ]));
     });
+    // 中文注释：setMessages 在测试里是 mock，必须手动执行 updater，
+    // 才能真正覆盖“首个 tail 先到、sessionId 后绑定”这条 continued fallback 路径上的日志和缓存更新。
+    let updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([
+      { type: 'user', content: '1+1=？', timestamp: '2026-07-04T15:19:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-04T15:20:00.000Z' },
+    ]);
 
     expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(2);
 
@@ -880,7 +959,7 @@ describe('useWindowCallbacks integration', () => {
       ]));
     });
 
-    const updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater = (opts.setMessages as any).mock.calls[0][0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
     const nextMessages = updater([
       { type: 'user', content: '1+1=？', timestamp: '2026-07-04T15:19:00.000Z' },
       { type: 'assistant', content: '2', timestamp: '2026-07-04T15:19:01.000Z' },
@@ -893,6 +972,20 @@ describe('useWindowCallbacks integration', () => {
       'user:再+1=？',
       'assistant:3',
     ]);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued prefix merge skipped',
+      expect.objectContaining({
+        skipReason: 'awaiting_first_session_id',
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued prefix cache hit',
+      expect.objectContaining({
+        currentSessionId: 'segment-002',
+      }),
+    );
   });
 
   it('caches the pre-bound continued tail and clears it after a richer bound snapshot arrives', () => {
@@ -1868,6 +1961,374 @@ describe('useWindowCallbacks integration', () => {
     expect(streamingMessageIndexRef.current).toBe(-1);
   });
 
+  /**
+   * 后端历史恢复链路的顺序固定为 `prepareHistoryRestoreSnapshot -> clearMessages -> updateMessages`。
+   * 这里要验证 clearMessages 不会提前把待消费的 restore 元数据清掉，否则下一次 updateMessages
+   * 就无法进入 authoritative replace 分支，旧前缀和脏 tail 会重新混回列表。
+   */
+  it('clearMessages preserves prepared history restore context for the immediately following updateMessages', () => {
+    const opts = createOptions();
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: 'stale prefix', timestamp: '2026-07-15T09:59:00.000Z' },
+    ];
+    window.__continuedSegmentHistoryPrefixSessionId = 'segment-001';
+    window.__continuedSegmentFirstSnapshotSessionId = 'segment-002';
+
+    const authoritativeMessages: ClaudeMessage[] = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-15T10:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-15T10:00:01.000Z' },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-015',
+        'snapshot-signature-after-clear',
+        'runtime_continue_authoritative',
+      );
+      window.clearMessages?.();
+      window.updateMessages?.(JSON.stringify(authoritativeMessages));
+    });
+
+    expect(window.__preparedHistoryRestoreKey).toBeNull();
+    expect(window.__preparedHistoryRestoreSignature).toBeNull();
+    expect(window.__preparedHistoryRestoreKind).toBeNull();
+    expect(window.__lastAppliedHistoryRestoreKey).toBe('logical-001|runtime_continue|transition-015');
+    expect(window.__lastAppliedHistoryRestoreSignature).toBe('snapshot-signature-after-clear');
+    expect(window.__lastAppliedHistoryRestoreKind).toBe('runtime_continue_authoritative');
+
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'apply snapshot',
+      expect.objectContaining({
+        restoreKey: 'logical-001|runtime_continue|transition-015',
+        restoreKind: 'runtime_continue_authoritative',
+      }),
+    );
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)[0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([
+      { type: 'user', content: 'stale prefix', timestamp: '2026-07-15T09:59:00.000Z' },
+    ]);
+
+    expect(nextMessages).toEqual(authoritativeMessages);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'authoritative snapshot replaced messages',
+      expect.objectContaining({
+        restoreKey: 'logical-001|runtime_continue|transition-015',
+        restoreKind: 'runtime_continue_authoritative',
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued transition cache cleared',
+      expect.objectContaining({
+        cleanupReason: 'authoritative_restore_replace',
+      }),
+    );
+  });
+
+  it('authoritative restore diagnostics keep a consistent restoreRequestKey through prepare, clear, apply, update, and replace', () => {
+    /**
+     * 中文注释：
+     * 该用例同时覆盖 Task 5 Step 4 与 Step 6。
+     * 历史恢复日志链路必须至少包含：
+     * `prepared snapshot context -> clearMessagesBeforeRestore -> apply snapshot -> updateMessagesForRestore -> authoritative snapshot replaced messages`
+     * 且结构化诊断字段要能通过同一个 restoreRequestKey 串联。
+     */
+    const opts = createOptions();
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    const restoreRequestKey = 'logical-restore-002|runtime_continue|transition-009';
+    const authoritativeMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '再+1=？',
+        timestamp: '2026-07-16T11:00:00.000Z',
+        messageIdentity: { key: 'user|round=2|follow-up' },
+      },
+      {
+        type: 'assistant',
+        content: '4',
+        timestamp: '2026-07-16T11:00:01.000Z',
+        messageIdentity: { key: 'assistant|round=2|answer' },
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        restoreRequestKey,
+        'snapshot-signature-chain',
+        'runtime_continue_authoritative',
+      );
+      window.clearMessages?.();
+      window.updateMessages?.(JSON.stringify(authoritativeMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)[0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([
+      {
+        type: 'user',
+        content: 'stale old round',
+        timestamp: '2026-07-16T10:59:00.000Z',
+      },
+    ]);
+
+    const diagnosticCalls = diagnosticSpy.mock.calls.map(([scope, event, payload]) => ({
+      scope,
+      event,
+      payload,
+    }));
+    const findEventIndex = (eventName: string) => diagnosticCalls.findIndex((call) => call.event === eventName);
+
+    expect(findEventIndex('prepared snapshot context')).toBeGreaterThanOrEqual(0);
+    expect(findEventIndex('clearMessagesBeforeRestore')).toBeGreaterThanOrEqual(0);
+    expect(findEventIndex('apply snapshot')).toBeGreaterThanOrEqual(0);
+    expect(findEventIndex('updateMessagesForRestore')).toBeGreaterThanOrEqual(0);
+    expect(findEventIndex('authoritative snapshot replaced messages')).toBeGreaterThanOrEqual(0);
+    expect(findEventIndex('prepared snapshot context')).toBeLessThan(findEventIndex('clearMessagesBeforeRestore'));
+    expect(findEventIndex('clearMessagesBeforeRestore')).toBeLessThan(findEventIndex('apply snapshot'));
+    expect(findEventIndex('apply snapshot')).toBeLessThan(findEventIndex('updateMessagesForRestore'));
+    expect(findEventIndex('updateMessagesForRestore')).toBeLessThan(findEventIndex('authoritative snapshot replaced messages'));
+
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'clearMessagesBeforeRestore',
+      expect.objectContaining({
+        restoreRequestKey,
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'applyHistoryRestoreSnapshot',
+      expect.objectContaining({
+        restoreRequestKey,
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'updateMessagesForRestore',
+      expect.objectContaining({
+        restoreRequestKey,
+        restoreKind: 'runtime_continue_authoritative',
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'authoritativeSnapshotReplacedMessages',
+      expect.objectContaining({
+        restoreRequestKey,
+      }),
+    );
+  });
+
+  it('authoritative restore emits a lightweight full transcript message dump after replace', () => {
+    /**
+     * 中文注释：
+     * 该用例验证 authoritative replace 完成后，会额外输出一份轻量 message dump。
+     * dump 必须包含 index / key / type / timestamp / contentPreview / messageIdentity.key，
+     * 这样后续排查 `scroll.log` 与真实 transcript 不一致时，能直接在 idea.log 对账真实消息数组。
+     */
+    const opts = createOptions();
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    const restoreRequestKey = 'logical-dump-001|runtime_continue|transition-021';
+    const authoritativeMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '再+1=？',
+        timestamp: '2026-07-16T19:44:00.000Z',
+        messageIdentity: { key: 'user|round=2|follow-up' },
+      },
+      {
+        type: 'assistant',
+        content: '4',
+        timestamp: '2026-07-16T19:44:01.000Z',
+        messageIdentity: { key: 'assistant|round=2|answer' },
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        restoreRequestKey,
+        'snapshot-signature-dump',
+        'runtime_continue_authoritative',
+      );
+      window.clearMessages?.();
+      window.updateMessages?.(JSON.stringify(authoritativeMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)[0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    updater([
+      {
+        type: 'user',
+        content: 'old stale message',
+        timestamp: '2026-07-16T19:43:00.000Z',
+      },
+    ]);
+
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'authoritative snapshot message dump',
+      expect.objectContaining({
+        restoreRequestKey,
+        snapshotKind: 'full_transcript_snapshot',
+        transcriptSource: 'react_messages_state',
+        messageCount: 2,
+        messageDump: [
+          expect.objectContaining({
+            index: 0,
+            key: 'user|round=2|follow-up',
+            type: 'user',
+            timestamp: '2026-07-16T19:44:00.000Z',
+            messageIdentityKey: 'user|round=2|follow-up',
+            contentPreview: '再+1=？',
+          }),
+          expect.objectContaining({
+            index: 1,
+            key: 'assistant|round=2|answer',
+            type: 'assistant',
+            timestamp: '2026-07-16T19:44:01.000Z',
+            messageIdentityKey: 'assistant|round=2|answer',
+            contentPreview: '4',
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('exports the full frontend transcript snapshot from messages state instead of the visible scroll window', () => {
+    /**
+     * 中文注释：
+     * 该用例验证诊断导出入口读取的是前端真实 message array，而不是 MessageList 的可视窗口。
+     * 这里故意放入 16 条消息，确保导出结果会标记“界面上本应存在折叠窗口，但导出仍绕过它输出完整 transcript”。
+     */
+    const transcriptMessages: ClaudeMessage[] = Array.from({ length: 16 }, (_, index) => ({
+      type: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message-${index + 1}`,
+      timestamp: `2026-07-16T19:${String(index).padStart(2, '0')}:00.000Z`,
+      messageIdentity: { key: `message|${index + 1}` },
+    }));
+    const opts = createOptions({
+      messagesRef: { current: transcriptMessages },
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-12345678' },
+      logicalConversationIdRef: { current: 'logical-frontend-001' },
+      activeSegmentSessionIdRef: { current: 'segment-12345678' },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    const downloadSpy = vi.mocked(exportMarkdownModule.downloadJSON);
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      window.exportFrontendTranscriptDiagnosticSnapshot?.(JSON.stringify({
+        reason: 'manual_scroll_log_compare',
+      }));
+    });
+
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
+    const [exportContent, filename] = downloadSpy.mock.calls[0] as [string, string];
+    const snapshot = JSON.parse(exportContent);
+
+    expect(filename).toContain('frontend-transcript-');
+    expect(snapshot).toMatchObject({
+      exportKind: 'frontend_transcript_diagnostic',
+      snapshotKind: 'full_transcript_snapshot',
+      transcriptSource: 'react_messages_state',
+      provider: 'codex',
+      sessionId: 'segment-12345678',
+      logicalConversationId: 'logical-frontend-001',
+      activeSegmentSessionId: 'segment-12345678',
+      messageCount: 16,
+      messageListWindowInfo: {
+        visibleWindowSize: 15,
+        wouldCollapseEarlierMessages: true,
+        bypassedForExport: true,
+      },
+      messages: transcriptMessages,
+    });
+    expect(snapshot.note).toContain('not limited by the MessageList visible window');
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'TranscriptDiagnostics.Frontend',
+      'export full transcript snapshot',
+      expect.objectContaining({
+        reason: 'manual_scroll_log_compare',
+        snapshotKind: 'full_transcript_snapshot',
+        transcriptSource: 'react_messages_state',
+        provider: 'codex',
+        sessionId: 'segment-12345678',
+        logicalConversationId: 'logical-frontend-001',
+        activeSegmentSessionId: 'segment-12345678',
+        messageCount: 16,
+        messageDump: expect.any(Array),
+      }),
+    );
+  });
+
+  it('authoritative restore replaces repeated follow-up messages with the new round timestamp and identity', () => {
+    /**
+     * 中文注释：
+     * 该用例覆盖 Task 6 Step 4 中“续接后 authoritative replace / 时间戳不再错挂”。
+     * 即使旧列表里已经有一条同文案追问，authoritative 快照也必须完整替换为新轮次的 timestamp 与 messageIdentity。
+     */
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    const authoritativeMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '再+1=？',
+        timestamp: '2026-07-16T11:05:00.000Z',
+        messageIdentity: { key: 'user|round=2|follow-up' },
+      },
+      {
+        type: 'assistant',
+        content: '4',
+        timestamp: '2026-07-16T11:05:01.000Z',
+        messageIdentity: { key: 'assistant|round=2|answer' },
+      },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-restore-003|runtime_continue|transition-010',
+        'snapshot-signature-replace',
+        'runtime_continue_authoritative',
+      );
+      window.updateMessages?.(JSON.stringify(authoritativeMessages));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)[0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    const nextMessages = updater([
+      {
+        type: 'user',
+        content: '再+1=？',
+        timestamp: '2026-07-16T11:00:00.000Z',
+        messageIdentity: { key: 'user|round=1|follow-up' },
+      },
+      {
+        type: 'assistant',
+        content: '3',
+        timestamp: '2026-07-16T11:00:01.000Z',
+        messageIdentity: { key: 'assistant|round=1|answer' },
+      },
+    ]);
+
+    expect(nextMessages).toEqual(authoritativeMessages);
+    expect(nextMessages[0].timestamp).toBe('2026-07-16T11:05:00.000Z');
+    expect(nextMessages[0].messageIdentity?.key).toBe('user|round=2|follow-up');
+    expect(nextMessages[1].timestamp).toBe('2026-07-16T11:05:01.000Z');
+    expect(nextMessages[1].messageIdentity?.key).toBe('assistant|round=2|answer');
+  });
+
   // ===== clearMessages resets turn tracking refs =====
 
   it('clearMessages resets streamingTurnIdRef but preserves turnIdCounterRef', () => {
@@ -2153,6 +2614,44 @@ describe('useWindowCallbacks integration', () => {
   });
 
   describe('streaming completed semantics', () => {
+    it('showLoading(false) clears non-streaming loading UI without reporting completed or synthesizing stream end cleanup', () => {
+      /**
+       * 中文注释：这条回归用例直接对应 send-time 失败链路的前端契约。
+       * 后端在真正进入流式阶段前就失败时，只会补发 `showLoading(false)`，不会补发 `onStreamEnd()`；
+       * 因此前端必须在非 streaming 场景下仅关闭 loading，并且不能顺带制造 completed / stream-end 语义。
+       */
+      const opts = createOptions({
+        isStreamingRef: { current: false },
+        streamingMessageIndexRef: { current: -1 },
+      });
+      renderHook(() => useWindowCallbacks(opts));
+
+      act(() => {
+        window.showLoading?.(false);
+      });
+
+      expect(window.sendToJava).not.toHaveBeenCalledWith(
+        'tab_status_changed:{"status":"completed"}',
+      );
+      expect(opts.setLoading).toHaveBeenCalled();
+      const loadingUpdater = (opts.setLoading as any).mock.calls.at(-1)?.[0] as
+        | ((prev: boolean) => boolean)
+        | undefined;
+      expect(loadingUpdater).toBeTypeOf('function');
+      expect(loadingUpdater?.(true)).toBe(false);
+
+      expect(opts.setLoadingStartTime).toHaveBeenCalled();
+      const startTimeUpdater = (opts.setLoadingStartTime as any).mock.calls.at(-1)?.[0] as
+        | ((prev: number | null) => number | null)
+        | undefined;
+      expect(startTimeUpdater).toBeTypeOf('function');
+      expect(startTimeUpdater?.(12345)).toBe(null);
+
+      expect(opts.setStreamingActive).not.toHaveBeenCalledWith(false);
+      expect(opts.setIsThinking).not.toHaveBeenCalledWith(false);
+      expect(opts.isStreamingRef.current).toBe(false);
+    });
+
     it('onStreamEnd only closes local streaming UI and no longer reports completed bridge event', () => {
       const opts = createOptions({
         isStreamingRef: { current: true },

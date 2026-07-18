@@ -3,6 +3,13 @@ import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import { registerStreamingCallbacks } from './streamingCallbacks';
 import type { ClaudeMessage } from '../../../types';
 
+/**
+ * 构造 streaming callbacks 测试所需的完整 options 夹具。
+ * 这里显式补齐共享回调结构依赖的 runtime/messages/thinking 等 ref，
+ * 避免 `UseWindowCallbacksOptions` 扩充后由测试夹具缺字段导致类型检查失败。
+ *
+ * @return 满足 registerStreamingCallbacks 测试需要的最小完整 options
+ */
 const createOptions = (): UseWindowCallbacksOptions => ({
   t: ((key: string) => key) as any,
   addToast: vi.fn(),
@@ -37,6 +44,9 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   setCodexBaseUrl: vi.fn(),
   setCodexUsesCustomBaseUrl: vi.fn(),
   setReasoningEffort: vi.fn(),
+  // 中文注释：usage/restore 与 streaming 回调共享同一份 options 结构，
+  // 测试夹具需要补齐 runtime snapshot setter，避免类型检查因缺字段失败。
+  setActiveSessionRuntimeSnapshot: vi.fn(),
   setProviderConfigVersion: vi.fn(),
   setActiveProviderConfig: vi.fn(),
   setClaudeSettingsAlwaysThinkingEnabled: vi.fn(),
@@ -55,13 +65,16 @@ const createOptions = (): UseWindowCallbacksOptions => ({
   activeCodexProviderIdRef: { current: '' },
   shouldAdoptCodexDefaultModelRef: { current: true },
   shouldAdoptCodexDefaultReasoningEffortRef: { current: true },
+  // 中文注释：默认允许 restore 同步 desired selection，只有特定测试才会显式关闭。
+  shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef: { current: true },
+  messagesRef: { current: [] },
   messagesContainerRef: { current: null },
   isUserAtBottomRef: { current: true },
   userPausedRef: { current: false },
   suppressNextStatusToastRef: { current: false },
   streamingContentRef: { current: '' },
-  // streamingCallbacks 现已同时维护 content/thinking 两路流式缓冲，测试夹具需要补齐 thinking ref。
-  // 否则 onStreamStart/onStreamEnd 在重置 thinking 缓冲时会因依赖缺失而抛错，无法覆盖真正要验证的流结束收口逻辑。
+  // 中文注释：streamingCallbacks 现在同时维护 content/thinking 两路流式缓冲，
+  // 测试夹具也要补齐 thinking ref，避免重置流式状态时因依赖缺失抛错。
   streamingThinkingRef: { current: '' },
   isStreamingRef: { current: false },
   useBackendStreamingRenderRef: { current: false },

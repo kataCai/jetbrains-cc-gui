@@ -42,6 +42,36 @@ const makeMsg = (
 // ---------------------------------------------------------------------------
 
 describe('getMessageKey', () => {
+  it('returns messageIdentity.key when present', () => {
+    const msg = makeMsg('assistant', 'hello', {
+      messageIdentity: { key: 'logical-key-001' },
+      raw: { uuid: 'abc-123' } as any,
+      __turnId: 5,
+    });
+    expect(getMessageKey(msg, 0)).toBe('logical-key-001');
+  });
+
+  it('distinguishes repeated prompt text from different rounds by messageIdentity.key', () => {
+    /**
+     * 中文注释：
+     * 这个场景对应 scroll 时间错挂问题里的“同内容不同轮次”。
+     * 即使消息文案完全相同，只要后端下发了不同的 messageIdentity.key，
+     * React 列表 key 也必须稳定区分两轮消息，避免旧 DOM 节点复用到新轮次。
+     */
+    const firstRound = makeMsg('user', '再+1=？', {
+      timestamp: '2026-07-15T10:00:00.000Z',
+      messageIdentity: { key: 'user|round=1|msg=follow-up' },
+    });
+    const secondRound = makeMsg('user', '再+1=？', {
+      timestamp: '2026-07-15T10:05:00.000Z',
+      messageIdentity: { key: 'user|round=2|msg=follow-up' },
+    });
+
+    expect(getMessageKey(firstRound, 0)).toBe('user|round=1|msg=follow-up');
+    expect(getMessageKey(secondRound, 1)).toBe('user|round=2|msg=follow-up');
+    expect(getMessageKey(firstRound, 0)).not.toBe(getMessageKey(secondRound, 1));
+  });
+
   it('returns uuid when present', () => {
     const msg = makeMsg('assistant', 'hello', { raw: { uuid: 'abc-123' } as any });
     expect(getMessageKey(msg, 0)).toBe('abc-123');

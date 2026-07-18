@@ -10,6 +10,7 @@ import com.github.claudecodegui.model.NodeDetectionResult;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.remote.RemoteCollabService;
 import com.github.claudecodegui.remote.RemoteTaskEvent;
+import com.github.claudecodegui.session.SendRuntimeIntent;
 import com.github.claudecodegui.session.SessionState;
 import com.github.claudecodegui.taskstate.TaskReminderDispatcher;
 import com.github.claudecodegui.taskstate.TaskStateEvent;
@@ -50,6 +51,71 @@ public class SessionHandler extends BaseMessageHandler {
     private final TaskStateService taskStateService;
     private final TaskReminderDispatcher taskReminderDispatcher;
     private final RemoteCollabService remoteCollabService;
+    private final SessionSendPreparation sessionSendPreparation;
+
+    /**
+     * 发送前会话准备回调。
+     * 该回调允许 SessionHandler 在真正调用 `session.send(...)` 前，
+     * 先让上层按本条消息携带的 runtimeIntent 决定是否需要静默切段并切换当前会话。
+     */
+    @FunctionalInterface
+    public interface SessionSendPreparation {
+        /**
+         * 按当前消息携带的 runtimeIntent 准备本次发送要使用的会话。
+         *
+         * @param runtimeIntent 当前发送请求解析得到的运行时意图；为空时表示沿用现有会话
+         * @return 准备完成后应被本次发送直接复用的会话；若无需切换则通常返回当前会话
+         */
+        CompletableFuture<ClaudeSession> prepareSessionForSend(SendRuntimeIntent runtimeIntent);
+    }
+
+    /**
+     * 统一承载 send_message / send_message_with_attachments 解析结果。
+     * 该对象只保留发送链路真正需要的稳定字段，避免普通文本发送与附件发送各自维护一套解析和调度逻辑。
+     */
+    private static final class SendRequestPayload {
+        private final String prompt;
+        private final List<ClaudeSession.Attachment> attachments;
+        private final String agentPrompt;
+        private final List<String> fileTagPaths;
+        private final String requestedPermissionMode;
+        private final SendRuntimeIntent runtimeIntent;
+
+        /**
+         * 构造统一发送载荷。
+         *
+         * @param prompt 用户输入的主文本内容
+         * @param attachments 附件列表；普通文本发送时传入 null
+         * @param agentPrompt 当前 Tab 绑定的 agent prompt；未指定时可为 null
+         * @param fileTagPaths 需要注入上下文的文件绝对路径列表；没有时可为 null
+         * @param requestedPermissionMode 本条消息请求的权限模式；为空时沿用会话模式
+         * @param runtimeIntent 本条消息声明的 send-time runtime 意图；缺失时传空意图对象
+         */
+        private SendRequestPayload(
+                String prompt,
+                List<ClaudeSession.Attachment> attachments,
+                String agentPrompt,
+                List<String> fileTagPaths,
+                String requestedPermissionMode,
+                SendRuntimeIntent runtimeIntent
+        ) {
+            this.prompt = prompt;
+            this.attachments = attachments;
+            this.agentPrompt = agentPrompt;
+            this.fileTagPaths = fileTagPaths;
+            this.requestedPermissionMode = requestedPermissionMode;
+            this.runtimeIntent = runtimeIntent != null ? runtimeIntent : SendRuntimeIntent.empty();
+        }
+
+        /**
+         * 判断当前载荷是否属于附件发送链路。
+         *
+         * @return true 表示本次发送需要走带附件的 session.send 重载
+         */
+        private boolean hasAttachments() {
+            return attachments != null;
+        }
+    }
 
     public SessionHandler(HandlerContext context) {
         this(context, null, null);
@@ -64,7 +130,38 @@ public class SessionHandler extends BaseMessageHandler {
         TaskStateService taskStateService,
         TaskReminderDispatcher taskReminderDispatcher
     ) {
-        this(context, taskStateService, taskReminderDispatcher, RemoteCollabService.getInstance());
+        this(
+            context,
+            taskStateService,
+            taskReminderDispatcher,
+            RemoteCollabService.getInstance(),
+            runtimeIntent -> CompletableFuture.completedFuture(context.getSession())
+        );
+    }
+
+    /**
+     * 构造支持发送前会话准备回调的 SessionHandler。
+     * 生产链路可通过该入口把 send-time runtime switch 准备逻辑注入进来，
+     * 这样普通 send_message / send_message_with_attachments 就能在真正发送前复用已切好的目标会话。
+     *
+     * @param context handler 上下文
+     * @param taskStateService 任务状态服务；为空时跳过任务状态同步
+     * @param taskReminderDispatcher 任务提醒分发器；为空时跳过提醒
+     * @param sessionSendPreparation 发送前会话准备回调；为空时默认直接复用当前会话
+     */
+    public SessionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher,
+        SessionSendPreparation sessionSendPreparation
+    ) {
+        this(
+            context,
+            taskStateService,
+            taskReminderDispatcher,
+            RemoteCollabService.getInstance(),
+            sessionSendPreparation
+        );
     }
 
     SessionHandler(
@@ -73,10 +170,29 @@ public class SessionHandler extends BaseMessageHandler {
         TaskReminderDispatcher taskReminderDispatcher,
         RemoteCollabService remoteCollabService
     ) {
+        this(
+            context,
+            taskStateService,
+            taskReminderDispatcher,
+            remoteCollabService,
+            runtimeIntent -> CompletableFuture.completedFuture(context.getSession())
+        );
+    }
+
+    SessionHandler(
+        HandlerContext context,
+        TaskStateService taskStateService,
+        TaskReminderDispatcher taskReminderDispatcher,
+        RemoteCollabService remoteCollabService,
+        SessionSendPreparation sessionSendPreparation
+    ) {
         super(context);
         this.taskStateService = taskStateService;
         this.taskReminderDispatcher = taskReminderDispatcher;
         this.remoteCollabService = remoteCollabService;
+        this.sessionSendPreparation = sessionSendPreparation != null
+                ? sessionSendPreparation
+                : runtimeIntent -> CompletableFuture.completedFuture(context.getSession());
     }
 
     @Override
@@ -89,11 +205,11 @@ public class SessionHandler extends BaseMessageHandler {
         switch (type) {
             case "send_message":
                 LOG.debug("[SessionHandler] 处理: send_message");
-                handleSendMessage(content);
+                dispatchPlainSendMessage(content);
                 return true;
             case "send_message_with_attachments":
                 LOG.debug("[SessionHandler] 处理: send_message_with_attachments");
-                handleSendMessageWithAttachments(content);
+                dispatchAttachmentSendMessage(content);
                 return true;
             case "interrupt_session":
                 LOG.debug("[SessionHandler] 处理: interrupt_session");
@@ -418,6 +534,342 @@ public class SessionHandler extends BaseMessageHandler {
                     return null;
                     });
         });
+    }
+
+    /**
+     * 处理普通文本发送的新统一入口。
+     * 这里不会再直接依赖当前 live session 的 runtime，而是先解析出本条消息的 runtimeIntent，
+     * 再交给统一的 send-time preparation 链路决定是否需要静默切段。
+     *
+     * @param content 前端发来的原始消息载荷；可能是 JSON，也可能是旧版纯文本
+     */
+    private void dispatchPlainSendMessage(String content) {
+        String prompt = content;
+        JsonObject payload = null;
+        try {
+            payload = new Gson().fromJson(content, JsonObject.class);
+            if (payload != null && payload.has("text") && !payload.get("text").isJsonNull()) {
+                prompt = payload.get("text").getAsString();
+            }
+        } catch (Exception e) {
+            // 中文注释：旧版前端仍可能直接发送纯文本。
+            // 此时继续把整段文本作为 prompt，保持历史兼容。
+            LOG.debug("[SessionHandler] Message is plain text, not JSON: " + e.getMessage());
+        }
+        try {
+            dispatchParsedSendRequest(buildSendRequestPayloadForDispatch(payload, prompt, null));
+        } catch (Exception e) {
+            LOG.error("[SessionHandler] Failed to prepare plain send payload: " + e.getMessage(), e);
+            reportSendPayloadPreparationFailed(e);
+        }
+    }
+
+    /**
+     * 处理带附件发送的新统一入口。
+     * 若附件载荷解析失败，则回退到普通文本入口，避免因老版本 payload 或临时异常直接丢失用户发送。
+     *
+     * @param content 前端发来的附件消息 JSON 载荷
+     */
+    private void dispatchAttachmentSendMessage(String content) {
+        try {
+            JsonObject payload = new Gson().fromJson(content, JsonObject.class);
+            String prompt = payload != null && payload.has("text") && !payload.get("text").isJsonNull()
+                    ? payload.get("text").getAsString()
+                    : "";
+            try {
+                dispatchParsedSendRequest(
+                        buildSendRequestPayloadForDispatch(payload, prompt, extractAttachmentsFromPayload(payload))
+                );
+            } catch (Exception e) {
+                LOG.error("[SessionHandler] Failed to prepare attachment send payload: " + e.getMessage(), e);
+                reportSendPayloadPreparationFailed(e);
+            }
+        } catch (Exception e) {
+            LOG.error("[SessionHandler] 解析附件载荷失败: " + e.getMessage(), e);
+            dispatchPlainSendMessage(content);
+        }
+    }
+
+    /**
+     * 把前端 payload 归一化为统一发送载荷。
+     * 这里集中解析 agent、fileTags、permissionMode 与 runtimeIntent，确保普通文本与附件消息共用同一套协议消费逻辑。
+     *
+     * @param payload 已解析的 JSON 载荷；旧版纯文本场景可为 null
+     * @param fallbackPrompt 当 payload 中没有 text 字段时使用的回退文本
+     * @param attachments 附件列表；普通文本发送时传入 null
+     * @return 统一后的发送载荷
+     */
+    private SendRequestPayload buildSendRequestPayloadForDispatch(
+            JsonObject payload,
+            String fallbackPrompt,
+            List<ClaudeSession.Attachment> attachments
+    ) {
+        String prompt = payload != null && payload.has("text") && !payload.get("text").isJsonNull()
+                ? payload.get("text").getAsString()
+                : fallbackPrompt;
+
+        String agentPrompt = null;
+        if (payload != null && payload.has("agent") && !payload.get("agent").isJsonNull()) {
+            JsonObject agent = payload.getAsJsonObject("agent");
+            if (agent != null && agent.has("prompt") && !agent.get("prompt").isJsonNull()) {
+                agentPrompt = agent.get("prompt").getAsString();
+                String agentName = agent.has("name") && !agent.get("name").isJsonNull()
+                        ? agent.get("name").getAsString()
+                        : "Unknown";
+                LOG.info("[SessionHandler] Using agent from message: " + agentName);
+            }
+        }
+
+        List<String> fileTagPaths = null;
+        if (payload != null && payload.has("fileTags") && payload.get("fileTags").isJsonArray()) {
+            JsonArray fileTagsArray = payload.getAsJsonArray("fileTags");
+            fileTagPaths = new java.util.ArrayList<>();
+            for (int i = 0; i < fileTagsArray.size(); i++) {
+                JsonObject fileTag = fileTagsArray.get(i).getAsJsonObject();
+                if (fileTag.has("absolutePath") && !fileTag.get("absolutePath").isJsonNull()) {
+                    fileTagPaths.add(fileTag.get("absolutePath").getAsString());
+                }
+            }
+            if (!fileTagPaths.isEmpty()) {
+                LOG.info("[SessionHandler] Extracted " + fileTagPaths.size() + " file tags for context injection");
+            }
+        }
+
+        String requestedPermissionMode = null;
+        if (payload != null && payload.has("permissionMode") && !payload.get("permissionMode").isJsonNull()) {
+            String mode = payload.get("permissionMode").getAsString();
+            if (SessionState.isValidPermissionMode(mode)) {
+                requestedPermissionMode = mode;
+            } else {
+                LOG.warn("[SessionHandler] Ignoring invalid permissionMode from payload: " + mode);
+            }
+        }
+
+        SendRuntimeIntent parsedRuntimeIntent = SendRuntimeIntent.fromPayload(payload);
+        SendRuntimeIntent.ModelTierResolutionResult modelTierResolution = parsedRuntimeIntent.resolveTargetModelTier();
+        SendRuntimeIntent runtimeIntent = modelTierResolution.getResolvedIntent();
+        if (parsedRuntimeIntent.hasTargetModelTier()) {
+            LOG.info("[SessionHandler] runtimeIntentModelTierResolved"
+                    + ", targetModelTier=" + parsedRuntimeIntent.getTargetModelTier()
+                    + ", resolvedProvider=" + runtimeIntent.getTargetProvider()
+                    + ", resolvedModel=" + runtimeIntent.getTargetModel()
+                    + ", resolvedReasoningEffort=" + runtimeIntent.getTargetReasoningEffort()
+                    + ", mappingSource=" + modelTierResolution.getMappingSource()
+                    + ", resolvedFromTier=" + modelTierResolution.isResolvedFromTier());
+        }
+        LOG.info("[SessionHandler] sendRuntimeIntentParsed runtimeIntent=" + runtimeIntent.toLogString()
+                + ", hasAttachments=" + (attachments != null)
+                + ", fileTagCount=" + (fileTagPaths != null ? fileTagPaths.size() : 0));
+
+        return new SendRequestPayload(
+                prompt,
+                attachments,
+                agentPrompt,
+                fileTagPaths,
+                requestedPermissionMode,
+                runtimeIntent
+        );
+    }
+
+    /**
+     * 统一向前端报告“发送前 payload 归一化/运行时意图解析失败”。
+     * 这类失败发生在真正进入 session.send 之前，因此不能依赖后续异步发送链路的失败回调兜底。
+     *
+     * @param error 当前解析阶段抛出的异常
+     */
+    private void reportSendPayloadPreparationFailed(Exception error) {
+        String message = error != null && error.getMessage() != null
+                ? error.getMessage()
+                : "Unknown send payload preparation error";
+        resetFrontendLoadingAfterSendFailure();
+        ApplicationManager.getApplication().invokeLater(() ->
+                callJavaScript("addErrorMessage", escapeJs("发送失败: " + message))
+        );
+    }
+
+    /**
+     * 解析附件列表。
+     * 该方法只负责结构转换，不记录附件正文内容，避免诊断日志误带出大体积或敏感数据。
+     *
+     * @param payload 前端传来的附件消息 JSON 载荷
+     * @return 归一化后的附件列表；无附件时返回空列表
+     */
+    private List<ClaudeSession.Attachment> extractAttachmentsFromPayload(JsonObject payload) {
+        List<ClaudeSession.Attachment> attachments = new java.util.ArrayList<>();
+        if (payload == null || !payload.has("attachments") || !payload.get("attachments").isJsonArray()) {
+            return attachments;
+        }
+        JsonArray array = payload.getAsJsonArray("attachments");
+        for (int i = 0; i < array.size(); i++) {
+            JsonObject attachment = array.get(i).getAsJsonObject();
+            String fileName = attachment.has("fileName") && !attachment.get("fileName").isJsonNull()
+                    ? attachment.get("fileName").getAsString()
+                    : ("attachment-" + System.currentTimeMillis());
+            String mediaType = attachment.has("mediaType") && !attachment.get("mediaType").isJsonNull()
+                    ? attachment.get("mediaType").getAsString()
+                    : "application/octet-stream";
+            String data = attachment.has("data") && !attachment.get("data").isJsonNull()
+                    ? attachment.get("data").getAsString()
+                    : "";
+            attachments.add(new ClaudeSession.Attachment(fileName, mediaType, data));
+        }
+        return attachments;
+    }
+
+    /**
+     * 统一执行发送前检查、send-time runtime preparation 与真实发送。
+     * 相比旧链路，这里会先让上层根据 runtimeIntent 准备目标会话，再把本次发送直接落到准备后的 session 上。
+     *
+     * @param request 统一发送载荷
+     */
+    private void dispatchParsedSendRequest(SendRequestPayload request) {
+        String nodeVersion = this.resolveNodeVersion();
+        if (nodeVersion == null) {
+            reportMissingNodeVersion();
+            return;
+        }
+        if (!NodeDetector.isVersionSupported(nodeVersion)) {
+            reportUnsupportedNodeVersion(nodeVersion);
+            return;
+        }
+
+        final String finalPrompt = request.prompt;
+        final var project = context.getProject();
+        CompletableFuture
+                .supplyAsync(this::determineWorkingDirectory)
+                .thenCompose(currentWorkingDir ->
+                        sessionSendPreparation.prepareSessionForSend(request.runtimeIntent)
+                                .thenCompose(preparedSession -> {
+                                    ClaudeSession targetSession = preparedSession != null
+                                            ? preparedSession
+                                            : context.getSession();
+                                    if (targetSession == null) {
+                                        CompletableFuture<Void> failed = new CompletableFuture<>();
+                                        failed.completeExceptionally(
+                                                new IllegalStateException("Session is unavailable for send")
+                                        );
+                                        return failed;
+                                    }
+
+                                    String previousCwd = targetSession.getCwd();
+                                    if (!currentWorkingDir.equals(previousCwd)) {
+                                        targetSession.setCwd(currentWorkingDir);
+                                        LOG.info("[SessionHandler] Updated working directory: " + currentWorkingDir);
+                                    }
+
+                                    if (project != null) {
+                                        ClaudeNotifier.setWaiting(project);
+                                    }
+
+                                    CompletableFuture<Void> sendFuture = request.hasAttachments()
+                                            ? targetSession.send(
+                                                    request.prompt,
+                                                    request.attachments,
+                                                    request.agentPrompt,
+                                                    request.fileTagPaths,
+                                                    request.requestedPermissionMode
+                                            )
+                                            : targetSession.send(
+                                                    request.prompt,
+                                                    request.agentPrompt,
+                                                    request.fileTagPaths,
+                                                    request.requestedPermissionMode
+                                            );
+                                    // 中文注释：必须在 session.send 已经把本轮用户消息写入会话之后再标记 RUNNING，
+                                    // 否则提醒摘要会继续读取上一轮消息，出现“通知慢一拍”的错位。
+                                    notifySendStarted(finalPrompt);
+                                    return sendFuture;
+                                })
+                )
+                .thenRun(this::notifySendCompleted)
+                .exceptionally(ex -> {
+                    Throwable rootCause = unwrapThrowable(ex);
+                    // 中文注释：send-time 链路一旦失败，先立即关闭前端 loading，
+                    // 避免后续任务状态更新、系统通知或错误提示中的任一步骤抛错时，
+                    // 把 WebView 永久留在“响应中”状态。
+                    resetFrontendLoadingAfterSendFailure();
+                    notifySendFailed(rootCause);
+                    LOG.error("Failed to send message", rootCause);
+                    reportSendFailure(project, rootCause);
+                    return null;
+                });
+    }
+
+    /**
+     * 在 Node.js 版本缺失时向前端提示错误。
+     */
+    private void reportMissingNodeVersion() {
+        resetFrontendLoadingAfterSendFailure();
+        ApplicationManager.getApplication().invokeLater(() -> {
+            callJavaScript("addErrorMessage", escapeJs("未检测到有效的 Node.js 版本，请在设置中配置或重新打开工具窗口。"));
+        });
+    }
+
+    /**
+     * 在 Node.js 版本过低时向前端提示错误。
+     *
+     * @param nodeVersion 当前检测到的 Node.js 版本
+     */
+    private void reportUnsupportedNodeVersion(String nodeVersion) {
+        int minVersion = NodeDetector.MIN_NODE_MAJOR_VERSION;
+        resetFrontendLoadingAfterSendFailure();
+        ApplicationManager.getApplication().invokeLater(() -> {
+            callJavaScript("addErrorMessage", escapeJs(
+                    "Node.js 版本过低 (" + nodeVersion + ")，插件需要 v" + minVersion + " 或更高版本才能正常运行。请在设置中配置正确的 Node.js 路径。"));
+        });
+    }
+
+    /**
+     * 统一上报发送失败。
+     * 这里同时负责系统通知与前端错误消息，避免 send-time runtime preparation 失败时只落日志、不反馈用户。
+     *
+     * @param project 当前工程；为空时仅回推前端错误消息
+     * @param throwable 触发失败的真实异常
+     */
+    private void reportSendFailure(com.intellij.openapi.project.Project project, Throwable throwable) {
+        if (project != null) {
+            ClaudeNotifier.showError(
+                    project,
+                    ClaudeCodeGuiBundle.message(
+                            "task.send.failed",
+                            throwable != null && throwable.getMessage() != null
+                                    ? throwable.getMessage()
+                                    : ClaudeCodeGuiBundle.message("file.unknownError")
+                    )
+            );
+        }
+        String message = throwable != null && throwable.getMessage() != null
+                ? throwable.getMessage()
+                : ClaudeCodeGuiBundle.message("file.unknownError");
+        resetFrontendLoadingAfterSendFailure();
+        ApplicationManager.getApplication().invokeLater(() -> {
+            callJavaScript("addErrorMessage", escapeJs("发送失败: " + message));
+        });
+    }
+
+    /**
+     * 在 send-time 失败路径中统一关闭前端 loading。
+     * 这类失败可能发生在真正进入 provider 流式阶段之前，因此这里只清理 loading，
+     * 不伪造 `onStreamEnd`，避免把未开始的流错误上报为一次真实的 turn 级结束事件。
+     */
+    private void resetFrontendLoadingAfterSendFailure() {
+        callJavaScript("showLoading", "false");
+    }
+
+    /**
+     * 解包 CompletableFuture 链路抛出的包装异常。
+     *
+     * @param throwable CompletableFuture 传播出来的原始异常
+     * @return 尽量靠近根因的真实异常；若原始异常为空则返回 null
+     */
+    private Throwable unwrapThrowable(Throwable throwable) {
+        Throwable current = throwable;
+        while (current instanceof java.util.concurrent.CompletionException
+                && current.getCause() != null
+                && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     /**

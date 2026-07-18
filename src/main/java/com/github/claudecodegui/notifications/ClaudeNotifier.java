@@ -405,7 +405,13 @@ public class ClaudeNotifier {
     }
 
     public static void setModel(@NotNull Project project, String model) {
-        ApplicationManager.getApplication().invokeLater(() -> {
+        com.intellij.openapi.application.Application application = ApplicationManager.getApplication();
+        // 中文注释：单测环境没有完整 IDE Application，也不需要刷新状态栏；
+        // 这里安全跳过，避免让纯状态流测试被 UI 基础设施误伤。
+        if (application == null || application.isDisposed()) {
+            return;
+        }
+        application.invokeLater(() -> {
             ClaudeStatusBarWidget widget = ClaudeStatusBarWidget.Factory.getWidget(project);
             if (widget != null) { widget.setModel(model); }
         });

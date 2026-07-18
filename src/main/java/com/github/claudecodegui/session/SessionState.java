@@ -90,6 +90,14 @@ public class SessionState {
      */
     private volatile boolean continuationPending = false;
     /**
+     * 标记当前 continuationPending 是否由“发送时静默 runtime 切换”触发。
+     * 该标记只服务于 send-time silent switch 场景：
+     * 1. 后端仍然需要沿用 continued 元数据补齐链路；
+     * 2. 但前端不应该再进入显式 pending/ready 提示，也不应该收到旧的过渡 toast。
+     * 因此需要在 sessionId 落地后区分“显式继续会话”与“静默切段”两类收口路径。
+     */
+    private volatile boolean sendTimeRuntimeSwitchPending = false;
+    /**
      * 当前继续分段操作的来源分段 sessionId。
      * 该字段在过渡态下用于识别应从哪一段迁移上下文、并在拿到新 sessionId 后补写元数据。
      */
@@ -190,6 +198,15 @@ public class SessionState {
 
     public boolean isContinuationPending() {
         return continuationPending;
+    }
+
+    /**
+     * 返回当前 continuationPending 是否由发送时静默 runtime 切换触发。
+     *
+     * @return true 表示当前待收口的新分段属于 send-time silent switch
+     */
+    public boolean isSendTimeRuntimeSwitchPending() {
+        return sendTimeRuntimeSwitchPending;
     }
 
     public String getContinuationSourceSessionId() {
@@ -346,6 +363,16 @@ public class SessionState {
      */
     public void setContinuationPending(boolean continuationPending) {
         this.continuationPending = continuationPending;
+    }
+
+    /**
+     * 设置当前 continuationPending 是否属于发送时静默 runtime 切换。
+     * 显式 continued 流程应传入 false；仅 send-time silent switch 需要置为 true。
+     *
+     * @param sendTimeRuntimeSwitchPending true 表示当前过渡态属于 send-time silent switch
+     */
+    public void setSendTimeRuntimeSwitchPending(boolean sendTimeRuntimeSwitchPending) {
+        this.sendTimeRuntimeSwitchPending = sendTimeRuntimeSwitchPending;
     }
 
     /**

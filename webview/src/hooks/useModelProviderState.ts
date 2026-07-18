@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { sendBridgeEvent } from '../utils/bridge';
 import {
-  apply1MContextSuffix,
   createRuntimeModelInfo,
   normalizeClaudeModelId,
   strip1MContextSuffix,
@@ -13,6 +12,7 @@ import {
   isSpecialProviderId,
   parseCodexModelCatalogKey,
 } from '../types/provider';
+import { buildRuntimeSelectionState, type RuntimeSelectionState } from '../types/runtimeSelection';
 import { useClaudeProvider } from './providers/useClaudeProvider';
 import { useCodexProvider } from './providers/useCodexProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
@@ -116,7 +116,6 @@ export interface UseModelProviderStateOptions {
 export function useModelProviderState({
   addToast,
   t,
-  onCodexConversationConfigChanged,
 }: UseModelProviderStateOptions) {
   const traceCodexRuntime = useCallback((event: string, payload: Record<string, unknown>) => {
     debugLog(`[CODEX_RUNTIME_TRACE][Webview] ${event}`, payload);
@@ -141,6 +140,12 @@ export function useModelProviderState({
    */
   const shouldAdoptCodexDefaultModelRef = useRef(true);
   const shouldAdoptCodexDefaultReasoningEffortRef = useRef(true);
+  /**
+   * 控制后端 active runtime 回推是否还能同步聊天区当前选择器。
+   * 初始恢复阶段需要允许用后端快照填充聊天区默认展示；但一旦用户手动改过目标模型，
+   * 后续恢复链路就只能更新 active snapshot，不能再把选择器改回旧运行态。
+   */
+  const shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef = useRef(true);
 
   const claude = useClaudeProvider();
   const codex = useCodexProvider();
@@ -266,10 +271,80 @@ export function useModelProviderState({
   }, []);
 
   const selectedModel = currentProvider === 'codex' ? selectedCodexModel : selectedClaudeModel;
+  const desiredRuntimeSelectionRef = useRef<RuntimeSelectionState>(
+    buildRuntimeSelectionState({
+      provider: currentProvider,
+      model: selectedModel,
+      reasoningEffort,
+      codexProviderId: activeCodexProviderId,
+    }),
+  );
+  desiredRuntimeSelectionRef.current = buildRuntimeSelectionState({
+    provider: currentProvider,
+    model: selectedModel,
+    reasoningEffort,
+    codexProviderId: activeCodexProviderId,
+  });
+  useEffect(() => {
+    debugLog('[CODEX_RUNTIME_TRACE][Webview] desiredRuntimeSelectionChanged', {
+      desiredRuntimeSelection: desiredRuntimeSelectionRef.current,
+      desiredSelectionPreserved: shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef.current === false,
+    });
+  }, [
+    activeCodexProviderId,
+    currentProvider,
+    reasoningEffort,
+    selectedModel,
+  ]);
+  const [activeSessionRuntimeSnapshot, setActiveSessionRuntimeSnapshot] = useState<RuntimeSelectionState>(
+    () => desiredRuntimeSelectionRef.current,
+  );
+  const activeSessionRuntimeSnapshotRef = useRef(activeSessionRuntimeSnapshot);
+  useEffect(() => {
+    activeSessionRuntimeSnapshotRef.current = activeSessionRuntimeSnapshot;
+    debugLog('[CODEX_RUNTIME_TRACE][Webview] activeRuntimeSnapshotUpdated', {
+      activeSessionRuntimeSnapshot,
+    });
+  }, [activeSessionRuntimeSnapshot]);
   const currentSdkInstalled = useMemo(
     () => isSdkInstalled(currentProvider),
     [currentProvider, isSdkInstalled],
   );
+
+  /**
+   * 标记聊天区目标运行时已被用户手动改写。
+   * 触发后，后端 restoreTabRuntimeState 只能刷新 active runtime snapshot，
+   * 不能再覆盖当前聊天区选择器。
+   *
+   * @return 无返回值
+   */
+  const markDesiredRuntimeSelectionCustomized = useCallback(() => {
+    shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef.current = false;
+  }, []);
+
+  /**
+   * 为聊天区下拉选择器记录“仅更新目标选择态”的诊断日志。
+   * 这里显式输出上一版 desired runtime、下一版 desired runtime 与当前 active runtime snapshot，
+   * 便于排查“为什么旧任务仍在旧模型执行，但下一条消息会在发送时静默切换”的差异。
+   *
+   * @param event 日志事件名
+   * @param nextDesiredRuntime 本次选择器操作后的目标运行态
+   * @param extraPayload 事件特有的补充字段
+   * @return 无返回值
+   */
+  const traceDesiredRuntimeSelectionChange = useCallback((
+    event: string,
+    nextDesiredRuntime: RuntimeSelectionState,
+    extraPayload: Record<string, unknown> = {},
+  ) => {
+    traceCodexRuntime(event, {
+      ...extraPayload,
+      willSwitchNow: false,
+      previousDesiredRuntime: desiredRuntimeSelectionRef.current,
+      nextDesiredRuntime,
+      activeRuntimeSnapshot: activeSessionRuntimeSnapshotRef.current,
+    });
+  }, [traceCodexRuntime]);
 
   /**
    * 处理权限模式切换。
@@ -302,12 +377,21 @@ export function useModelProviderState({
     if (currentProvider === 'claude') {
       const strippedModelId = strip1MContextSuffix(modelId);
       const normalizedModelId = normalizeClaudeModelId(strippedModelId);
+      traceDesiredRuntimeSelectionChange(
+        'claudeModelSelect',
+        buildRuntimeSelectionState({
+          provider: 'claude',
+          model: normalizedModelId,
+          reasoningEffort,
+          codexProviderId: '',
+        }, desiredRuntimeSelectionRef.current),
+      );
       setSelectedClaudeModel(normalizedModelId);
-      sendBridgeEvent('set_model', apply1MContextSuffix(normalizedModelId, longContextEnabled));
       return;
     }
 
     if (currentProvider === 'codex') {
+      markDesiredRuntimeSelectionCustomized();
       const parsedCatalogSelection = parseCodexModelCatalogKey(modelId);
       const targetProviderId = parsedCatalogSelection?.providerId ?? activeCodexProviderId;
       const targetModelId = parsedCatalogSelection?.modelId ?? modelId;
@@ -318,7 +402,12 @@ export function useModelProviderState({
         savedCodexCustomModels,
       ) ?? targetModelId;
 
-      traceCodexRuntime('codexModelSelect', {
+      traceDesiredRuntimeSelectionChange('codexModelSelect', buildRuntimeSelectionState({
+        provider: 'codex',
+        model: resolvedCodexModelId,
+        reasoningEffort,
+        codexProviderId: targetProviderId,
+      }, desiredRuntimeSelectionRef.current), {
         currentProvider,
         currentTabProviderId: activeCodexProviderId,
         targetProviderId,
@@ -326,35 +415,29 @@ export function useModelProviderState({
         resolvedCodexModelId,
       });
       shouldAdoptCodexDefaultModelRef.current = false;
+      // 中文注释：复合 catalog key 已经明确声明了目标 Codex provider。
+      // 这里必须同步写回聊天区目标态，避免发送时 runtimeIntent 继续读到旧值或空值。
+      setActiveCodexProviderId(targetProviderId);
       // 聊天区选中态必须保留 provider 维度，否则同名模型会在下拉中被同时勾选。
       setSelectedCodexSelectionKey(buildCodexSelectedModelKey(targetProviderId, resolvedCodexModelId));
       setSelectedCodexModel(resolvedCodexModelId);
-      sendBridgeEvent('set_model', resolvedCodexModelId);
-      sendBridgeEvent('select_codex_model', JSON.stringify({
+      sendBridgeEvent('set_selected_codex_model', JSON.stringify({
         providerId: targetProviderId,
         modelId: resolvedCodexModelId,
       }));
-      // Codex 运行时模型改变后必须丢弃当前 threadId，避免继续复用旧会话。
-      onCodexConversationConfigChanged?.({
-        switchReason: 'model',
-        targetProvider: 'codex',
-        targetRuntimeFamily: 'codex',
-        targetModel: resolvedCodexModelId,
-        targetReasoningEffort: reasoningEffort,
-        targetCodexProviderId: targetProviderId,
-      });
     }
   }, [
     activeCodexProviderId,
     currentProvider,
     defaultCodexModelFromConfig,
     longContextEnabled,
-    onCodexConversationConfigChanged,
+    markDesiredRuntimeSelectionCustomized,
     reasoningEffort,
     selectedCodexModel,
     setSelectedCodexSelectionKey,
     setSelectedClaudeModel,
     setSelectedCodexModel,
+    traceDesiredRuntimeSelectionChange,
     traceCodexRuntime,
   ]);
 
@@ -366,7 +449,14 @@ export function useModelProviderState({
    */
   const handleProviderSelect = useCallback((providerId: string) => {
     const shouldNotifyPlanDowngrade = providerId === 'codex' && permissionMode === 'plan';
-    traceCodexRuntime('providerSelect', {
+    markDesiredRuntimeSelectionCustomized();
+    const nextDesiredRuntime = buildRuntimeSelectionState({
+      provider: providerId,
+      model: providerId === 'codex' ? selectedCodexModel : selectedClaudeModel,
+      reasoningEffort,
+      codexProviderId: providerId === 'codex' ? activeCodexProviderIdRef.current : '',
+    }, desiredRuntimeSelectionRef.current);
+    traceDesiredRuntimeSelectionChange('providerSelect', nextDesiredRuntime, {
       previousProvider: currentProvider,
       nextProvider: providerId,
       permissionMode,
@@ -377,29 +467,12 @@ export function useModelProviderState({
     });
 
     setCurrentProvider(providerId);
-    sendBridgeEvent('set_provider', providerId);
 
     const modeToSet: PermissionMode = providerId === 'codex'
       ? (codexPermissionMode === 'plan' ? 'default' : codexPermissionMode)
       : claudePermissionMode;
     setPermissionMode(modeToSet);
     sendBridgeEvent('set_mode', modeToSet);
-
-    const newModel = providerId === 'codex'
-      ? selectedCodexModel
-      : apply1MContextSuffix(selectedClaudeModel, longContextEnabled);
-    sendBridgeEvent('set_model', newModel);
-
-    if (providerId === 'codex' || currentProvider === 'codex') {
-      onCodexConversationConfigChanged?.({
-        switchReason: 'provider',
-        targetProvider: providerId,
-        targetRuntimeFamily: providerId === 'codex' ? 'codex' : 'claude',
-        targetModel: providerId === 'codex' ? selectedCodexModel : selectedClaudeModel,
-        targetReasoningEffort: providerId === 'codex' ? reasoningEffort : undefined,
-        targetCodexProviderId: providerId === 'codex' ? activeCodexProviderId : undefined,
-      });
-    }
 
     if (shouldNotifyPlanDowngrade) {
       notifyCodexPlanDowngrade();
@@ -408,13 +481,13 @@ export function useModelProviderState({
     claudePermissionMode,
     codexPermissionMode,
     currentProvider,
-    longContextEnabled,
-    notifyCodexPlanDowngrade,
-    onCodexConversationConfigChanged,
-    permissionMode,
     reasoningEffort,
+    markDesiredRuntimeSelectionCustomized,
+    notifyCodexPlanDowngrade,
+    permissionMode,
     selectedClaudeModel,
     selectedCodexModel,
+    traceDesiredRuntimeSelectionChange,
     traceCodexRuntime,
   ]);
 
@@ -426,15 +499,29 @@ export function useModelProviderState({
    */
   const handleLongContextChange = useCallback((enabled: boolean) => {
     setLongContextEnabled(enabled);
-    if (currentProvider === 'claude') {
-      sendBridgeEvent('set_model', apply1MContextSuffix(selectedClaudeModel, enabled));
-    }
-  }, [currentProvider, selectedClaudeModel, setLongContextEnabled]);
+  }, [setLongContextEnabled]);
 
   const handleReasoningChange = useCallback((effort: typeof reasoningEffort) => {
+    markDesiredRuntimeSelectionCustomized();
     shouldAdoptCodexDefaultReasoningEffortRef.current = false;
+    traceDesiredRuntimeSelectionChange('reasoningEffortSelect', buildRuntimeSelectionState({
+      provider: currentProvider,
+      model: selectedModel,
+      reasoningEffort: effort,
+      codexProviderId: currentProvider === 'codex' ? activeCodexProviderIdRef.current : '',
+    }, desiredRuntimeSelectionRef.current), {
+      previousReasoningEffort: reasoningEffort,
+      nextReasoningEffort: effort,
+    });
     handleReasoningChangeInternal(effort);
-  }, [handleReasoningChangeInternal, reasoningEffort]);
+  }, [
+    currentProvider,
+    handleReasoningChangeInternal,
+    markDesiredRuntimeSelectionCustomized,
+    reasoningEffort,
+    selectedModel,
+    traceDesiredRuntimeSelectionChange,
+  ]);
 
   /**
    * 切换 Claude thinking。
@@ -534,6 +621,10 @@ export function useModelProviderState({
     sdkStatusLoaded,
     setSdkStatusLoaded,
     selectedModel,
+    desiredRuntimeSelectionRef,
+    activeSessionRuntimeSnapshot,
+    setActiveSessionRuntimeSnapshot,
+    activeSessionRuntimeSnapshotRef,
     currentSdkInstalled,
     currentProviderRef,
     activeCodexProviderId,
@@ -542,6 +633,7 @@ export function useModelProviderState({
     activeProviderConfigRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
+    shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef,
     syncActiveProviderModelMapping,
     handleModeSelect,
     handleModelSelect,

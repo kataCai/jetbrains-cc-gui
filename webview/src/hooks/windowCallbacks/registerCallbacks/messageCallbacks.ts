@@ -12,6 +12,7 @@ import type { ClaudeMessage, HistoryRestoreKind, MessageIdentity } from '../../.
 import type { ContextUsageData } from '../../../components/ContextUsageDialog';
 import { sendBridgeEvent } from '../../../utils/bridge';
 import { debugError, emitFrontendDiagnosticLog } from '../../../utils/debug';
+import { buildTranscriptDiagnosticMessageDump, FULL_TRANSCRIPT_SNAPSHOT_KIND } from '../../../utils/transcriptDiagnostics';
 import { isHighConfidenceInternalVisibleResidue } from '../../../utils/contentBlockNormalize';
 import {
   appendOptimisticMessageIfMissing,
@@ -664,7 +665,10 @@ function countAdjacentDuplicateUserMessages(messages: ClaudeMessage[]): number {
 
 export function registerMessageCallbacks(
   options: UseWindowCallbacksOptions,
-  resetTransientUiState: () => void,
+  resetTransientUiState: (runOptions?: {
+    preserveContinuedPrefix?: boolean;
+    preservePreparedHistoryRestore?: boolean;
+  }) => void,
 ): void {
   const {
     addToast,
@@ -817,7 +821,39 @@ export function registerMessageCallbacks(
    *
    * @return 无返回值
    */
-  const clearContinuedSegmentTransitionCache = (): void => {
+  /**
+   * 清理 continued 过渡缓存，并记录清理原因。
+   * 这些缓存一旦跨越真实 session 绑定或 authoritative restore 继续残留，就会把旧前缀误拼回界面；
+   * 因此这里统一收口清理日志，便于后续排查“是哪一步提前或滞后消费了 fallback cache”。
+   *
+   * @param cleanupReason 本次清理的明确原因
+   * @return 无返回值
+   */
+  const clearContinuedSegmentTransitionCache = (cleanupReason: string): void => {
+    const prefixCacheCount = Array.isArray(window.__continuedSegmentHistoryPrefixMessages)
+      ? window.__continuedSegmentHistoryPrefixMessages.length
+      : null;
+    const pendingTailCount = Array.isArray(window.__continuedSegmentPendingTailMessages)
+      ? window.__continuedSegmentPendingTailMessages.length
+      : null;
+    const hasAnyCache = prefixCacheCount !== null
+      || pendingTailCount !== null
+      || !!window.__continuedSegmentFirstSnapshotSessionId
+      || !!window.__continuedSegmentPendingSourceSessionId
+      || !!window.__continuedSegmentPendingLogicalConversationId
+      || window.__continuedSegmentAwaitingFirstSessionId === true;
+    if (hasAnyCache) {
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued transition cache cleared', {
+        cleanupReason,
+        prefixCacheCount,
+        prefixSessionId: window.__continuedSegmentHistoryPrefixSessionId ?? null,
+        pendingTailCount,
+        firstSnapshotSessionId: window.__continuedSegmentFirstSnapshotSessionId ?? null,
+        pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
+        pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
+        awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
+      });
+    }
     window.__continuedSegmentHistoryPrefixMessages = null;
     window.__continuedSegmentHistoryPrefixSessionId = null;
     window.__continuedSegmentFirstSnapshotSessionId = null;
@@ -928,7 +964,7 @@ export function registerMessageCallbacks(
       // 中文注释：若后续某条快照已经升级成“整条逻辑会话完整快照”，说明前缀缓存已不再需要，
       // 否则继续强拼接会把旧历史重复叠加两遍。
       window.__continuedSegmentHistoryPrefixMessages = null;
-      clearContinuedSegmentTransitionCache();
+      clearContinuedSegmentTransitionCache('prefix_cache_consumed_by_complete_snapshot');
       return mergedTail;
     }
 
@@ -950,7 +986,7 @@ export function registerMessageCallbacks(
     restoreKind?: HistoryRestoreKind | null,
   ): ClaudeMessage[] => {
     if (isAuthoritativeRestoreKind(restoreKind)) {
-      clearContinuedSegmentTransitionCache();
+      clearContinuedSegmentTransitionCache('authoritative_restore');
       return nextList;
     }
     const currentSessionId = currentSessionIdRef.current?.trim() || null;
@@ -959,10 +995,19 @@ export function registerMessageCallbacks(
       && window.__continuedSegmentHistoryPrefixSessionId?.trim() === currentSessionId
       && hasPrefixCache;
     if (shouldMergeContinuedSegment) {
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued prefix cache hit', {
+        currentSessionId,
+        prefixSessionId: window.__continuedSegmentHistoryPrefixSessionId ?? null,
+        prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
+        pendingTailCount: window.__continuedSegmentPendingTailMessages?.length ?? null,
+        firstSnapshotSessionId: window.__continuedSegmentFirstSnapshotSessionId ?? null,
+        awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
+      });
       const mergedList = mergeContinuedSegmentPrefixIfNeeded(nextList);
       if (window.__continuedSegmentFirstSnapshotSessionId === currentSessionId) {
         emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued segment first snapshot applied', {
           snapshotStage: 'transitional',
+          prefixCacheHit: true,
           currentSessionId,
           continuationPending: continuationPendingRef.current,
           previousMessageCount: prevList.length,
@@ -1012,8 +1057,14 @@ export function registerMessageCallbacks(
           awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
         });
       }
+      const skipReason = shouldCachePendingTail
+        ? 'awaiting_first_session_id'
+        : !currentSessionId
+          ? 'missing_current_session_id'
+          : 'prefix_session_id_mismatch';
       emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued prefix merge skipped', {
         snapshotStage: 'transitional',
+        skipReason,
         currentSessionId,
         prefixSessionId: window.__continuedSegmentHistoryPrefixSessionId ?? null,
         prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
@@ -1050,6 +1101,19 @@ export function registerMessageCallbacks(
     window.__preparedHistoryRestoreSignature = null;
     window.__preparedHistoryRestoreKind = null;
   };
+
+  /**
+   * 判断当前是否已经收到、但尚未被下一次 updateMessages 消费的 restore 上下文。
+   * 这里专门给 `clearMessages` 使用，避免 authoritative restore 固定链路中把刚 prepare 的元数据提前清掉。
+   *
+   * @return true 表示下一次 updateMessages 仍应消费 restore 元数据
+   */
+  const hasPreparedHistoryRestoreSnapshot = (): boolean => (
+    typeof window.__preparedHistoryRestoreKey === 'string'
+    && window.__preparedHistoryRestoreKey.length > 0
+    && typeof window.__preparedHistoryRestoreSignature === 'string'
+    && window.__preparedHistoryRestoreSignature.length > 0
+  );
 
   /**
    * 读取并消费后端刚刚准备好的历史恢复快照上下文。
@@ -1155,6 +1219,21 @@ export function registerMessageCallbacks(
           adjacentDuplicateUserCount: countAdjacentDuplicateUserMessages(sanitizedParsed),
           prefixCacheCleared,
         });
+        emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'applyHistoryRestoreSnapshot', {
+          restoreRequestKey: preparedHistoryRestore.restoreKey,
+          restoreKey: preparedHistoryRestore.restoreKey,
+          snapshotSignature: preparedHistoryRestore.snapshotSignature,
+          restoreKind: preparedHistoryRestore.restoreKind,
+          messageCount: sanitizedParsed.length,
+        });
+        emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'updateMessagesForRestore', {
+          restoreRequestKey: preparedHistoryRestore.restoreKey,
+          restoreKey: preparedHistoryRestore.restoreKey,
+          snapshotSignature: preparedHistoryRestore.snapshotSignature,
+          restoreKind: preparedHistoryRestore.restoreKind,
+          messageCount: sanitizedParsed.length,
+          streaming: isStreamingRef.current,
+        });
       }
 
       setMessages((prev) => {
@@ -1162,13 +1241,41 @@ export function registerMessageCallbacks(
         const isAuthoritativeRestore = isAuthoritativeRestoreKind(restoreKind);
 
         if (isAuthoritativeRestore) {
-          clearContinuedSegmentTransitionCache();
+          clearContinuedSegmentTransitionCache('authoritative_restore_replace');
           emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'authoritative snapshot replaced messages', {
             restoreKey: preparedHistoryRestore?.restoreKey ?? null,
             restoreKind,
             previousMessageCount: prev.length,
             nextMessageCount: sanitizedParsed.length,
             streaming: isStreamingRef.current,
+          });
+          emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'authoritativeSnapshotReplacedMessages', {
+            restoreRequestKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKind,
+            previousMessageCount: prev.length,
+            nextMessageCount: sanitizedParsed.length,
+            streaming: isStreamingRef.current,
+          });
+          // 中文注释：`scroll.log` 这类可视采样无法稳定反映真实 message array，
+          // authoritative replace 一旦落地，就立刻补打一份轻量 dump，便于直接用 idea.log 对账真实顺序与 key。
+          emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'authoritative snapshot message dump', {
+            restoreRequestKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKind,
+            snapshotKind: FULL_TRANSCRIPT_SNAPSHOT_KIND,
+            transcriptSource: 'react_messages_state',
+            messageCount: sanitizedParsed.length,
+            messageDump: buildTranscriptDiagnosticMessageDump(sanitizedParsed),
+          });
+          emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'authoritativeSnapshotMessageDump', {
+            restoreRequestKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKey: preparedHistoryRestore?.restoreKey ?? null,
+            restoreKind,
+            snapshotKind: FULL_TRANSCRIPT_SNAPSHOT_KIND,
+            transcriptSource: 'react_messages_state',
+            messageCount: sanitizedParsed.length,
+            messageDump: buildTranscriptDiagnosticMessageDump(sanitizedParsed),
           });
           return sanitizedParsed;
         }
@@ -1529,6 +1636,9 @@ export function registerMessageCallbacks(
   };
 
   window.clearMessages = () => {
+    const preservePreparedHistoryRestore = hasPreparedHistoryRestoreSnapshot();
+    const preserveContinuedPrefixForAuthoritativeRestore = preservePreparedHistoryRestore
+      && isAuthoritativeRestoreKind(window.__preparedHistoryRestoreKind);
     if (pendingUpdateRaf !== null) {
       cancelAnimationFrame(pendingUpdateRaf);
       pendingUpdateRaf = null;
@@ -1539,8 +1649,23 @@ export function registerMessageCallbacks(
       window.__pendingUpdateSequence = null;
     }
     window.__deniedToolIds?.clear();
-    clearPreparedHistoryRestoreSnapshot();
-    resetTransientUiState();
+    if (preservePreparedHistoryRestore) {
+      emitFrontendDiagnosticLog('HistoryRestore.Frontend', 'clearMessagesBeforeRestore', {
+        restoreRequestKey: window.__preparedHistoryRestoreKey,
+        restoreKey: window.__preparedHistoryRestoreKey,
+        snapshotSignature: window.__preparedHistoryRestoreSignature,
+        restoreKind: window.__preparedHistoryRestoreKind,
+      });
+    } else {
+      clearPreparedHistoryRestoreSnapshot();
+    }
+    // 中文注释：authoritative restore 的真实消费点在下一次 updateMessages 的 replace 分支；
+    // 这里若提前清掉 continued 过渡缓存，就拿不到“authoritative_restore_replace”清理原因日志，
+    // 也无法在 apply snapshot 阶段感知旧前缀确实仍待被权威快照接管。
+    resetTransientUiState({
+      preservePreparedHistoryRestore,
+      preserveContinuedPrefix: preserveContinuedPrefixForAuthoritativeRestore,
+    });
     closeContextUsageDialog();
     setMessages([]);
   };

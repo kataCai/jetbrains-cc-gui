@@ -12,9 +12,15 @@ import com.github.claudecodegui.ui.toolwindow.TabSessionRestoreState;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.intellij.mock.MockApplication;
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.jcef.JBCefBrowser;
+import com.intellij.util.messages.MessageBus;
+import com.intellij.util.messages.MessageBusConnection;
 import org.junit.Test;
 
 import javax.swing.JPanel;
@@ -129,15 +135,81 @@ public class ChatWindowDelegateRestoreTest {
         assertTrue(host.freshNewTabDefaultsApplied);
     }
 
+    /**
+     * 验证聊天窗口尚未挂载 SessionLifecycleManager 时，handler 初始化也不能直接抛异常。
+     * 该场景对应真实窗口构造顺序：delegate 会先创建并注册 handler，随后才把 lifecycle manager 赋值到 host。
+     * 回归目标是确保发送前准备逻辑改为惰性解析后，不再在初始化阶段提前绑定空的 lifecycle manager。
+     */
+    @Test
+    public void shouldInitializeHandlersWhenSessionLifecycleManagerIsNotReadyYet() {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = com.intellij.openapi.util.Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        try {
+            RecordingHost host = new RecordingHost(null);
+            ChatWindowDelegate delegate = new ChatWindowDelegate(host);
+
+            delegate.initializeHandlers();
+
+            assertTrue("initializeHandlers 完成后应写回 handlerContext", host.handlerContextAssigned);
+            assertTrue("initializeHandlers 完成后应注册 messageDispatcher", host.messageDispatcherAssigned);
+        } finally {
+            if (testDisposable != null) {
+                com.intellij.openapi.util.Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
     private static Project createProject() {
+        MessageBus messageBus = createMessageBus();
         return (Project) Proxy.newProxyInstance(
                 Project.class.getClassLoader(),
                 new Class[]{Project.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "isDisposed" -> false;
                     case "getName" -> "chat-window-delegate-test";
+                    case "getMessageBus" -> messageBus;
                     default -> method.getReturnType().isPrimitive() ? defaultPrimitiveValue(method.getReturnType()) : null;
                 }
+        );
+    }
+
+    /**
+     * 创建最小 MessageBus 测试桩，满足 PromptHandler 初始化阶段对 `connect()` 的依赖。
+     * 当前测试不关心真正的 VFS 订阅行为，因此这里只提供可连接、可订阅、可断开的空实现。
+     *
+     * @return 供 Project 代理返回的最小 MessageBus
+     */
+    private static MessageBus createMessageBus() {
+        MessageBusConnection connection = createMessageBusConnection();
+        return (MessageBus) Proxy.newProxyInstance(
+                MessageBus.class.getClassLoader(),
+                new Class[]{MessageBus.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "connect" -> connection;
+                    default -> method.getReturnType().isPrimitive() ? defaultPrimitiveValue(method.getReturnType()) : null;
+                }
+        );
+    }
+
+    /**
+     * 创建最小 MessageBusConnection 测试桩。
+     * 该桩只需要吞掉 `subscribe()`、`disconnect()` 等调用，
+     * 避免 PromptFileWatcher 在测试里因为缺少 IDE 真实消息总线而提前失败。
+     *
+     * @return 空操作的 MessageBusConnection
+     */
+    private static MessageBusConnection createMessageBusConnection() {
+        return (MessageBusConnection) Proxy.newProxyInstance(
+                MessageBusConnection.class.getClassLoader(),
+                new Class[]{MessageBusConnection.class},
+                (proxy, method, args) -> method.getReturnType().isPrimitive()
+                        ? defaultPrimitiveValue(method.getReturnType())
+                        : null
         );
     }
 
@@ -170,6 +242,8 @@ public class ChatWindowDelegateRestoreTest {
         );
         private final List<String> jsFunctionNames = new ArrayList<>();
         private final List<String> jsPayloads = new ArrayList<>();
+        private boolean handlerContextAssigned;
+        private boolean messageDispatcherAssigned;
         private boolean frontendReady;
         private boolean applyFreshNewTabDefaults;
         private boolean freshNewTabDefaultsApplied;
@@ -306,10 +380,12 @@ public class ChatWindowDelegateRestoreTest {
 
         @Override
         public void setHandlerContext(HandlerContext ctx) {
+            handlerContextAssigned = ctx != null;
         }
 
         @Override
         public void setMessageDispatcher(com.github.claudecodegui.handler.core.MessageDispatcher d) {
+            messageDispatcherAssigned = d != null;
         }
 
         @Override

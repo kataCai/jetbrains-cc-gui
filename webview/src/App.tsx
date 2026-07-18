@@ -25,6 +25,7 @@ import {
   RESUME_COMMANDS,
   CONTEXT_COMMANDS,
 } from './hooks/useMessageSender';
+import type { QueuedMessage } from './hooks/useMessageQueue';
 import { applyDiffTheme, getStoredDiffTheme } from './utils/diffTheme';
 import type { Attachment, ChatInputBoxHandle } from './components/ChatInputBox/types';
 import { ChatHeader } from './components/ChatHeader';
@@ -227,6 +228,13 @@ const App = () => {
     continuationPendingRef.current = continuationPending;
   }, [continuationPending]);
 
+  // 中文注释：诊断导出入口需要读取当前前端真实 message array，
+  // 这里单独维护 ref，避免只拿到 MessageList 折叠窗口后的可视结果或旧闭包快照。
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const forceCreateNewSessionRef = useRef<((request: ContinuedSegmentConfigRequest) => void) | null>(null);
   const [anchorCollapsedCount, setAnchorCollapsedCount] = useState(0);
@@ -371,10 +379,13 @@ const App = () => {
     selectedAgent,
     sdkStatusLoaded,
     currentSdkInstalled,
+    desiredRuntimeSelectionRef,
+    activeSessionRuntimeSnapshotRef,
     currentProviderRef,
     activeCodexProviderIdRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
+    shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef,
     activeProviderConfig,
     claudeSettingsAlwaysThinkingEnabled,
     reasoningEffort,
@@ -397,6 +408,7 @@ const App = () => {
     setCodexBaseUrl,
     setCodexUsesCustomBaseUrl,
     setReasoningEffort,
+    setActiveSessionRuntimeSnapshot,
     setProviderConfigVersion,
     setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled,
@@ -553,6 +565,8 @@ const App = () => {
     setCodexBaseUrl,
     setCodexUsesCustomBaseUrl,
     setReasoningEffort,
+    // 恢复回调只应刷新活动 session 的真实 runtime 快照，避免反向覆盖聊天区当前选择器。
+    setActiveSessionRuntimeSnapshot,
     setProviderConfigVersion,
     setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled,
@@ -572,10 +586,12 @@ const App = () => {
     activeCodexProviderIdRef,
     shouldAdoptCodexDefaultModelRef,
     shouldAdoptCodexDefaultReasoningEffortRef,
+    shouldSyncDesiredRuntimeSelectionFromActiveRuntimeRef,
     messagesContainerRef,
     isUserAtBottomRef,
     userPausedRef,
     suppressNextStatusToastRef,
+    messagesRef,
     streamingContentRef,
     streamingThinkingRef,
     isStreamingRef,
@@ -649,19 +665,34 @@ const App = () => {
     forceCreateNewSession,
     handleModeSelect,
     longContextEnabled,
+    reasoningEffort,
     openContextUsageDialog,
     closeContextUsageDialog,
     currentSessionId,
     continuationPending,
     currentSessionIdRef,
     continuationPendingRef,
+    desiredRuntimeSelectionRef,
+    activeSessionRuntimeSnapshotRef,
   });
+
+  const executeQueuedMessage = useCallback((queuedMessage: QueuedMessage) => {
+    if (queuedMessage.kind === 'locked_task') {
+      executeMessage(queuedMessage.content, queuedMessage.attachments, {
+        kind: 'locked_task',
+        lockedBy: queuedMessage.lockedBy,
+        lockedRuntimeIntent: queuedMessage.lockedRuntimeIntent,
+      });
+      return;
+    }
+    executeMessage(queuedMessage.content, queuedMessage.attachments);
+  }, [executeMessage]);
 
   const {
     queue: messageQueue,
     enqueue: enqueueMessage,
     dequeue: dequeueMessage,
-  } = useMessageQueue({ isLoading: loading, onExecute: executeMessage });
+  } = useMessageQueue({ isLoading: loading, onExecute: executeQueuedMessage });
 
   const handleSubmit = useCallback((content: string, attachments?: Attachment[]) => {
     const text = content.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();

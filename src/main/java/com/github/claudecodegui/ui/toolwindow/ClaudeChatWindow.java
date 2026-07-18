@@ -451,6 +451,7 @@ public class ClaudeChatWindow {
         }
         CodexSessionBinding restoredBinding = buildCodexSessionBinding(savedState);
         session.getState().setCodexSessionBinding(restoredBinding);
+        logActiveRuntimeMutated("restorePersistedTabSessionState");
 
         String restoredSessionId = isNonEmpty(savedState.sessionId) ? savedState.sessionId : null;
         String restoredCwd = isNonEmpty(savedState.cwd) ? savedState.cwd : session.getCwd();
@@ -1084,6 +1085,42 @@ public class ClaudeChatWindow {
                 + ", baseUrlSource=" + binding.getBaseUrlSource()
                 + ", effectiveConfigSource=" + binding.getEffectiveConfigSource()
                 + "}";
+    }
+
+    /**
+     * 记录当前标签页活动会话 runtime 已被真实改写。
+     * 持久化标签恢复会直接把 provider/model/reasoning/binding 写回当前 session，
+     * 因此必须显式打出 `activeRuntimeMutated`，避免后续把这类启动恢复误判成聊天区选择器触发的即时 runtime 污染。
+     *
+     * @param source 本次 live runtime 改写来源
+     */
+    private void logActiveRuntimeMutated(String source) {
+        if (session == null) {
+            return;
+        }
+        CodexSessionBinding binding = session.getState().getCodexSessionBinding();
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " activeRuntimeMutated"
+                + ", source=" + normalizeValue(source)
+                + ", sessionId=" + normalizeValue(session.getSessionId())
+                + ", provider=" + normalizeValue(session.getProvider())
+                + ", runtimeFamily=" + normalizeValue(savedRuntimeFamilyForTrace(binding))
+                + ", model=" + normalizeValue(session.getModel())
+                + ", reasoningEffort=" + normalizeValue(session.getReasoningEffort())
+                + ", binding=" + describeCodexBinding(binding));
+    }
+
+    /**
+     * 统一推导当前标签页会话运行时家族，避免多处日志重复拼接相同分支。
+     *
+     * @param binding 当前会话上的 Codex binding
+     * @return 归一化后的 runtime family 字符串
+     */
+    private String savedRuntimeFamilyForTrace(CodexSessionBinding binding) {
+        return SessionRuntimeFamily.resolve(
+                session != null ? session.getProvider() : null,
+                null,
+                binding
+        );
     }
 
     /**

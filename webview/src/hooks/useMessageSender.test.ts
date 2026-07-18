@@ -3,12 +3,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMessageSender } from './useMessageSender';
 import { sendBridgeEvent } from '../utils/bridge';
 import type { Attachment, PermissionMode } from '../components/ChatInputBox/types';
+import { buildRuntimeIntentFromSelection } from '../types/runtimeIntent';
+import type { RuntimeSelectionState } from '../types/runtimeSelection';
+import type { UseMessageSenderOptions } from './useMessageSender';
 
 vi.mock('../utils/bridge', () => ({
   sendBridgeEvent: vi.fn(),
 }));
 
-const createOptions = (currentProvider: string, permissionMode: PermissionMode) => ({
+type RuntimeAwareMessageSenderOptions = UseMessageSenderOptions & {
+  desiredRuntimeSelectionRef: { current: RuntimeSelectionState };
+  activeSessionRuntimeSnapshotRef: { current: RuntimeSelectionState };
+};
+
+const createOptions = (
+  currentProvider: string,
+  permissionMode: PermissionMode,
+): RuntimeAwareMessageSenderOptions => ({
   t: ((key: string) => key) as any,
   addToast: vi.fn(),
   currentProvider,
@@ -17,12 +28,29 @@ const createOptions = (currentProvider: string, permissionMode: PermissionMode) 
   selectedAgent: null,
   sdkStatusLoaded: true,
   currentSdkInstalled: true,
+  reasoningEffort: 'medium',
   sentAttachmentsRef: { current: new Map() },
   chatInputRef: { current: { getFileTags: () => [] } as any },
   messagesContainerRef: { current: null },
   isUserAtBottomRef: { current: true },
   userPausedRef: { current: false },
   isStreamingRef: { current: false },
+  desiredRuntimeSelectionRef: {
+    current: {
+      provider: currentProvider,
+      model: 'test-model',
+      reasoningEffort: 'medium',
+      codexProviderId: currentProvider === 'codex' ? 'managed-openai' : '',
+    } satisfies RuntimeSelectionState,
+  },
+  activeSessionRuntimeSnapshotRef: {
+    current: {
+      provider: currentProvider,
+      model: 'test-model',
+      reasoningEffort: 'medium',
+      codexProviderId: currentProvider === 'codex' ? 'managed-openai' : '',
+    } satisfies RuntimeSelectionState,
+  },
   setMessages: vi.fn(),
   setLoading: vi.fn(),
   setLoadingStartTime: vi.fn(),
@@ -101,6 +129,13 @@ describe('useMessageSender', () => {
     const payload = JSON.parse(sendMessageCall[1]);
     expect(payload.permissionMode).toBe('default');
     expect(payload.requestedUsageMode).toBe('plan');
+    expect(payload.runtimeIntent).toMatchObject({
+      sourceKind: 'chat',
+      resolutionPolicy: 'dynamic_at_execution',
+      targetProvider: 'codex',
+      targetRuntimeFamily: 'codex',
+      targetModel: 'test-model',
+    });
   });
 
   it('keeps plan permission mode for non-codex providers', () => {
@@ -117,6 +152,7 @@ describe('useMessageSender', () => {
     const payload = JSON.parse(sendMessageCall[1]);
     expect(payload.permissionMode).toBe('plan');
     expect(payload.requestedUsageMode).toBe('plan');
+    expect(payload.runtimeIntent.targetProvider).toBe('claude');
   });
 
   it('includes requested usage mode in attachment sends', () => {
@@ -142,6 +178,7 @@ describe('useMessageSender', () => {
     expect(payload.permissionMode).toBe('default');
     expect(payload.requestedUsageMode).toBe('plan');
     expect(payload.attachments).toHaveLength(1);
+    expect(payload.runtimeIntent.targetProvider).toBe('codex');
   });
 
   it('passes chat requested usage mode for non-plan sends', () => {
@@ -158,6 +195,115 @@ describe('useMessageSender', () => {
     const payload = JSON.parse(sendMessageCall[1]);
     expect(payload.permissionMode).toBe('default');
     expect(payload.requestedUsageMode).toBe('chat');
+    expect(payload.runtimeIntent.targetProvider).toBe('codex');
+  });
+
+  it('resolves runtime intent from the latest desired selection ref at execution time', () => {
+    // 排队消息出队时必须跟随“最终选择”的 runtime，而不是继续使用旧 render 闭包里的 provider/model。
+    const options = createOptions('claude', 'plan');
+    options.desiredRuntimeSelectionRef.current = {
+      provider: 'codex',
+      model: 'gpt-5.4',
+      reasoningEffort: 'low',
+      codexProviderId: 'managed-openai',
+    } as RuntimeSelectionState;
+    options.activeSessionRuntimeSnapshotRef.current = {
+      provider: 'claude',
+      model: 'claude-sonnet-4-6',
+      reasoningEffort: 'high',
+      codexProviderId: '',
+    } as RuntimeSelectionState;
+    const { result } = renderHook(() => useMessageSender(options));
+
+    act(() => {
+      result.current.executeMessage('use latest desired runtime');
+    });
+
+    const sendMessageCall = (sendBridgeEvent as any).mock.calls.find((call: any[]) => call[0] === 'send_message');
+    expect(sendMessageCall).toBeTruthy();
+    const payload = JSON.parse(sendMessageCall[1]);
+    expect(payload.permissionMode).toBe('default');
+    expect(payload.runtimeIntent).toEqual({
+      sourceKind: 'chat',
+      resolutionPolicy: 'dynamic_at_execution',
+      targetProvider: 'codex',
+      targetRuntimeFamily: 'codex',
+      targetModel: 'gpt-5.4',
+      targetReasoningEffort: 'low',
+      targetCodexProviderId: 'managed-openai',
+    });
+    expect(sendBridgeEvent).not.toHaveBeenCalledWith('set_provider', expect.anything());
+  });
+
+  it('keeps locked task runtime intent and lets the next ordinary message return to the latest desired selection', () => {
+    /**
+     * 中文注释：
+     * 该用例覆盖 Task 3 Step 9。
+     * 先让计划子任务以锁定模型 A 发送，再保持聊天区 desired selection 仍指向模型 C；
+     * 下一条普通消息必须重新按聊天区最终选择解析，而不是继续复用锁定任务的模型 A。
+     */
+    const options = createOptions('codex', 'default');
+    options.desiredRuntimeSelectionRef.current = {
+      provider: 'codex',
+      model: 'gpt-5.5',
+      reasoningEffort: 'high',
+      codexProviderId: 'managed-openai',
+    } as RuntimeSelectionState;
+    options.activeSessionRuntimeSnapshotRef.current = {
+      provider: 'codex',
+      model: 'gpt-5.5',
+      reasoningEffort: 'high',
+      codexProviderId: 'managed-openai',
+    } as RuntimeSelectionState;
+    const lockedRuntimeIntent = buildRuntimeIntentFromSelection(
+      {
+        provider: 'codex',
+        model: 'gpt-5.4',
+        reasoningEffort: 'low',
+        codexProviderId: 'managed-openai',
+      },
+      'locked_task',
+      'locked_at_enqueue',
+      'plan_subtask',
+    );
+    const { result } = renderHook(() => useMessageSender(options));
+
+    act(() => {
+      result.current.executeMessage('run locked plan step', undefined, {
+        kind: 'locked_task',
+        lockedBy: 'plan_subtask',
+        lockedRuntimeIntent,
+      });
+    });
+
+    let sendMessageCalls = (sendBridgeEvent as any).mock.calls.filter((call: any[]) => call[0] === 'send_message');
+    expect(sendMessageCalls).toHaveLength(1);
+    let payload = JSON.parse(sendMessageCalls[0][1]);
+    expect(payload.runtimeIntent).toEqual(lockedRuntimeIntent);
+
+    options.activeSessionRuntimeSnapshotRef.current = {
+      provider: 'codex',
+      model: 'gpt-5.4',
+      reasoningEffort: 'low',
+      codexProviderId: 'managed-openai',
+    } as RuntimeSelectionState;
+
+    act(() => {
+      result.current.executeMessage('back to chat runtime');
+    });
+
+    sendMessageCalls = (sendBridgeEvent as any).mock.calls.filter((call: any[]) => call[0] === 'send_message');
+    expect(sendMessageCalls).toHaveLength(2);
+    payload = JSON.parse(sendMessageCalls[1][1]);
+    expect(payload.runtimeIntent).toEqual({
+      sourceKind: 'chat',
+      resolutionPolicy: 'dynamic_at_execution',
+      targetProvider: 'codex',
+      targetRuntimeFamily: 'codex',
+      targetModel: 'gpt-5.5',
+      targetReasoningEffort: 'high',
+      targetCodexProviderId: 'managed-openai',
+    });
   });
 
   it('blocks continued-segment submit before the real session id is assigned', () => {

@@ -301,7 +301,13 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
 
                         if (ready != null && ready) {
                             LOG.info("[ToolWindow] ai-bridge ready, replacing loading panel with chat window");
-                            replaceLoadingPanelWithChatWindow(project, contentFactory, contentManager, loadingContent);
+                            replaceLoadingPanelWithChatWindowSafely(
+                                    project,
+                                    contentFactory,
+                                    contentManager,
+                                    loadingContent,
+                                    loadingPanel
+                            );
                         } else {
                             LOG.error("[ToolWindow] ai-bridge preparation failed");
                             updateLoadingPanelWithError(loadingPanel, "AI Bridge preparation failed. Please restart IDE.");
@@ -603,6 +609,37 @@ public class ClaudeSDKToolWindow implements ToolWindowFactory, DumbAware {
         loadingPanel.add(centerPanel);
         loadingPanel.revalidate();
         loadingPanel.repaint();
+    }
+
+    /**
+     * 在 bridge 已经准备完成后，安全地把 loading panel 替换为聊天窗口。
+     * 这里单独包一层异常兜底，是为了把“bridge 失败”和“聊天窗口初始化失败”区分开，
+     * 避免窗口构造异常时界面继续停留在 `Preparing AI Bridge...`，误导用户和排查结论。
+     *
+     * @param project 当前项目
+     * @param contentFactory 内容工厂
+     * @param contentManager ToolWindow 内容管理器
+     * @param loadingContent 当前占位的 loading content
+     * @param loadingPanel 当前显示中的 loading panel，用于回写错误提示
+     */
+    private void replaceLoadingPanelWithChatWindowSafely(
+            @NotNull Project project,
+            ContentFactory contentFactory,
+            ContentManager contentManager,
+            Content loadingContent,
+            JPanel loadingPanel
+    ) {
+        try {
+            replaceLoadingPanelWithChatWindow(project, contentFactory, contentManager, loadingContent);
+        } catch (Exception e) {
+            LOG.warn("[ToolWindow] chat window initialization failed after ai-bridge became ready"
+                    + ", stage=replaceLoadingPanelWithChatWindow"
+                    + ", project=" + project.getName(), e);
+            updateLoadingPanelWithError(
+                    loadingPanel,
+                    "Chat window initialization failed. Please check idea.log and restart IDE."
+            );
+        }
     }
 
     /**

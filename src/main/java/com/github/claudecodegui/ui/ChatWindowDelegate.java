@@ -62,6 +62,7 @@ import com.intellij.util.concurrency.AppExecutorUtil;
 
 import javax.swing.*;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -243,6 +244,13 @@ public class ChatWindowDelegate {
         return sessionId;
     }
 
+    /**
+     * 初始化聊天窗口所需的消息处理器与桥接回调。
+     * 该方法会把前后端消息入口、权限处理、历史恢复和任务提醒统一注册到 dispatcher，
+     * 但必须保证“发送期依赖”不会在窗口构造期被提前求值。
+     * 尤其是 send-time runtime switch 依赖的 `SessionLifecycleManager` 只能在真正发送消息时惰性读取，
+     * 否则工具窗口会因为初始化顺序而直接抛空指针，无法从 loading panel 切到聊天窗口。
+     */
     public void initializeHandlers() {
         Project project = host.getProject();
         ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
@@ -293,7 +301,15 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(new SkillHandler(handlerContext));
         messageDispatcher.registerHandler(new FileHandler(handlerContext));
         messageDispatcher.registerHandler(new SettingsHandler(handlerContext, taskReminderDispatcher));
-        SessionHandler sessionHandler = new SessionHandler(handlerContext, taskStateService, taskReminderDispatcher);
+        // 中文注释：这里不能再直接绑定 `host.getSessionLifecycleManager()::prepareSessionForSend`。
+        // ClaudeChatWindow 的真实构造顺序里，delegate 初始化早于 lifecycle manager 挂载；
+        // 如果在此刻立刻创建方法引用，就会对空接收者做 requireNonNull，重现启动卡死。
+        SessionHandler sessionHandler = new SessionHandler(
+                handlerContext,
+                taskStateService,
+                taskReminderDispatcher,
+                buildSessionSendPreparation(handlerContext)
+        );
         handlerContext.setSessionRetryingCallback(sessionHandler::notifyRetrying);
         messageDispatcher.registerHandler(sessionHandler);
         messageDispatcher.registerHandler(new ContextHandler(handlerContext));
@@ -374,6 +390,28 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(historyHandler);
 
         LOG.info("Registered " + messageDispatcher.getHandlerCount() + " message handlers");
+    }
+
+    /**
+     * 构建发送前会话准备回调。
+     * 该回调只在 `send_message` 真正开始时才解析 `SessionLifecycleManager`，
+     * 这样才能把运行时切换约束在发送链路内部，而不是在窗口构造期提前触发。
+     * 若 manager 由于异常时序仍未挂载，则退回当前活动 session 并记录清晰告警，
+     * 避免再次把局部问题放大为整个工具窗口无法初始化。
+     *
+     * @param handlerContext 当前聊天窗口绑定的 handler 上下文
+     * @return 发送前会话准备回调
+     */
+    private SessionHandler.SessionSendPreparation buildSessionSendPreparation(HandlerContext handlerContext) {
+        return runtimeIntent -> {
+            SessionLifecycleManager lifecycleManager = host.getSessionLifecycleManager();
+            if (lifecycleManager == null) {
+                LOG.warn("[SessionInitOrder] SessionLifecycleManager is not ready during send preparation. "
+                        + "Falling back to current session.");
+                return CompletableFuture.completedFuture(handlerContext.getSession());
+            }
+            return lifecycleManager.prepareSessionForSend(runtimeIntent);
+        };
     }
 
     public void initializeStatusBar() {
@@ -736,6 +774,7 @@ public class ChatWindowDelegate {
             }
             session.setReasoningEffort(reasoningEffort);
             session.getState().setCodexSessionBinding(buildFreshNewTabCodexBinding(codexProviderId, model));
+            logActiveRuntimeMutated(session, "applyFreshNewTabDefaultsIfNeeded");
 
             host.callJavaScript("window.applyNewTabDefaults", JsUtils.escapeJs(defaults.toString()));
             // 只在同一 tab 生命周期内首次应用默认值时写回 snapshot，避免 watchdog reload 重复覆盖运行态。
@@ -798,6 +837,53 @@ public class ChatWindowDelegate {
             LOG.warn("[FreshNewTab] Failed to build Codex binding for providerId=" + providerId + ": " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 记录当前窗口内活动会话运行态已被真实改写。
+     * fresh new tab 默认值属于“直接写当前 session”的入口，语义上必须与仅持久化选择器的 `selectionPersistedOnly` 区分开，
+     * 这样排查“为什么打开空白新标签后当前会话 runtime 变了”时，才能明确看到来源来自 new-tab 默认快照而不是聊天区下拉框。
+     *
+     * @param session 已完成 runtime 写入的当前会话
+     * @param source 本次 live runtime 改写来源
+     */
+    private void logActiveRuntimeMutated(ClaudeSession session, String source) {
+        if (session == null) {
+            return;
+        }
+        CodexSessionBinding binding = session.getState().getCodexSessionBinding();
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " activeRuntimeMutated"
+                + ", source=" + (hasText(source) ? source : "unknown")
+                + ", sessionId=" + (hasText(session.getSessionId()) ? session.getSessionId() : "")
+                + ", provider=" + (hasText(session.getProvider()) ? session.getProvider() : "")
+                + ", runtimeFamily=" + SessionRuntimeFamily.resolve(
+                session.getProvider(),
+                null,
+                binding
+        )
+                + ", model=" + (hasText(session.getModel()) ? session.getModel() : "")
+                + ", reasoningEffort=" + (hasText(session.getReasoningEffort()) ? session.getReasoningEffort() : "")
+                + ", binding=" + describeCodexBinding(binding));
+    }
+
+    /**
+     * 统一格式化当前窗口运行态中的 Codex binding 摘要。
+     * 这里只输出 provider/model/requestMode/baseUrlSource/effectiveConfigSource 等非敏感元数据，
+     * 避免 runtime trace 记录任何可能泄露凭据或用户输入内容的字段。
+     *
+     * @param binding 当前会话上的 Codex binding
+     * @return 稳定的日志摘要；为空时返回 "(null)"
+     */
+    private String describeCodexBinding(CodexSessionBinding binding) {
+        if (binding == null) {
+            return "(null)";
+        }
+        return "{providerId=" + binding.getProviderId()
+                + ", model=" + binding.getModel()
+                + ", requestMode=" + binding.getRequestMode()
+                + ", baseUrlSource=" + binding.getBaseUrlSource()
+                + ", effectiveConfigSource=" + binding.getEffectiveConfigSource()
+                + "}";
     }
 
     public void dispose() {

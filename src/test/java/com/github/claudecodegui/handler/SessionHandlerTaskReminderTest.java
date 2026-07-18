@@ -33,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -329,6 +330,49 @@ public class SessionHandlerTaskReminderTest {
         }
     }
 
+    /**
+     * 验证 send-time 失败路径会显式关闭前端 loading，避免前端在 optimistic send 后长期停留在“响应中”。
+     * 这里刻意约束只发送 `showLoading(false)`，不补发 `onStreamEnd`，因为这类失败可能发生在真正进入流式阶段之前，
+     * 若伪造 stream end 会把“未开始的流”错误地收口成一次真实的流式结束事件。
+     *
+     * @throws Exception 当测试初始化、异步等待或反射调用失败时抛出
+     */
+    @Test
+    public void shouldClearFrontendLoadingWithoutSyntheticStreamEndWhenSendFails() throws Exception {
+        Application previousApplication = ApplicationManager.getApplication();
+        Disposable testDisposable = null;
+        if (previousApplication == null) {
+            testDisposable = Disposer.newDisposable();
+            MockApplication.setUp(testDisposable);
+        }
+
+        Path projectDir = Files.createTempDirectory("session-handler-send-failed-loading-test");
+        try {
+            FailingClaudeSession session = new FailingClaudeSession(createProject(projectDir));
+            session.setSessionInfo("session-send-failed", projectDir.toString());
+            RecordingJsCallback jsCallback = new RecordingJsCallback();
+
+            HandlerContext context = createContext(projectDir, session, jsCallback);
+            RecordingTaskReminderDispatcher dispatcher = new RecordingTaskReminderDispatcher(context);
+            TaskStateService taskStateService = new TaskStateService();
+            SessionHandler handler = new SessionHandler(context, taskStateService, dispatcher);
+
+            boolean handled = handler.handle("send_message", "{\"text\":\"force failure\"}");
+
+            assertTrue(handled);
+            assertTrue("dispatch timed out", dispatcher.awaitDispatchCount(2));
+            assertTrue("frontend loading reset timed out, calls=" + jsCallback.calls, jsCallback.awaitCall("showLoading", "false"));
+            assertEquals(TaskState.RUNNING, dispatcher.states.get(0));
+            assertEquals(TaskState.FINAL_ERROR, dispatcher.states.get(1));
+            assertTrue("send failure should clear loading, calls=" + jsCallback.calls, jsCallback.containsCall("showLoading", "false"));
+            assertTrue("send-time failure must not synthesize stream end", !jsCallback.functionNames.contains("onStreamEnd"));
+        } finally {
+            if (testDisposable != null) {
+                Disposer.dispose(testDisposable);
+            }
+        }
+    }
+
     private static HandlerContext createContext(Path projectDir, ClaudeSession session) {
         return createContext(projectDir, session, new RecordingJsCallback());
     }
@@ -381,17 +425,62 @@ public class SessionHandlerTaskReminderTest {
     }
 
     private static class RecordingJsCallback implements HandlerContext.JsCallback {
-        private final List<String> functionNames = new ArrayList<>();
+        private final List<String> functionNames = new CopyOnWriteArrayList<>();
+        private final List<String> calls = new CopyOnWriteArrayList<>();
+        private final CountDownLatch showLoadingFalseLatch = new CountDownLatch(1);
 
         @Override
         public void callJavaScript(String functionName, String... args) {
             functionNames.add(functionName);
+            String call = functionName + ":" + String.join(",", args);
+            calls.add(call);
+            if (containsCall(functionName, args != null && args.length > 0 ? args[0] : "")) {
+                if ("showLoading".equals(functionName) && args != null && args.length > 0 && "false".equals(args[0])) {
+                    showLoadingFalseLatch.countDown();
+                }
+            }
         }
 
         @Override
         public String escapeJs(String str) {
             return str;
         }
+
+        /**
+         * 判断是否出现过指定的前端桥接调用，用于验证失败分支的 UI 收口契约。
+         *
+         * @param functionName 目标 JS 函数名
+         * @param firstArg 目标调用的第一个参数；允许为空字符串，但不允许为 null
+         * @return true 表示存在匹配的桥接调用
+         */
+        private boolean containsCall(String functionName, String firstArg) {
+            String expectedPrefix = functionName + ":" + firstArg;
+            for (String call : calls) {
+                if (call.equals(expectedPrefix) || call.startsWith(expectedPrefix + ",")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * 等待指定的 `showLoading(false)` 桥接调用送达，避免异步回调尚未执行就提前断言。
+         *
+         * @param functionName 目标 JS 函数名
+         * @param firstArg 目标第一个参数
+         * @return true 表示在超时前观察到目标调用
+         * @throws InterruptedException 等待过程中被中断时抛出
+         */
+        private boolean awaitCall(String functionName, String firstArg) throws InterruptedException {
+            if (containsCall(functionName, firstArg)) {
+                return true;
+            }
+            if ("showLoading".equals(functionName) && "false".equals(firstArg)) {
+                return showLoadingFalseLatch.await(5, TimeUnit.SECONDS);
+            }
+            return false;
+        }
+
     }
 
     private static class RecordingClaudeSession extends ClaudeSession {
@@ -412,6 +501,39 @@ public class SessionHandlerTaskReminderTest {
                 getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, input));
             }
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    /**
+     * 用于模拟 send-time 异常的会话桩。
+     * 该桩会在 `session.send(...)` 返回的 future 中直接失败，覆盖“真正进入 provider 流事件前就失败”的链路。
+     */
+    private static class FailingClaudeSession extends RecordingClaudeSession {
+
+        FailingClaudeSession(Project project) {
+            super(project);
+        }
+
+        /**
+         * 直接返回失败 future，验证 SessionHandler 的异常收口行为。
+         *
+         * @param input 用户输入文本
+         * @param agentPrompt 当前 agent prompt
+         * @param fileTagPaths 文件标签绝对路径列表
+         * @param requestedPermissionMode 请求的权限模式
+         * @return 始终失败的 future
+         */
+        @Override
+        public CompletableFuture<Void> send(
+            String input,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode
+        ) {
+            getState().addMessage(new ClaudeSession.Message(ClaudeSession.Message.Type.USER, input));
+            CompletableFuture<Void> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new IllegalStateException("synthetic send failure"));
+            return failed;
         }
     }
 
