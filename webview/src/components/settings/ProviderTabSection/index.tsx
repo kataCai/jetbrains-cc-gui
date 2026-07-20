@@ -34,11 +34,13 @@ interface ProviderTabSectionProps {
   codexLoading: boolean;
   codexModelCatalog: CodexModelCatalogItem[];
   codexModelCatalogLoading: boolean;
+  syncingCodexProviderId?: string;
   testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
   onCreateCodexProviderFromAlias?: (providerDraft: Partial<CodexProviderConfig>) => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
+  onFetchCodexProviderModels: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onAuthorizeCodexLocalConfig: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
@@ -60,11 +62,13 @@ const ProviderTabSection = ({
   codexLoading,
   codexModelCatalog,
   codexModelCatalogLoading,
+  syncingCodexProviderId,
   testingCodexProviderId,
   onAddCodexProvider,
   onCreateCodexProviderFromAlias,
   onEditCodexProvider,
   onDeleteCodexProvider,
+  onFetchCodexProviderModels,
   onTestCodexProvider,
   onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
@@ -265,10 +269,12 @@ const ProviderTabSection = ({
               codexProviders={codexProviders}
               codexLocalConfigAuthorized={cliLoginProvider?.isAuthorized === true}
               codexLoading={codexLoading}
+              syncingCodexProviderId={syncingCodexProviderId}
               testingCodexProviderId={testingCodexProviderId}
               onAddCodexProvider={onAddCodexProvider}
               onEditCodexProvider={onEditCodexProvider}
               onDeleteCodexProvider={onDeleteCodexProvider}
+              onFetchCodexProviderModels={onFetchCodexProviderModels}
               onTestCodexProvider={onTestCodexProvider}
               onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
               onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}

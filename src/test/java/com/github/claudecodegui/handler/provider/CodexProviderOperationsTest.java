@@ -1,10 +1,12 @@
 package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.codex.CodexProviderModelDiscoveryService;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.settings.CodexProviderManager;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -217,6 +219,89 @@ public class CodexProviderOperationsTest {
         assertEquals("window.updateActiveCodexProvider", jsCallback.lastFunctionName);
     }
 
+    /**
+     * 验证目标：
+     * 当远端模型发现与本地合并都成功时，操作处理器必须同时做到两件事：
+     * 1. 给出带统计信息的成功提示；
+     * 2. 主动刷新 provider 列表，复用现有 `updateCodexProviders -> loadCodexModelCatalog` 链路。
+     *
+     * 断言意图：
+     * 成功场景下既要看到 `window.showSuccess`，也要看到 `window.updateCodexProviders`，
+     * 并且设置服务拿到的 merge 入参必须是 discovery service 返回的模型 id 列表。
+     */
+    @Test
+    public void shouldRefreshProviderListAfterFetchingCodexProviderModels() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(createManagedProvider(), new JsonObject());
+        settingsService.mergeResult = new CodexProviderManager.CodexProviderModelMergeResult(2, 1, 0);
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(
+                        settingsService,
+                        new CodexProviderModelDiscoveryService.DiscoveryResult(List.of("gpt-5.5", "gpt-5.4-mini"), 0, 0)
+                )
+        );
+
+        operations.handleFetchCodexProviderModels("{\"id\":\"managed-provider\"}");
+
+        assertEquals("managed-provider", settingsService.lastMergedProviderId);
+        assertEquals(List.of("gpt-5.5", "gpt-5.4-mini"), settingsService.lastMergedModelIds);
+        assertTrue(jsCallback.hasFunctionCall("window.showSuccess"));
+        assertTrue(jsCallback.hasFunctionCall("window.updateCodexProviders"));
+        assertTrue(jsCallback.lastArgs.stream().anyMatch(arg -> arg.contains("Managed Provider")));
+    }
+
+    /**
+     * 验证目标：
+     * 当远端拉取完成但没有任何新增模型时，设置页不能静默成功，
+     * 必须明确告诉用户“本次没有新增，只是跳过了重复/无效项”。
+     *
+     * 断言意图：
+     * 成功提示文案里应包含“no new models”语义，同时不应因为无变化而错误显示新增统计。
+     */
+    @Test
+    public void shouldShowNoChangeSuccessMessageWhenFetchedModelsDoNotAddAnythingNew() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(createManagedProvider(), new JsonObject());
+        settingsService.mergeResult = new CodexProviderManager.CodexProviderModelMergeResult(0, 2, 1);
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(
+                        settingsService,
+                        new CodexProviderModelDiscoveryService.DiscoveryResult(List.of("provider-model"), 0, 0)
+                )
+        );
+
+        operations.handleFetchCodexProviderModels("{\"id\":\"managed-provider\"}");
+
+        assertEquals("window.showSuccess", jsCallback.lastFunctionName);
+        assertTrue(jsCallback.lastArgs.get(0).contains("No new models"));
+    }
+
+    /**
+     * 验证目标：
+     * 当 discovery service 明确抛出失败原因时，操作处理器必须把错误直接回传前端，
+     * 并停止后续 merge / 列表刷新，避免把失败链路误报成“拉取成功但没有模型”。
+     *
+     * 断言意图：
+     * 失败场景下只应出现 `window.showError`，且设置服务不应收到任何 merge 调用。
+     */
+    @Test
+    public void shouldShowErrorAndSkipMergeWhenFetchingCodexProviderModelsFails() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(createManagedProvider(), new JsonObject());
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(settingsService, new IOException("Unsupported authMode for model discovery: proxy"))
+        );
+
+        operations.handleFetchCodexProviderModels("{\"id\":\"managed-provider\"}");
+
+        assertEquals("window.showError", jsCallback.lastFunctionName);
+        assertTrue(jsCallback.lastArgs.get(0).contains("Unsupported authMode"));
+        assertEquals("", settingsService.lastMergedProviderId);
+    }
+
     private static HandlerContext createContext(
             CodemossSettingsService settingsService,
             CodexSDKBridge codexSDKBridge,
@@ -250,7 +335,7 @@ public class CodexProviderOperationsTest {
     }
 
     private static class TestSettingsService extends CodemossSettingsService {
-        private final JsonObject provider;
+        protected final JsonObject provider;
         private final JsonObject localModelState;
 
         TestSettingsService(JsonObject provider, JsonObject localModelState) {
@@ -308,6 +393,75 @@ public class CodexProviderOperationsTest {
         }
     }
 
+    /**
+     * 跟踪“获取模型列表”链路中设置服务的合并入参与 provider 列表回传。
+     * 该桩把 discovery -> merge -> updateCodexProviders 三段串起来，
+     * 便于测试只聚焦操作处理器的编排责任，而不依赖真实配置落盘。
+     */
+    private static class TrackingFetchSettingsService extends TestSettingsService {
+        private String lastMergedProviderId = "";
+        private List<String> lastMergedModelIds = List.of();
+        private CodexProviderManager.CodexProviderModelMergeResult mergeResult =
+                new CodexProviderManager.CodexProviderModelMergeResult(0, 0, 0);
+
+        TrackingFetchSettingsService(JsonObject provider, JsonObject localModelState) {
+            super(provider, localModelState);
+        }
+
+        @Override
+        public CodexProviderManager.CodexProviderModelMergeResult mergeCodexProviderModels(
+                String providerId,
+                List<String> fetchedModelIds
+        ) {
+            this.lastMergedProviderId = providerId;
+            this.lastMergedModelIds = new ArrayList<>(fetchedModelIds);
+            return mergeResult;
+        }
+
+        @Override
+        public List<JsonObject> getCodexProviders() {
+            List<JsonObject> providers = new ArrayList<>();
+            if (provider != null) {
+                providers.add(provider.deepCopy());
+            }
+            return providers;
+        }
+    }
+
+    /**
+     * 用于给操作处理器注入可预测结果的 discovery service。
+     * 这里通过覆盖 `discoverModels`，把网络访问折叠成固定成功结果或固定异常，
+     * 让测试能专注断言 handler 编排，而不是再次覆盖底层 HTTP 细节。
+     */
+    private static class RecordingDiscoveryService extends CodexProviderModelDiscoveryService {
+        private final DiscoveryResult result;
+        private final IOException failure;
+
+        RecordingDiscoveryService(CodemossSettingsService settingsService, DiscoveryResult result) {
+            super(settingsService, ignored -> "", (uri, authorizationHeader, acceptHeader) -> {
+                throw new IOException("Transport should not be called in overridden discovery service");
+            });
+            this.result = result;
+            this.failure = null;
+        }
+
+        RecordingDiscoveryService(CodemossSettingsService settingsService, IOException failure) {
+            super(settingsService, ignored -> "", (uri, authorizationHeader, acceptHeader) -> {
+                throw new IOException("Transport should not be called in overridden discovery service");
+            });
+            this.result = null;
+            this.failure = failure;
+        }
+
+        @Override
+        public DiscoveryResult discoverModels(JsonObject provider) throws IOException {
+            if (failure != null) {
+                throw failure;
+            }
+            return result;
+        }
+    }
+
     private static class RecordingCodexSDKBridge extends CodexSDKBridge {
         @Override
         public CompletableFuture<SDKResult> sendMessage(
@@ -332,10 +486,12 @@ public class CodexProviderOperationsTest {
     private static class RecordingJsCallback implements HandlerContext.JsCallback {
         private String lastFunctionName = "";
         private final List<String> lastArgs = new ArrayList<>();
+        private final List<String> functionHistory = new ArrayList<>();
 
         @Override
         public void callJavaScript(String functionName, String... args) {
             this.lastFunctionName = functionName;
+            this.functionHistory.add(functionName);
             this.lastArgs.clear();
             if (args != null) {
                 for (String arg : args) {
@@ -355,6 +511,16 @@ public class CodexProviderOperationsTest {
             }
             JsonElement parsed = com.google.gson.JsonParser.parseString(lastArgs.get(0));
             return parsed.getAsJsonObject();
+        }
+
+        /**
+         * 判断指定 JS 回调是否在当前测试过程中被触发过。
+         *
+         * @param functionName 目标 JS 函数名
+         * @return 若调用历史中出现过则返回 true
+         */
+        boolean hasFunctionCall(String functionName) {
+            return functionHistory.contains(functionName);
         }
     }
 }

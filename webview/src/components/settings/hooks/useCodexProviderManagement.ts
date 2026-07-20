@@ -96,9 +96,15 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     sendToJava('get_codex_providers:');
   }, []);
 
+  // 当前正在执行“拉取供应商模型列表”的 provider id。
+  // 该状态独立于测试连接状态，避免两个异步动作共用一个 loading 标记后相互覆盖。
+  const [syncingCodexProviderId, setSyncingCodexProviderId] = useState('');
+
   // Update Codex provider list (used by window callback)
   const updateCodexProviders = useCallback((providersList: CodexProviderConfig[]) => {
     setCodexProviders(providersList);
+    // provider 列表一旦回推，说明本次模型同步链路已经完成，可安全清理按钮级 loading。
+    setSyncingCodexProviderId('');
     setCodexLoading(false);
   }, []);
 
@@ -229,6 +235,18 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     sendToJava(`test_codex_provider:${JSON.stringify({ id: provider.id })}`);
   }, []);
 
+  /**
+   * 触发当前 provider 的远端模型列表拉取。
+   * 该方法只负责维护前端按钮级 loading 状态并发送桥接消息；真正的 URL 归一化、
+   * 鉴权解析、去重合并和成功提示均交由后端处理。
+   *
+   * @param provider 用户在设置页卡片上点击“获取模型列表”的目标 provider
+   */
+  const handleFetchCodexProviderModels = useCallback((provider: CodexProviderConfig) => {
+    setSyncingCodexProviderId(provider.id);
+    sendToJava(`fetch_codex_provider_models:${JSON.stringify({ id: provider.id })}`);
+  }, []);
+
   // Delete Codex provider
   const handleDeleteCodexProvider = useCallback((provider: CodexProviderConfig) => {
     setDeleteCodexConfirm({ isOpen: true, provider });
@@ -257,6 +275,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
+    syncingCodexProviderId,
     testingCodexProviderId,
     codexModelCatalog,
     codexModelCatalogLoading,
@@ -273,6 +292,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
+    handleFetchCodexProviderModels,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
@@ -282,6 +302,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     // Setter
     setCodexLoading,
     setCodexConfigLoading,
+    setSyncingCodexProviderId,
     setTestingCodexProviderId,
     setCodexModelCatalogLoading,
   };

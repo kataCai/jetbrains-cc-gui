@@ -318,14 +318,17 @@ const SettingsView = ({
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
+    handleFetchCodexProviderModels,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
+    syncingCodexProviderId,
     testingCodexProviderId,
     setCodexLoading,
     setCodexConfigLoading,
+    setSyncingCodexProviderId,
     setTestingCodexProviderId,
     saveCodexModelVisibility,
     setCodexModelCatalogLoading,
@@ -397,6 +400,7 @@ const SettingsView = ({
     setCodexLoading,
     setCodexConfigLoading,
     setCodexModelCatalogLoading,
+    setSyncingCodexProviderId,
     setTestingCodexProviderId,
     updateProviders,
     updateActiveProvider,
@@ -679,11 +683,13 @@ const SettingsView = ({
               codexLoading={codexLoading}
               codexModelCatalog={codexModelCatalog}
               codexModelCatalogLoading={codexModelCatalogLoading}
+              syncingCodexProviderId={syncingCodexProviderId}
               testingCodexProviderId={testingCodexProviderId}
               onAddCodexProvider={handleAddCodexProvider}
               onCreateCodexProviderFromAlias={handleAddCodexProviderWithDraft}
               onEditCodexProvider={handleEditCodexProvider}
               onDeleteCodexProvider={handleDeleteCodexProvider}
+              onFetchCodexProviderModels={handleFetchCodexProviderModels}
               onTestCodexProvider={handleTestCodexProvider}
               onAuthorizeCodexLocalConfig={handleAuthorizeCodexLocalConfig}
               onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}

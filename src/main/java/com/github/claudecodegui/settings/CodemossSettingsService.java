@@ -2256,6 +2256,23 @@ public class CodemossSettingsService {
         return codexProviderManager.getCodexProviderById(providerId);
     }
 
+    /**
+     * 把远端发现到的模型列表合并回指定 Codex provider。
+     * 该入口只负责把设置服务层转发到 provider manager，
+     * 便于 handler 复用统一的持久化与去重逻辑，而不是直接操作原始配置树。
+     *
+     * @param providerId 目标 provider id
+     * @param fetchedModelIds 远端返回的模型 id 列表
+     * @return 本次合并的结构化统计结果
+     * @throws IOException 配置读写失败时抛出
+     */
+    public CodexProviderManager.CodexProviderModelMergeResult mergeCodexProviderModels(
+            String providerId,
+            java.util.List<String> fetchedModelIds
+    ) throws IOException {
+        return codexProviderManager.mergeCodexProviderModels(providerId, fetchedModelIds);
+    }
+
     public void addCodexProvider(JsonObject provider) throws IOException {
         codexProviderManager.addCodexProvider(provider);
     }

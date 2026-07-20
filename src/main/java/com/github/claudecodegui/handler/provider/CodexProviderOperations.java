@@ -1,6 +1,7 @@
 package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.codex.CodexProviderModelDiscoveryService;
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
 import com.github.claudecodegui.provider.codex.CodexRuntimeProfileResolver;
@@ -34,6 +35,7 @@ public class CodexProviderOperations {
     private static final Gson GSON = new Gson();
 
     private final HandlerContext context;
+    private final CodexProviderModelDiscoveryService codexProviderModelDiscoveryService;
 
     /**
      * 创建 Codex provider 操作处理器。
@@ -41,7 +43,22 @@ public class CodexProviderOperations {
      * @param context 当前处理请求所需的上下文，包含设置服务、SDK bridge 与 JS 回调能力
      */
     public CodexProviderOperations(HandlerContext context) {
+        this(context, new CodexProviderModelDiscoveryService(context.getSettingsService()));
+    }
+
+    /**
+     * 创建可注入模型发现服务的 Codex provider 操作处理器。
+     * 该入口主要服务于单元测试，让编排层可以在不发起真实网络请求的前提下验证成功/失败回调逻辑。
+     *
+     * @param context 当前处理请求所需的上下文，包含设置服务、SDK bridge 与 JS 回调能力
+     * @param codexProviderModelDiscoveryService 远端模型发现服务
+     */
+    CodexProviderOperations(
+            HandlerContext context,
+            CodexProviderModelDiscoveryService codexProviderModelDiscoveryService
+    ) {
         this.context = context;
+        this.codexProviderModelDiscoveryService = codexProviderModelDiscoveryService;
     }
 
     /**
@@ -549,6 +566,50 @@ public class CodexProviderOperations {
     }
 
     /**
+     * 拉取指定 Codex provider 支持的远端模型列表，并按同 provider 内去重策略合并回本地配置。
+     * 该链路只负责设置页的“获取模型列表”动作，不切换 active provider，也不直接操作统一模型目录；
+     * 统一目录刷新继续复用现有 `updateCodexProviders -> loadCodexModelCatalog` 回调链路。
+     *
+     * @param content 前端传入的 JSON，请至少包含 provider id
+     */
+    public void handleFetchCodexProviderModels(String content) {
+        try {
+            JsonObject data = content == null || content.isBlank()
+                    ? new JsonObject()
+                    : GSON.fromJson(content, JsonObject.class);
+            String providerId = data != null && data.has("id") && !data.get("id").isJsonNull()
+                    ? data.get("id").getAsString()
+                    : "";
+            if (providerId.isBlank()) {
+                throw new IllegalArgumentException("Missing provider id");
+            }
+
+            JsonObject targetProvider = context.getSettingsService().getCodexProviderById(providerId);
+            if (targetProvider == null || targetProvider.size() == 0) {
+                throw new IllegalArgumentException("Provider not found: " + providerId);
+            }
+
+            CodexProviderModelDiscoveryService.DiscoveryResult discoveryResult =
+                    codexProviderModelDiscoveryService.discoverModels(targetProvider);
+            com.github.claudecodegui.settings.CodexProviderManager.CodexProviderModelMergeResult mergeResult =
+                    context.getSettingsService().mergeCodexProviderModels(providerId, discoveryResult.getModelIds());
+            String providerName = firstNonBlank(readString(targetProvider, "name"), providerId);
+            String successMessage = buildFetchCodexProviderModelsSuccessMessage(providerName, mergeResult);
+
+            invokeLaterOrRun(() -> {
+                context.callJavaScript("window.showSuccess", context.escapeJs(successMessage));
+                if (mergeResult.getAddedCount() > 0) {
+                    handleGetCodexProviders();
+                }
+            });
+        } catch (Exception exception) {
+            LOG.warn("[ProviderHandler] Failed to fetch Codex provider models: " + exception.getMessage(), exception);
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.showError", context.escapeJs(exception.getMessage())));
+        }
+    }
+
+    /**
      * 构造测试连接提示中展示的运行时摘要。
      * 这里只输出用户排查最关心的命中结果，避免把完整配置对象直接暴露到提示文案里。
      *
@@ -563,6 +624,29 @@ public class CodexProviderOperations {
         summary.append(", requestMode=").append(runtimeProfile.getRequestMode());
         summary.append(", credentialSource=").append(runtimeProfile.getCredentialSource());
         return summary.toString();
+    }
+
+    /**
+     * 组装“获取模型列表”成功后的提示文案。
+     * 这里显式区分“有新增”和“无新增”两种结果，避免前端只能收到模糊的成功提示，
+     * 同时把重复/无效项统计一并带上，便于用户判断是否还需要继续排查 provider 返回内容。
+     *
+     * @param providerName 当前操作的 provider 名称
+     * @param mergeResult provider 模型合并统计结果
+     * @return 适合直接展示给设置页的成功提示文本
+     */
+    private String buildFetchCodexProviderModelsSuccessMessage(
+            String providerName,
+            com.github.claudecodegui.settings.CodexProviderManager.CodexProviderModelMergeResult mergeResult
+    ) {
+        if (mergeResult.getAddedCount() <= 0) {
+            return providerName + ": No new models found. Skipped "
+                    + mergeResult.getDuplicateCount() + " duplicates and "
+                    + mergeResult.getSkippedCount() + " invalid entries.";
+        }
+        return providerName + ": Added " + mergeResult.getAddedCount() + " models. Skipped "
+                + mergeResult.getDuplicateCount() + " duplicates and "
+                + mergeResult.getSkippedCount() + " invalid entries.";
     }
 
     /**

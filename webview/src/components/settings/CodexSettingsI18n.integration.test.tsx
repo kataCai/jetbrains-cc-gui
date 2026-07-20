@@ -107,6 +107,7 @@ async function renderCodexSettingsTab() {
           onCreateCodexProviderFromAlias={vi.fn()}
           onEditCodexProvider={vi.fn()}
           onDeleteCodexProvider={vi.fn()}
+          onFetchCodexProviderModels={vi.fn()}
           onTestCodexProvider={vi.fn()}
           onAuthorizeCodexLocalConfig={vi.fn()}
           onRevokeCodexLocalConfigAuthorization={vi.fn()}

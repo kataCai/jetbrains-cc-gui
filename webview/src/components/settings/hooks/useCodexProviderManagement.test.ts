@@ -40,6 +40,23 @@ describe('useCodexProviderManagement', () => {
   });
 
   /**
+   * 验证“获取模型列表”入口会发送独立桥接消息，并只记录当前同步中的 provider id。
+   * 断言意图：新增动作必须和测试连接走不同消息类型，避免后端误入旧的连通性测试链路。
+   */
+  it('sends a fetch provider models message and tracks the syncing provider id', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleFetchCodexProviderModels({ id: 'provider-sync', name: 'Provider Sync' });
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'fetch_codex_provider_models:{"id":"provider-sync"}'
+    );
+    expect(result.current.syncingCodexProviderId).toBe('provider-sync');
+  });
+
+  /**
    * 验证新增 provider 时，前端 payload 会完整保留模板与站点元信息。
    * 本测试覆盖本次方案新增的 providerType / presetId / websiteUrl / apiKeyApplyUrl，
    * 防止表单字段虽然存在，但在发往 Java 的桥接载荷里被静默丢失。

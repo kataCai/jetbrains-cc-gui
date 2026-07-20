@@ -13,8 +13,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Set;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -319,6 +321,92 @@ public class CodexProviderManager {
         providers.add(id, normalizeRuntimeProvider(provider));
         configWriter.accept(config);
         LOG.info("[CodexProviderManager] Updated provider: " + id);
+    }
+
+    /**
+     * 把远端发现到的模型 id 合并回指定 provider 的 `models` 配置。
+     * 该方法只在同一个 provider 内做去重，保留原有模型顺序与人工维护字段，
+     * 同时仅在存在真正新增模型时才回写配置，避免制造无意义的磁盘改动。
+     *
+     * @param providerId 目标 provider id
+     * @param fetchedModelIds 远端返回的模型 id 列表
+     * @return 合并结果统计，供设置页提示与测试复用
+     * @throws IOException 配置读写失败时抛出
+     */
+    public CodexProviderModelMergeResult mergeCodexProviderModels(String providerId, List<String> fetchedModelIds)
+            throws IOException {
+        String normalizedProviderId = safeTrim(providerId);
+        if (normalizedProviderId.isEmpty()) {
+            throw new IllegalArgumentException("Provider id must not be blank");
+        }
+        if (CODEX_CLI_LOGIN_PROVIDER_ID.equals(normalizedProviderId)) {
+            throw new IllegalArgumentException("Codex CLI Login provider does not support model merge");
+        }
+
+        JsonObject config = configReader.apply(null);
+        JsonObject codex = ensureCodexSection(config);
+        JsonObject providers = codex.getAsJsonObject(PROVIDERS_KEY);
+        if (!providers.has(normalizedProviderId) || !providers.get(normalizedProviderId).isJsonObject()) {
+            throw new IllegalArgumentException("Provider with id '" + normalizedProviderId + "' not found");
+        }
+
+        JsonObject provider = providers.getAsJsonObject(normalizedProviderId).deepCopy();
+        normalizeModels(provider);
+        JsonArray existingModels = provider.has(MODELS_KEY) && provider.get(MODELS_KEY).isJsonArray()
+                ? provider.getAsJsonArray(MODELS_KEY)
+                : new JsonArray();
+
+        LinkedHashMap<String, JsonObject> mergedModels = new LinkedHashMap<>();
+        for (JsonElement existingElement : existingModels) {
+            if (existingElement == null || !existingElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject existingModel = existingElement.getAsJsonObject().deepCopy();
+            String existingModelId = existingModel.has("id") && !existingModel.get("id").isJsonNull()
+                    ? safeTrim(existingModel.get("id").getAsString())
+                    : "";
+            if (existingModelId.isEmpty()) {
+                continue;
+            }
+            mergedModels.put(existingModelId, existingModel);
+        }
+
+        int addedCount = 0;
+        int duplicateCount = 0;
+        int skippedCount = 0;
+        List<String> normalizedFetchedModelIds = fetchedModelIds == null ? List.of() : fetchedModelIds;
+        for (String fetchedModelId : normalizedFetchedModelIds) {
+            String normalizedModelId = safeTrim(fetchedModelId);
+            if (normalizedModelId.isEmpty()) {
+                skippedCount++;
+                continue;
+            }
+            if (mergedModels.containsKey(normalizedModelId)) {
+                duplicateCount++;
+                continue;
+            }
+
+            JsonObject newModel = new JsonObject();
+            newModel.addProperty("id", normalizedModelId);
+            newModel.addProperty("label", normalizedModelId);
+            mergedModels.put(normalizedModelId, newModel);
+            addedCount++;
+        }
+
+        if (addedCount == 0) {
+            return new CodexProviderModelMergeResult(0, duplicateCount, skippedCount);
+        }
+
+        JsonArray mergedArray = new JsonArray();
+        for (Map.Entry<String, JsonObject> entry : mergedModels.entrySet()) {
+            mergedArray.add(entry.getValue());
+        }
+        provider.add(MODELS_KEY, mergedArray);
+        providers.add(normalizedProviderId, normalizeRuntimeProvider(provider));
+        configWriter.accept(config);
+        LOG.info("[CodexProviderManager] Merged discovered models into provider: " + normalizedProviderId
+                + ", added=" + addedCount + ", duplicates=" + duplicateCount + ", skipped=" + skippedCount);
+        return new CodexProviderModelMergeResult(addedCount, duplicateCount, skippedCount);
     }
 
     /**
@@ -672,6 +760,57 @@ public class CodexProviderManager {
             }
         }
         return false;
+    }
+
+    /**
+     * 承载 provider 模型合并统计的返回值。
+     * 该对象只描述本次合并行为本身，不包含任何 UI 文案，
+     * 便于后端 handler、自动化测试和前端提示复用同一份结构化统计。
+     */
+    public static class CodexProviderModelMergeResult {
+        private final int addedCount;
+        private final int duplicateCount;
+        private final int skippedCount;
+
+        /**
+         * 创建模型合并统计结果。
+         *
+         * @param addedCount 本次新追加的模型数量
+         * @param duplicateCount 因同 provider 内已存在而跳过的重复模型数量
+         * @param skippedCount 因空白或无效 id 被跳过的数量
+         */
+        public CodexProviderModelMergeResult(int addedCount, int duplicateCount, int skippedCount) {
+            this.addedCount = addedCount;
+            this.duplicateCount = duplicateCount;
+            this.skippedCount = skippedCount;
+        }
+
+        /**
+         * 返回本次新增模型数量。
+         *
+         * @return 新追加的模型数量
+         */
+        public int getAddedCount() {
+            return addedCount;
+        }
+
+        /**
+         * 返回重复模型数量。
+         *
+         * @return 因已存在而跳过的模型数量
+         */
+        public int getDuplicateCount() {
+            return duplicateCount;
+        }
+
+        /**
+         * 返回无效或空白模型数量。
+         *
+         * @return 因无效 id 被跳过的模型数量
+         */
+        public int getSkippedCount() {
+            return skippedCount;
+        }
     }
 
     /**

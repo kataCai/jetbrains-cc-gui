@@ -64,6 +64,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setCodexLoading: vi.fn(),
     setCodexConfigLoading: vi.fn(),
     setCodexModelCatalogLoading: vi.fn(),
+    setSyncingCodexProviderId: vi.fn(),
     setTestingCodexProviderId: vi.fn(),
     setCommitGenerationEnabled: vi.fn(),
     setAiTitleGenerationEnabled: vi.fn(),
@@ -139,7 +140,36 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     window.updateCodexProviders?.(JSON.stringify([{ id: 'provider-a', name: 'Provider A' }]));
 
     expect(deps.updateCodexProviders).toHaveBeenCalledWith([{ id: 'provider-a', name: 'Provider A' }]);
+    expect(deps.setSyncingCodexProviderId).toHaveBeenCalledWith('');
     expect(deps.loadCodexModelCatalog).toHaveBeenCalled();
+  });
+
+  /**
+   * 验证后端只返回成功提示但不刷新 provider 列表时，设置页仍会清掉“获取模型列表”按钮的 loading 态。
+   * 断言意图：处理“无新增模型”这类无列表刷新场景，避免按钮一直卡在 spinning 状态。
+   */
+  it('clears the syncing provider state when a generic success callback arrives', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showSuccess?.('no new models');
+
+    expect(deps.showAlert).toHaveBeenCalledWith('success', 'toast.operationSuccess', 'no new models');
+    expect(deps.setSyncingCodexProviderId).toHaveBeenCalledWith('');
+  });
+
+  /**
+   * 验证模型拉取失败会通过通用错误链路同步清理 loading 状态。
+   * 断言意图：确保网络错误、鉴权错误或网关不支持 `/v1/models` 时，用户可以立即再次重试。
+   */
+  it('clears the syncing provider state when a generic error callback arrives', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showError?.('provider failed');
+
+    expect(deps.showAlert).toHaveBeenCalledWith('error', 'toast.operationFailed', 'provider failed');
+    expect(deps.setSyncingCodexProviderId).toHaveBeenCalledWith('');
   });
 
   /**

@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -162,15 +163,114 @@ public class CodexProviderManagerRuntimeProfileTest {
         assertEquals("managed", manager.getActiveCodexProvider().get("id").getAsString());
     }
 
+    /**
+     * 验证目标：
+     * 当远端返回的模型列表包含“已存在模型 + 新模型 + 重复项 + 空白项”时，
+     * provider manager 必须只在当前 provider 内做去重追加，并保留旧模型的人工元数据。
+     *
+     * 断言意图：
+     * 1. 旧模型的 label / description / reasoningEffort 不被远端结果覆盖。
+     * 2. 新模型按远端首次出现顺序追加到列表尾部，并默认使用 `label=id`。
+     * 3. 统计信息能区分新增、重复和无效项，供设置页提示直接复用。
+     */
+    @Test
+    public void shouldMergeFetchedModelsWithoutOverwritingExistingMetadata() throws Exception {
+        AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
+        CodexProviderManager manager = createManager(configRef, new RecordingCodexSettingsManager());
+        JsonObject provider = createManagedProviderWithoutModels("managed", "Managed Provider");
+        JsonArray models = new JsonArray();
+        JsonObject existingModel = new JsonObject();
+        existingModel.addProperty("id", "gpt-5.4");
+        existingModel.addProperty("label", "Custom GPT-5.4");
+        existingModel.addProperty("description", "keep-me");
+        existingModel.addProperty("reasoningEffort", "high");
+        models.add(existingModel);
+        provider.add("models", models);
+        manager.addCodexProvider(provider);
+
+        CodexProviderManager.CodexProviderModelMergeResult result = manager.mergeCodexProviderModels(
+                "managed",
+                List.of("gpt-5.4", " gpt-5.5 ", "gpt-5.5", "", "gpt-5.4-mini")
+        );
+
+        JsonArray savedModels = configRef.get()
+                .getAsJsonObject("codex")
+                .getAsJsonObject("providers")
+                .getAsJsonObject("managed")
+                .getAsJsonArray("models");
+        assertEquals(3, savedModels.size());
+        assertEquals("gpt-5.4", savedModels.get(0).getAsJsonObject().get("id").getAsString());
+        assertEquals("Custom GPT-5.4", savedModels.get(0).getAsJsonObject().get("label").getAsString());
+        assertEquals("keep-me", savedModels.get(0).getAsJsonObject().get("description").getAsString());
+        assertEquals("high", savedModels.get(0).getAsJsonObject().get("reasoningEffort").getAsString());
+        assertEquals("gpt-5.5", savedModels.get(1).getAsJsonObject().get("id").getAsString());
+        assertEquals("gpt-5.5", savedModels.get(1).getAsJsonObject().get("label").getAsString());
+        assertEquals("gpt-5.4-mini", savedModels.get(2).getAsJsonObject().get("id").getAsString());
+        assertEquals(2, result.getAddedCount());
+        assertEquals(2, result.getDuplicateCount());
+        assertEquals(1, result.getSkippedCount());
+    }
+
+    /**
+     * 验证目标：
+     * 当远端返回的模型全部都已存在，或者只包含空白无效项时，
+     * provider manager 不应再回写配置文件，避免制造无意义的磁盘改动和列表抖动。
+     *
+     * 断言意图：
+     * 1. `addedCount` 为 0。
+     * 2. 配置写入次数不因“无变化合并”而增加。
+     * 3. 统计里能保留重复与无效项数量，便于前端给出“无新增，已跳过重复项”的提示。
+     */
+    @Test
+    public void shouldSkipConfigWriteWhenFetchedModelsDoNotAddAnythingNew() throws Exception {
+        AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
+        AtomicInteger writeCount = new AtomicInteger();
+        RecordingCodexSettingsManager codexSettingsManager = new RecordingCodexSettingsManager();
+        CodexProviderManager manager = createManager(configRef, codexSettingsManager, writeCount);
+        manager.addCodexProvider(createManagedProvider("managed", "Managed Provider"));
+        int writesAfterAdd = writeCount.get();
+
+        CodexProviderManager.CodexProviderModelMergeResult result = manager.mergeCodexProviderModels(
+                "managed",
+                List.of("gpt-5.4", " gpt-5.4 ", "")
+        );
+
+        assertEquals(0, result.getAddedCount());
+        assertEquals(2, result.getDuplicateCount());
+        assertEquals(1, result.getSkippedCount());
+        assertEquals(writesAfterAdd, writeCount.get());
+    }
+
     private CodexProviderManager createManager(
             AtomicReference<JsonObject> configRef,
             CodexSettingsManager codexSettingsManager
+    ) {
+        return createManager(configRef, codexSettingsManager, new AtomicInteger());
+    }
+
+    /**
+     * 创建可统计写入次数的 provider manager。
+     * 该辅助方法用于验证“无新增模型时不落盘”这类依赖写入副作用的场景，
+     * 避免测试只能通过最终配置内容间接猜测是否发生过多余写入。
+     *
+     * @param configRef 当前配置快照引用
+     * @param codexSettingsManager 本地 Codex 设置管理器桩
+     * @param writeCount 配置写入次数计数器
+     * @return 绑定到内存配置桩的 provider manager
+     */
+    private CodexProviderManager createManager(
+            AtomicReference<JsonObject> configRef,
+            CodexSettingsManager codexSettingsManager,
+            AtomicInteger writeCount
     ) {
         Gson gson = new Gson();
         return new CodexProviderManager(
                 gson,
                 ignored -> configRef.get(),
-                updated -> configRef.set(JsonParser.parseString(updated.toString()).getAsJsonObject()),
+                updated -> {
+                    writeCount.incrementAndGet();
+                    configRef.set(JsonParser.parseString(updated.toString()).getAsJsonObject());
+                },
                 null,
                 codexSettingsManager
         );

@@ -4,6 +4,7 @@ import type { CodexProviderConfig } from '../../../types/provider';
 import {
   getCodexRuntimeSourceTranslationKey,
   hasCodexRuntimeSourceDiagnostics,
+  isCodexProviderModelFetchSupported,
   isCodexRequestModeImplemented,
   resolveCodexRuntimeSource,
   SPECIAL_PROVIDER_IDS,
@@ -56,10 +57,12 @@ interface CodexProviderSectionProps {
   codexProviders: CodexProviderConfig[];
   codexLocalConfigAuthorized?: boolean;
   codexLoading: boolean;
+  syncingCodexProviderId?: string;
   testingCodexProviderId?: string;
   onAddCodexProvider: () => void;
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
+  onFetchCodexProviderModels: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
   onAuthorizeCodexLocalConfig?: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
@@ -102,14 +105,27 @@ function buildCliLoginStatusItems(
   ];
 }
 
+/**
+ * 渲染 Codex 设置页中的 provider 管理卡片区。
+ * 该组件同时承担三类职责：
+ * 1. 展示普通托管 provider 的摘要信息与管理动作；
+ * 2. 展示只读的 CLI Login 虚拟 provider 授权卡片；
+ * 3. 在不打破现有测试、编辑、删除交互的前提下，为普通 provider 提供“拉取模型列表”入口。
+ * 新增的模型拉取按钮只服务于设置页配置管理，不负责运行时切换；运行时模型启用仍由聊天区选择器决定。
+ *
+ * @param props Codex provider 卡片区渲染所需的列表数据、动作回调和 loading 状态
+ * @return 设置页内的 Codex provider 管理区 JSX
+ */
 const CodexProviderSection = ({
   codexProviders,
   codexLocalConfigAuthorized = false,
   codexLoading,
+  syncingCodexProviderId,
   testingCodexProviderId,
   onAddCodexProvider,
   onEditCodexProvider,
   onDeleteCodexProvider,
+  onFetchCodexProviderModels,
   onTestCodexProvider,
   onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
@@ -309,6 +325,8 @@ const CodexProviderSection = ({
               localProviders.map((provider) => {
                 const metaItems = buildProviderMetaItems(provider, t);
                 const requestModeUnavailable = !isCodexRequestModeImplemented(provider.requestMode);
+                const modelDiscoverySupported = isCodexProviderModelFetchSupported(provider);
+                const isSyncingModels = syncingCodexProviderId === provider.id;
                 return (
                   <div
                     key={provider.id}
@@ -353,6 +371,21 @@ const CodexProviderSection = ({
 
                     <div className={sharedStyles.cardActions}>
                       <div className={sharedStyles.actionButtons}>
+                        {/* 模型拉取只针对当前托管 provider 生效，避免把不支持的 auth/request mode 放进错误链路。 */}
+                        <button
+                          className={sharedStyles.iconBtn}
+                          onClick={() => onFetchCodexProviderModels(provider)}
+                          title={!modelDiscoverySupported
+                            ? t('settings.codexProvider.fetchModelsUnsupportedTooltip')
+                            : isSyncingModels
+                              ? t('settings.codexProvider.fetchModelsLoading')
+                              : t('settings.codexProvider.fetchModels')}
+                          disabled={isSyncingModels || !modelDiscoverySupported}
+                        >
+                          <span className={isSyncingModels
+                            ? 'codicon codicon-loading codicon-modifier-spin'
+                            : 'codicon codicon-refresh'} />
+                        </button>
                         <button
                           className={sharedStyles.iconBtn}
                           onClick={() => onTestCodexProvider(provider)}

@@ -73,6 +73,7 @@ export interface SettingsWindowCallbacksDeps {
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
   setCodexModelCatalogLoading: (loading: boolean) => void;
+  setSyncingCodexProviderId: (providerId: string) => void;
   setTestingCodexProviderId: (providerId: string) => void;
   setCommitGenerationEnabled?: (enabled: boolean) => void;
   setAiTitleGenerationEnabled?: (enabled: boolean) => void;
@@ -160,9 +161,11 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       try {
         const providersList: CodexProviderConfig[] = JSON.parse(jsonStr);
         d().updateCodexProviders(providersList);
+        d().setSyncingCodexProviderId('');
         d().loadCodexModelCatalog();
       } catch (error) {
         console.error('[SettingsView] Failed to parse Codex providers:', error);
+        d().setSyncingCodexProviderId('');
         d().setCodexLoading(false);
       }
     });
@@ -190,6 +193,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.showError = (message: string) => {
       d().showAlert('error', t('toast.operationFailed'), message);
+      d().setSyncingCodexProviderId('');
       d().setLoading(false);
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
@@ -276,6 +280,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
 
     window.showSuccess = (message: string) => {
       d().showAlert('success', t('toast.operationSuccess'), message);
+      d().setSyncingCodexProviderId('');
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);

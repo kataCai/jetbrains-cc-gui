@@ -625,7 +625,10 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled."
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "Fetch Model List",
+      "fetchModelsLoading": "Fetching Model List",
+      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet."
+
     },
     "agent": {
       "title": "Агенты",

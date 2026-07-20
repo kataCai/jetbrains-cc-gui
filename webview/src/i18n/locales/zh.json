@@ -864,7 +864,10 @@
       }
       ,
       "requestModeUnavailableBadge": "开发中",
-      "requestModeUnavailableTooltip": "当前请求模式尚未落地，暂不可测试或启用"
+      "requestModeUnavailableTooltip": "当前请求模式尚未落地，暂不可测试或启用",      "fetchModels": "??????",
+      "fetchModelsLoading": "????????",
+      "fetchModelsUnsupportedTooltip": "?????????????????????"
+
     },
     "chat": {
       "codexModelConfigRequired": "请先在 Codex Provider 中配置模型"

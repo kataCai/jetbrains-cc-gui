@@ -35,6 +35,9 @@ const translations: Record<string, string> = {
   'settings.provider.allProviders': 'All Providers',
   'settings.provider.revokeAuthorization': 'Revoke Authorization',
   'settings.provider.dragToSort': 'Drag to sort',
+  'settings.codexProvider.fetchModels': 'Fetch Model List',
+  'settings.codexProvider.fetchModelsLoading': 'Fetching Model List',
+  'settings.codexProvider.fetchModelsUnsupportedTooltip': 'This provider auth mode or request mode does not support model discovery yet.',
   'settings.codexProvider.requestModeUnavailableBadge': 'Coming Soon',
   'settings.codexProvider.requestModeUnavailableTooltip': 'This request mode is not implemented yet, so testing is disabled.',
   'common.add': 'Add',
@@ -71,6 +74,7 @@ describe('CodexProviderSection', () => {
   const onAddCodexProvider = vi.fn();
   const onEditCodexProvider = vi.fn();
   const onDeleteCodexProvider = vi.fn();
+  const onFetchCodexProviderModels = vi.fn();
   const onTestCodexProvider = vi.fn();
   const onRevokeCodexLocalConfigAuthorization = vi.fn();
 
@@ -97,6 +101,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
         onTestCodexProvider={onTestCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />,
@@ -126,6 +131,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
         onTestCodexProvider={onTestCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />,
@@ -161,6 +167,7 @@ describe('CodexProviderSection', () => {
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
         onTestCodexProvider={onTestCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />,
@@ -194,10 +201,12 @@ describe('CodexProviderSection', () => {
         ]}
         codexLocalConfigAuthorized={false}
         codexLoading={false}
+        syncingCodexProviderId=""
         testingCodexProviderId=""
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
         onTestCodexProvider={onTestCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />,
@@ -205,9 +214,87 @@ describe('CodexProviderSection', () => {
 
     expect(screen.getByText('Preset: minimax')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull();
+    expect(screen.getAllByTitle('Fetch Model List')).toHaveLength(1);
     expect(screen.getAllByTitle('Test Provider')).toHaveLength(1);
     expect(screen.getByTitle('Edit')).toBeTruthy();
     expect(screen.getByTitle('Delete')).toBeTruthy();
+  });
+
+  /**
+   * 验证普通 provider 卡片会在测试按钮前新增“获取模型列表”入口，并把当前 provider 透传给回调。
+   * 断言意图：确保新增动作没有和既有测试、编辑、删除顺序混淆，且点击后仍以当前卡片的 provider 为唯一上下文。
+   */
+  it('shows a fetch-models action before the test button and forwards the provider payload', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-fetch',
+            name: 'Provider Fetch',
+            isActive: false,
+          },
+        ]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const card = screen.getByText('Provider Fetch').closest('[data-drag-sort-id]');
+    const titledButtons = Array.from(card?.querySelectorAll('button[title]') || []).map(
+      (button) => button.getAttribute('title')
+    );
+    expect(titledButtons).toEqual([
+      'Fetch Model List',
+      'Test Provider',
+      'Edit',
+      'Delete',
+    ]);
+
+    fireEvent.click(screen.getByTitle('Fetch Model List'));
+    expect(onFetchCodexProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'provider-fetch', name: 'Provider Fetch' })
+    );
+  });
+
+  /**
+   * 验证只有当前正在同步模型的 provider 会进入独立 loading 态，且不会误伤其他卡片的测试按钮状态。
+   * 断言意图：新增同步状态必须和测试连接状态分离，避免一个动作触发后把整个动作区都锁死。
+   */
+  it('shows an isolated loading state for the syncing provider fetch button', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-syncing',
+            name: 'Provider Syncing',
+            isActive: false,
+          },
+        ]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId="provider-syncing"
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const fetchButton = screen.getByTitle('Fetching Model List') as HTMLButtonElement;
+    expect(fetchButton.disabled).toBe(true);
+    expect(fetchButton.querySelector('.codicon-loading')).toBeTruthy();
+    expect(screen.getByTitle('Test Provider')).toBeTruthy();
   });
 
   /**
@@ -228,9 +315,11 @@ describe('CodexProviderSection', () => {
         ]}
         codexLocalConfigAuthorized={false}
         codexLoading={false}
+        syncingCodexProviderId=""
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
         onTestCodexProvider={onTestCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />,
@@ -240,6 +329,41 @@ describe('CodexProviderSection', () => {
     const unavailableButtons = screen.getAllByTitle('This request mode is not implemented yet, so testing is disabled.') as HTMLButtonElement[];
     expect(unavailableButtons).toHaveLength(1);
     expect(unavailableButtons[0].disabled).toBe(true);
+  });
+
+  /**
+   * 验证前端会对当前不支持模型拉取的 authMode 直接禁用新增按钮，并给出统一提示文案。
+   * 断言意图：像 oauth/proxy 这类暂不稳定支持 Bearer Token 的配置，应在点击前就阻止进入错误链路。
+   */
+  it('disables the fetch-models action when auth mode is not supported for discovery', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-oauth',
+            name: 'OAuth Provider',
+            authMode: 'oauth',
+            requestMode: 'codex_sdk',
+            isActive: false,
+          },
+        ]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const fetchButton = screen.getByTitle(
+      'This provider auth mode or request mode does not support model discovery yet.'
+    ) as HTMLButtonElement;
+    expect(fetchButton.disabled).toBe(true);
   });
 
   /**
@@ -262,9 +386,11 @@ describe('CodexProviderSection', () => {
         ]}
         codexLocalConfigAuthorized={false}
         codexLoading={false}
+        syncingCodexProviderId=""
         onAddCodexProvider={onAddCodexProvider}
         onEditCodexProvider={onEditCodexProvider}
         onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
         onTestCodexProvider={onTestCodexProvider}
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
       />,

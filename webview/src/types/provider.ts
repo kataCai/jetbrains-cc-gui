@@ -258,6 +258,9 @@ const CODEX_PROVIDER_MODE_FIELDS: Record<CodexRequestMode, string[]> = {
   ],
 };
 
+const CODEX_PROVIDER_MODEL_FETCH_SUPPORTED_REQUEST_MODES: ReadonlySet<string> = new Set(['codex_sdk']);
+const CODEX_PROVIDER_MODEL_FETCH_SUPPORTED_AUTH_MODES: ReadonlySet<string> = new Set(['api_key', 'api_key_env']);
+
 /**
  * 返回指定请求模式的字段分组。
  * 该方法只负责声明 schema 边界，不参与运行时分发；后续 Task 8 会复用它驱动表单动态渲染与校验。
@@ -283,6 +286,30 @@ export function getCodexProviderModeFieldGroups(requestMode: CodexRequestMode): 
  */
 export function isCodexRequestModeImplemented(requestMode?: CodexRequestMode | string): boolean {
   return !requestMode || requestMode === 'codex_sdk';
+}
+
+/**
+ * 判断当前 Codex provider 是否满足“拉取模型列表”入口的前端可用条件。
+ * 该判断需要和后端 `CodexRuntimeProfileResolver` 的默认值保持一致：
+ * 1. `requestMode` 为空时按 `codex_sdk` 处理；
+ * 2. `authMode` 为空时按 `api_key_env` 处理；
+ * 3. 当前仅 `codex_sdk + api_key/api_key_env` 这一组合被视为稳定支持。
+ * 这样可以避免前端把实际可拉取的 provider 误禁用，也避免把暂不支持的模式提前放行到后端报错。
+ *
+ * @param provider 待判断的 Codex provider，可为只包含 auth/request mode 的轻量对象
+ * @return `true` 表示前端可以展示可点击的模型拉取按钮；`false` 表示应禁用并提示当前模式暂不支持
+ */
+export function isCodexProviderModelFetchSupported(
+  provider?: Pick<CodexProviderConfig, 'authMode' | 'requestMode'> | null
+): boolean {
+  const normalizedRequestMode = typeof provider?.requestMode === 'string' && provider.requestMode.trim()
+    ? provider.requestMode.trim()
+    : 'codex_sdk';
+  const normalizedAuthMode = typeof provider?.authMode === 'string' && provider.authMode.trim()
+    ? provider.authMode.trim()
+    : 'api_key_env';
+  return CODEX_PROVIDER_MODEL_FETCH_SUPPORTED_REQUEST_MODES.has(normalizedRequestMode)
+    && CODEX_PROVIDER_MODEL_FETCH_SUPPORTED_AUTH_MODES.has(normalizedAuthMode);
 }
 
 /**
