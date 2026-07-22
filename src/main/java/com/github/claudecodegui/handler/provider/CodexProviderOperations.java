@@ -1,6 +1,7 @@
 package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.codex.CodexLocalModelSyncService;
 import com.github.claudecodegui.provider.codex.CodexProviderModelDiscoveryService;
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.provider.codex.CodexRuntimeProfile;
@@ -8,12 +9,14 @@ import com.github.claudecodegui.provider.codex.CodexRuntimeProfileResolver;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -36,6 +39,7 @@ public class CodexProviderOperations {
 
     private final HandlerContext context;
     private final CodexProviderModelDiscoveryService codexProviderModelDiscoveryService;
+    private final CodexLocalModelSyncService codexLocalModelSyncService;
 
     /**
      * 创建 Codex provider 操作处理器。
@@ -43,7 +47,11 @@ public class CodexProviderOperations {
      * @param context 当前处理请求所需的上下文，包含设置服务、SDK bridge 与 JS 回调能力
      */
     public CodexProviderOperations(HandlerContext context) {
-        this(context, new CodexProviderModelDiscoveryService(context.getSettingsService()));
+        this(
+                context,
+                new CodexProviderModelDiscoveryService(context.getSettingsService()),
+                new CodexLocalModelSyncService(context.getSettingsService())
+        );
     }
 
     /**
@@ -55,10 +63,30 @@ public class CodexProviderOperations {
      */
     CodexProviderOperations(
             HandlerContext context,
-            CodexProviderModelDiscoveryService codexProviderModelDiscoveryService
+            CodexProviderModelDiscoveryService codexProviderModelDiscoveryService,
+            CodexLocalModelSyncService codexLocalModelSyncService
     ) {
         this.context = context;
         this.codexProviderModelDiscoveryService = codexProviderModelDiscoveryService;
+        this.codexLocalModelSyncService = codexLocalModelSyncService;
+    }
+
+    /**
+     * 创建仅注入远端模型发现服务的测试入口。
+     * 为保持既有单元测试的构造方式稳定，这里在未显式传入本地同步服务时自动补默认实现。
+     *
+     * @param context 当前处理请求所需的上下文
+     * @param codexProviderModelDiscoveryService 远端模型发现服务
+     */
+    CodexProviderOperations(
+            HandlerContext context,
+            CodexProviderModelDiscoveryService codexProviderModelDiscoveryService
+    ) {
+        this(
+                context,
+                codexProviderModelDiscoveryService,
+                new CodexLocalModelSyncService(context.getSettingsService())
+        );
     }
 
     /**
@@ -584,6 +612,11 @@ public class CodexProviderOperations {
                 throw new IllegalArgumentException("Missing provider id");
             }
 
+            if (com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(providerId)) {
+                handleFetchLocalCodexConfigModels();
+                return;
+            }
+
             JsonObject targetProvider = context.getSettingsService().getCodexProviderById(providerId);
             if (targetProvider == null || targetProvider.size() == 0) {
                 throw new IllegalArgumentException("Provider not found: " + providerId);
@@ -596,16 +629,69 @@ public class CodexProviderOperations {
             String providerName = firstNonBlank(readString(targetProvider, "name"), providerId);
             String successMessage = buildFetchCodexProviderModelsSuccessMessage(providerName, mergeResult);
 
+            // 成功后同时刷新 provider 列表与统一模型目录：
+            // Models 面板消费 catalog，不能只依赖 provider 列表的间接刷新链路。
             invokeLaterOrRun(() -> {
                 context.callJavaScript("window.showSuccess", context.escapeJs(successMessage));
                 if (mergeResult.getAddedCount() > 0) {
                     handleGetCodexProviders();
                 }
+                handleGetCodexModelCatalog();
             });
         } catch (Exception exception) {
             LOG.warn("[ProviderHandler] Failed to fetch Codex provider models: " + exception.getMessage(), exception);
             invokeLaterOrRun(() ->
                     context.callJavaScript("window.showError", context.escapeJs(exception.getMessage())));
+        }
+    }
+
+    /**
+     * 同步本地 Codex 配置卡片的模型目录。
+     * 该链路不会走 managed provider 的 merge，而是把同步结果写入 CLI/Login discovered models 缓存，
+     * 供统一目录后续优先复用。
+     */
+    private void handleFetchLocalCodexConfigModels() throws IOException {
+        JsonArray previousDiscoveredModels = context.getSettingsService().getCodexCliLoginDiscoveredModels();
+        CodexLocalModelSyncService.LocalModelSyncResult syncResult = codexLocalModelSyncService.syncLocalModels();
+        // 远端发现失败会向上抛 IOException，这里只有“成功远端发现”或“天然不可发现降级”才会落盘。
+        context.getSettingsService().saveCodexCliLoginDiscoveredModels(syncResult.getDiscoveredModels());
+        int removedCount = countRemovedCliLoginDiscoveredModels(
+                previousDiscoveredModels,
+                syncResult.getDiscoveredModels()
+        );
+        int addedCount = countAddedCliLoginDiscoveredModels(
+                previousDiscoveredModels,
+                syncResult.getDiscoveredModels()
+        );
+
+        String successMessage = buildFetchLocalCodexModelsSuccessMessage(syncResult, addedCount, removedCount);
+        invokeLaterOrRun(() -> {
+            context.callJavaScript("window.showSuccess", context.escapeJs(successMessage));
+            // CLI Login discovered models 主要影响统一目录，必须显式推送 catalog。
+            handleGetCodexProviders();
+            handleGetCodexModelCatalog();
+        });
+    }
+
+    /**
+     * 读取并推送统一 Codex 模型目录。
+     * 该入口与 ModelProviderHandler 的同名能力保持协议一致，供 provider 模型同步链路在成功后直接刷新 Models 面板，
+     * 避免只刷新 provider 列表后依赖前端二次请求造成的时序/漏刷风险。
+     */
+    private void handleGetCodexModelCatalog() {
+        try {
+            JsonObject catalogConfig = context.getSettingsService().getCodexModelDisplayConfig();
+            JsonArray catalog = catalogConfig.has("catalog") && catalogConfig.get("catalog").isJsonArray()
+                    ? catalogConfig.getAsJsonArray("catalog")
+                    : new JsonArray();
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.updateCodexModelCatalog", context.escapeJs(catalog.toString()))
+            );
+        } catch (Exception e) {
+            LOG.error("[ProviderHandler] Failed to load Codex model catalog after model sync: " + e.getMessage(), e);
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.updateCodexModelCatalog", context.escapeJs(new JsonArray().toString()))
+            );
         }
     }
 
@@ -627,26 +713,176 @@ public class CodexProviderOperations {
     }
 
     /**
-     * 组装“获取模型列表”成功后的提示文案。
-     * 这里显式区分“有新增”和“无新增”两种结果，避免前端只能收到模糊的成功提示，
-     * 同时把重复/无效项统计一并带上，便于用户判断是否还需要继续排查 provider 返回内容。
+     * 组装“获取模型列表”成功后的结构化 i18n 提示。
+     * 这里不再直接拼英文原文，而是回传 `{mode,key,params}`，由设置页按当前语言做插值翻译，
+     * 同时继续区分“有新增”和“无新增”两类结果，并携带重复/无效项统计。
      *
      * @param providerName 当前操作的 provider 名称
      * @param mergeResult provider 模型合并统计结果
-     * @return 适合直接展示给设置页的成功提示文本
+     * @return 可被 `window.showSuccess` 解析的结构化 i18n JSON 字符串
      */
     private String buildFetchCodexProviderModelsSuccessMessage(
             String providerName,
             com.github.claudecodegui.settings.CodexProviderManager.CodexProviderModelMergeResult mergeResult
     ) {
-        if (mergeResult.getAddedCount() <= 0) {
-            return providerName + ": No new models found. Skipped "
-                    + mergeResult.getDuplicateCount() + " duplicates and "
-                    + mergeResult.getSkippedCount() + " invalid entries.";
+        JsonObject params = new JsonObject();
+        params.addProperty("providerName", providerName);
+        params.addProperty("addedCount", mergeResult.getAddedCount());
+        params.addProperty("duplicateCount", mergeResult.getDuplicateCount());
+        params.addProperty("invalidCount", mergeResult.getSkippedCount());
+        String key = mergeResult.getAddedCount() <= 0
+                ? "settings.codexProvider.fetchModelsResult.noNewModels"
+                : "settings.codexProvider.fetchModelsResult.added";
+        return buildI18nSuccessPayload(key, params);
+    }
+
+    /**
+     * 组装本地 Codex 配置卡片“同步模型”成功提示。
+     * 这里显式区分“命中远端发现”和“退化到 fallback 目录”两类结果，并在远端发现且存在旧缓存淘汰时附加 suffix key，
+     * 避免 Java 侧继续拼自然语言，同时让前端能按当前语言完整展示统计信息。
+     *
+     * @param syncResult 本地模型同步结果
+     * @param removedCount 相比上次缓存被移除的模型数量
+     * @return 可被 `window.showSuccess` 解析的结构化 i18n JSON 字符串
+     */
+    private String buildFetchLocalCodexModelsSuccessMessage(
+            CodexLocalModelSyncService.LocalModelSyncResult syncResult,
+            int addedCount,
+            int removedCount
+    ) {
+        if (syncResult.isRemoteDiscoveryUsed()) {
+            JsonObject params = new JsonObject();
+            // totalCount 表示本次结果模型总数；addedCount 表示相对旧缓存真正新增的模型数。
+            params.addProperty("totalCount", syncResult.getAddedCount());
+            params.addProperty("addedCount", addedCount);
+            params.addProperty("baseUrl", firstNonBlank(syncResult.getBaseUrl(), "remote provider"));
+            params.addProperty("duplicateCount", syncResult.getDuplicateCount());
+            params.addProperty("invalidCount", syncResult.getSkippedCount());
+            if (removedCount > 0) {
+                JsonObject suffixParams = new JsonObject();
+                suffixParams.addProperty("removedCount", removedCount);
+                return buildI18nSuccessPayload(
+                        "settings.codexProvider.fetchModelsResult.localRemoteDiscovered",
+                        params,
+                        "settings.codexProvider.fetchModelsResult.removedStaleSuffix",
+                        suffixParams
+                );
+            }
+            return buildI18nSuccessPayload(
+                    "settings.codexProvider.fetchModelsResult.localRemoteDiscovered",
+                    params
+            );
         }
-        return providerName + ": Added " + mergeResult.getAddedCount() + " models. Skipped "
-                + mergeResult.getDuplicateCount() + " duplicates and "
-                + mergeResult.getSkippedCount() + " invalid entries.";
+        return buildI18nSuccessPayload(
+                "settings.codexProvider.fetchModelsResult.localFallbackRefreshed",
+                new JsonObject()
+        );
+    }
+
+    /**
+     * 构造设置页可识别的结构化成功提示 payload。
+     * 该协议保持 `window.showSuccess` 入参仍是字符串，但内容升级为 JSON，
+     * 以便前端按 `mode=i18n` 做参数化翻译，同时兼容历史纯文本成功提示。
+     *
+     * @param key 前端 locale key
+     * @param params 主句插值参数；允许为空对象
+     * @return 结构化 i18n JSON 字符串
+     */
+    private String buildI18nSuccessPayload(String key, JsonObject params) {
+        return buildI18nSuccessPayload(key, params, null, null);
+    }
+
+    /**
+     * 构造可附带后缀句的结构化成功提示 payload。
+     * 主句与附加句拆开，避免后端在条件分支里继续拼自然语言；前端会按当前语言分别翻译后再拼接。
+     *
+     * @param key 主句 locale key
+     * @param params 主句插值参数；允许为空对象
+     * @param suffixKey 可选后缀句 locale key；为 null 或空白时不输出后缀
+     * @param suffixParams 后缀句插值参数；无后缀时忽略
+     * @return 结构化 i18n JSON 字符串
+     */
+    private String buildI18nSuccessPayload(
+            String key,
+            JsonObject params,
+            String suffixKey,
+            JsonObject suffixParams
+    ) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("mode", "i18n");
+        payload.addProperty("key", key);
+        payload.add("params", params != null ? params : new JsonObject());
+        if (suffixKey != null && !suffixKey.isBlank()) {
+            payload.addProperty("suffixKey", suffixKey);
+            payload.add("suffixParams", suffixParams != null ? suffixParams : new JsonObject());
+        }
+        return GSON.toJson(payload);
+    }
+
+    /**
+     * 统计本次 CLI Login discovered models 刷新中被替换掉的旧模型数量。
+     * 这里只按模型 id 比较前后两份缓存，供设置页成功提示显式告知“有多少旧模型已不再返回”，
+     * 避免用户在远端删模后只看到“刷新成功”却不知道本地目录为什么变少。
+     *
+     * @param previousModels 刷新前持久化的 discovered models
+     * @param currentModels 本次刷新后即将持久化的 discovered models
+     * @return 仅存在于旧缓存、但已不在新结果中的模型数量
+     */
+    private int countRemovedCliLoginDiscoveredModels(JsonArray previousModels, JsonArray currentModels) {
+        java.util.LinkedHashSet<String> previousIds = collectModelIds(previousModels);
+        java.util.LinkedHashSet<String> currentIds = collectModelIds(currentModels);
+        int removedCount = 0;
+        for (String previousId : previousIds) {
+            if (!currentIds.contains(previousId)) {
+                removedCount++;
+            }
+        }
+        return removedCount;
+    }
+
+    /**
+     * 统计本次 CLI Login discovered models 刷新中相对旧缓存真正新增的模型数量。
+     * 成功提示需要区分“结果总数”和“新增数”，避免把全量同步结果误报成新增。
+     *
+     * @param previousModels 刷新前持久化的 discovered models
+     * @param currentModels 本次刷新后即将持久化的 discovered models
+     * @return 仅存在于新结果、但旧缓存中不存在的模型数量
+     */
+    private int countAddedCliLoginDiscoveredModels(JsonArray previousModels, JsonArray currentModels) {
+        java.util.LinkedHashSet<String> previousIds = collectModelIds(previousModels);
+        java.util.LinkedHashSet<String> currentIds = collectModelIds(currentModels);
+        int addedCount = 0;
+        for (String currentId : currentIds) {
+            if (!previousIds.contains(currentId)) {
+                addedCount++;
+            }
+        }
+        return addedCount;
+    }
+
+    /**
+     * 从 discovered models 数组中抽取合法模型 id 集合。
+     * 该辅助方法只服务于前后缓存差异比较，因此仅关心 `id` 字段本身，
+     * 并统一忽略空白、空节点和非法结构，避免提示统计受脏数据影响。
+     *
+     * @param models discovered models 数组
+     * @return 去重后的模型 id 集合
+     */
+    private java.util.LinkedHashSet<String> collectModelIds(JsonArray models) {
+        java.util.LinkedHashSet<String> modelIds = new java.util.LinkedHashSet<>();
+        if (models == null) {
+            return modelIds;
+        }
+        for (JsonElement element : models) {
+            if (element == null || !element.isJsonObject()) {
+                continue;
+            }
+            String modelId = readString(element.getAsJsonObject(), "id");
+            if (!modelId.isEmpty()) {
+                modelIds.add(modelId);
+            }
+        }
+        return modelIds;
     }
 
     /**

@@ -24,6 +24,15 @@ export interface DeleteCodexConfirmState {
   provider: CodexProviderConfig | null;
 }
 
+/**
+ * 统一模型目录删除确认态。
+ * 与 provider 删除确认类似，删除前先弹出确认框，避免误触直接改写 managed provider models 或 exclusion 表。
+ */
+export interface DeleteCodexModelCatalogConfirmState {
+  isOpen: boolean;
+  catalogItem: CodexModelCatalogItem | null;
+}
+
 export interface UseCodexProviderManagementOptions {
   onError?: (message: string) => void;
   onSuccess?: (message: string) => void;
@@ -85,6 +94,11 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   const [deleteCodexConfirm, setDeleteCodexConfirm] = useState<DeleteCodexConfirmState>({
     isOpen: false,
     provider: null,
+  });
+  // 统一目录删除确认态：先弹窗，确认后再发桥接删除请求。
+  const [deleteCodexModelCatalogConfirm, setDeleteCodexModelCatalogConfirm] = useState<DeleteCodexModelCatalogConfirmState>({
+    isOpen: false,
+    catalogItem: null,
   });
   // 当前正在执行“测试连接”的 provider id。
   // 该状态只服务于设置页按钮级反馈，避免用户误判“点击后没有反应”。
@@ -151,6 +165,44 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
    */
   const saveCodexModelVisibility = useCallback((visibilityConfig: CodexModelVisibilityConfig) => {
     sendToJava(`set_codex_model_visibility:${JSON.stringify(visibilityConfig)}`);
+  }, []);
+
+  /**
+   * 打开统一模型目录删除确认框。
+   * 不在这里直接发桥接请求，避免误点击立刻触发 managed 硬删除或 exclusion 写入。
+   *
+   * @param catalogItem 当前被用户点击删除的模型目录项
+   */
+  const handleDeleteCodexModelCatalogItem = useCallback((catalogItem: CodexModelCatalogItem) => {
+    setDeleteCodexModelCatalogConfirm({ isOpen: true, catalogItem });
+  }, []);
+
+  /**
+   * 确认删除统一模型目录中的单个目录项。
+   * 该操作与“仅保存 visible=false”的展示开关不同，后端需要根据来源执行真正的删除或逻辑排除，
+   * 因此前端必须透传完整目录标识并主动进入目录刷新 loading 状态。
+   */
+  const confirmDeleteCodexModelCatalogItem = useCallback(() => {
+    const catalogItem = deleteCodexModelCatalogConfirm.catalogItem;
+    if (!catalogItem) {
+      return;
+    }
+    const payload = {
+      key: catalogItem.key,
+      providerId: catalogItem.providerId,
+      modelId: catalogItem.modelId,
+      source: catalogItem.source,
+    };
+    sendToJava(`delete_codex_model_catalog_item:${JSON.stringify(payload)}`);
+    setCodexModelCatalogLoading(true);
+    setDeleteCodexModelCatalogConfirm({ isOpen: false, catalogItem: null });
+  }, [deleteCodexModelCatalogConfirm.catalogItem]);
+
+  /**
+   * 取消统一模型目录删除确认。
+   */
+  const cancelDeleteCodexModelCatalogItem = useCallback(() => {
+    setDeleteCodexModelCatalogConfirm({ isOpen: false, catalogItem: null });
   }, []);
 
   // Open add Codex provider dialog
@@ -275,6 +327,7 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
+    deleteCodexModelCatalogConfirm,
     syncingCodexProviderId,
     testingCodexProviderId,
     codexModelCatalog,
@@ -293,6 +346,9 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
     handleFetchCodexProviderModels,
+    handleDeleteCodexModelCatalogItem,
+    confirmDeleteCodexModelCatalogItem,
+    cancelDeleteCodexModelCatalogItem,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,

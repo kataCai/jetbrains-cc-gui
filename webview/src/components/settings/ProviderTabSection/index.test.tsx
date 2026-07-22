@@ -109,6 +109,7 @@ describe('ProviderTabSection', () => {
   const onRevokeCodexLocalConfigAuthorization = vi.fn();
   const onRefreshCodexModelCatalog = vi.fn();
   const onSaveCodexModelVisibility = vi.fn();
+  const onDeleteCodexModelCatalogItem = vi.fn();
   const addToast = vi.fn();
 
   beforeEach(() => {
@@ -144,6 +145,7 @@ describe('ProviderTabSection', () => {
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
         onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        onDeleteCodexModelCatalogItem={onDeleteCodexModelCatalogItem}
         addToast={addToast}
       />,
     );
@@ -180,6 +182,7 @@ describe('ProviderTabSection', () => {
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
         onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        onDeleteCodexModelCatalogItem={onDeleteCodexModelCatalogItem}
         addToast={addToast}
       />,
     );
@@ -219,6 +222,7 @@ describe('ProviderTabSection', () => {
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
         onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        onDeleteCodexModelCatalogItem={onDeleteCodexModelCatalogItem}
         addToast={addToast}
       />,
     );
@@ -255,6 +259,7 @@ describe('ProviderTabSection', () => {
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
         onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        onDeleteCodexModelCatalogItem={onDeleteCodexModelCatalogItem}
         addToast={addToast}
       />
     );
@@ -295,6 +300,7 @@ describe('ProviderTabSection', () => {
         onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
         onRefreshCodexModelCatalog={onRefreshCodexModelCatalog}
         onSaveCodexModelVisibility={onSaveCodexModelVisibility}
+        onDeleteCodexModelCatalogItem={onDeleteCodexModelCatalogItem}
         addToast={addToast}
       />,
     );

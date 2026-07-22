@@ -2,6 +2,7 @@ package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexProviderModelDiscoveryService;
+import com.github.claudecodegui.provider.codex.CodexLocalModelSyncService;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
@@ -248,7 +249,11 @@ public class CodexProviderOperationsTest {
         assertEquals(List.of("gpt-5.5", "gpt-5.4-mini"), settingsService.lastMergedModelIds);
         assertTrue(jsCallback.hasFunctionCall("window.showSuccess"));
         assertTrue(jsCallback.hasFunctionCall("window.updateCodexProviders"));
-        assertTrue(jsCallback.lastArgs.stream().anyMatch(arg -> arg.contains("Managed Provider")));
+        assertTrue(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
+        assertTrue(jsCallback.containsArgFragment("settings.codexProvider.fetchModelsResult.added"));
+        assertTrue(jsCallback.containsArgFragment("\"providerName\":\"Managed Provider\""));
+        assertTrue(jsCallback.containsArgFragment("\"addedCount\":2"));
+        assertTrue(jsCallback.containsArgFragment("\"mode\":\"i18n\""));
     }
 
     /**
@@ -274,8 +279,11 @@ public class CodexProviderOperationsTest {
 
         operations.handleFetchCodexProviderModels("{\"id\":\"managed-provider\"}");
 
-        assertEquals("window.showSuccess", jsCallback.lastFunctionName);
-        assertTrue(jsCallback.lastArgs.get(0).contains("No new models"));
+        assertTrue(jsCallback.hasFunctionCall("window.showSuccess"));
+        assertTrue(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
+        assertTrue(jsCallback.containsArgFragment("settings.codexProvider.fetchModelsResult.noNewModels"));
+        assertTrue(jsCallback.containsArgFragment("\"addedCount\":0"));
+        assertTrue(jsCallback.containsArgFragment("\"mode\":\"i18n\""));
     }
 
     /**
@@ -300,6 +308,135 @@ public class CodexProviderOperationsTest {
         assertEquals("window.showError", jsCallback.lastFunctionName);
         assertTrue(jsCallback.lastArgs.get(0).contains("Unsupported authMode"));
         assertEquals("", settingsService.lastMergedProviderId);
+    }
+
+    /**
+     * 验证目标：
+     * 当 `fetch_codex_provider_models` 作用于 CLI Login 虚拟 provider 时，
+     * 操作处理器应切换到“本地 Codex 配置同步模型”链路，而不是继续调用 managed provider 的 merge 逻辑。
+     *
+     * 断言意图：
+     * 1. 后端应把同步结果写入 discovered models；
+     * 2. 成功后仍需刷新 provider 列表，复用现有前端回调链路；
+     * 3. 不应调用 managed provider merge。
+     */
+    @Test
+    public void shouldSyncLocalCodexModelsWhenFetchingCliLoginProviderModels() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(createCliLoginProvider(), new JsonObject());
+        settingsService.localSyncResult = new CodexLocalModelSyncService.LocalModelSyncResult(
+                createCliDiscoveredModels(),
+                true,
+                false,
+                2,
+                0,
+                0,
+                "https://api.openai.com/v1",
+                "config_api_key"
+        );
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(settingsService, new IOException("managed discovery should not be called")),
+                new RecordingLocalModelSyncService(settingsService, settingsService.localSyncResult)
+        );
+
+        operations.handleFetchCodexProviderModels("{\"id\":\"__codex_cli_login__\"}");
+
+        assertTrue(settingsService.localSyncCalled);
+        assertEquals(2, settingsService.savedCliLoginDiscoveredModels.size());
+        assertEquals(CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID, settingsService.lastClearedExclusionProviderId);
+        assertEquals("", settingsService.lastMergedProviderId);
+        assertTrue(jsCallback.hasFunctionCall("window.showSuccess"));
+        assertTrue(jsCallback.hasFunctionCall("window.updateCodexProviders"));
+        assertTrue(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
+        // 本地配置同步成功提示也必须走结构化 i18n，而不是英文拼串。
+        assertTrue(
+                jsCallback.containsArgFragment("settings.codexProvider.fetchModelsResult.localRemoteDiscovered")
+                        || jsCallback.containsArgFragment("settings.codexProvider.fetchModelsResult.localFallbackRefreshed")
+        );
+        assertTrue(jsCallback.containsArgFragment("\"mode\":\"i18n\""));
+        assertTrue(jsCallback.containsArgFragment("\"totalCount\":2"));
+        assertTrue(jsCallback.containsArgFragment("\"addedCount\":2"));
+    }
+
+    /**
+     * 验证目标：
+     * 当本地 Codex 配置同步后的 discovered models 覆盖掉旧缓存并导致部分旧模型被移除时，
+     * 设置页成功提示必须显式告知用户“删除了几个模型”，避免用户误以为刷新没有生效。
+     *
+     * 前置条件：
+     * 1. 旧缓存里存在两个模型；
+     * 2. 本次同步结果只保留其中一个模型；
+     * 3. 本次链路仍然是成功同步，而不是错误或 fallback 场景。
+     *
+     * 断言意图：
+     * 1. 后端仍会覆盖保存最新 discovered models；
+     * 2. 成功提示文案中必须带出 removed 统计；
+     * 3. 该统计来自“旧缓存 vs 新结果”的差异，而不是 provider merge 逻辑。
+     */
+    @Test
+    public void shouldReportRemovedModelCountWhenLocalCodexSyncReplacesOldDiscoveredModels() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(createCliLoginProvider(), new JsonObject());
+        settingsService.existingCliLoginDiscoveredModels = createCliDiscoveredModels();
+        JsonArray refreshedModels = new JsonArray();
+        JsonObject remainingModel = new JsonObject();
+        remainingModel.addProperty("id", "gpt-4.1");
+        remainingModel.addProperty("label", "gpt-4.1");
+        refreshedModels.add(remainingModel);
+        settingsService.localSyncResult = new CodexLocalModelSyncService.LocalModelSyncResult(
+                refreshedModels,
+                true,
+                false,
+                1,
+                0,
+                0,
+                "https://api.openai.com/v1",
+                "config_api_key"
+        );
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(settingsService, new IOException("managed discovery should not be called")),
+                new RecordingLocalModelSyncService(settingsService, settingsService.localSyncResult)
+        );
+
+        operations.handleFetchCodexProviderModels("{\"id\":\"__codex_cli_login__\"}");
+
+        assertEquals(1, settingsService.savedCliLoginDiscoveredModels.size());
+        assertTrue(jsCallback.hasFunctionCall("window.showSuccess"));
+        assertTrue(jsCallback.containsArgFragment("settings.codexProvider.fetchModelsResult.localRemoteDiscovered"));
+        assertTrue(jsCallback.containsArgFragment("settings.codexProvider.fetchModelsResult.removedStaleSuffix"));
+        assertTrue(jsCallback.containsArgFragment("\"removedCount\":1"));
+        assertTrue(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
+    }
+
+
+    /**
+     * 验证目标：
+     * 当本地同步服务因远端发现失败抛出 IOException 时，handler 必须：
+     * 1. 走 showError，而不是伪造成功；
+     * 2. 不覆盖已有 discovered models 缓存；
+     * 3. 不清理 exclusion。
+     */
+    @Test
+    public void shouldShowErrorAndKeepOldCacheWhenLocalCodexSyncRemoteDiscoveryFails() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(createCliLoginProvider(), new JsonObject());
+        settingsService.existingCliLoginDiscoveredModels = createCliDiscoveredModels();
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(settingsService, new IOException("managed discovery should not be called")),
+                new FailingLocalModelSyncService(settingsService, new IOException("remote models endpoint unavailable"))
+        );
+
+        operations.handleFetchCodexProviderModels("{\"id\":\"__codex_cli_login__\"}");
+
+        assertTrue(settingsService.localSyncCalled);
+        assertEquals(0, settingsService.savedCliLoginDiscoveredModels.size());
+        assertEquals("", settingsService.lastClearedExclusionProviderId);
+        assertTrue(jsCallback.hasFunctionCall("window.showError"));
+        assertFalse(jsCallback.hasFunctionCall("window.showSuccess"));
+        assertFalse(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
     }
 
     private static HandlerContext createContext(
@@ -332,6 +469,28 @@ public class CodexProviderOperationsTest {
         models.add(model);
         provider.add("models", models);
         return provider;
+    }
+
+    private static JsonObject createCliLoginProvider() {
+        JsonObject provider = new JsonObject();
+        provider.addProperty("id", CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID);
+        provider.addProperty("name", "Codex CLI Login");
+        provider.addProperty("isCodexCliLoginProvider", true);
+        provider.addProperty("isAuthorized", true);
+        return provider;
+    }
+
+    private static JsonArray createCliDiscoveredModels() {
+        JsonArray models = new JsonArray();
+        JsonObject modelA = new JsonObject();
+        modelA.addProperty("id", "gpt-4.1");
+        modelA.addProperty("label", "gpt-4.1");
+        models.add(modelA);
+        JsonObject modelB = new JsonObject();
+        modelB.addProperty("id", "gpt-4.1-mini");
+        modelB.addProperty("label", "gpt-4.1-mini");
+        models.add(modelB);
+        return models;
     }
 
     private static class TestSettingsService extends CodemossSettingsService {
@@ -403,6 +562,11 @@ public class CodexProviderOperationsTest {
         private List<String> lastMergedModelIds = List.of();
         private CodexProviderManager.CodexProviderModelMergeResult mergeResult =
                 new CodexProviderManager.CodexProviderModelMergeResult(0, 0, 0);
+        private boolean localSyncCalled;
+        private JsonArray savedCliLoginDiscoveredModels = new JsonArray();
+        private JsonArray existingCliLoginDiscoveredModels = new JsonArray();
+        private CodexLocalModelSyncService.LocalModelSyncResult localSyncResult;
+        private String lastClearedExclusionProviderId = "";
 
         TrackingFetchSettingsService(JsonObject provider, JsonObject localModelState) {
             super(provider, localModelState);
@@ -425,6 +589,40 @@ public class CodexProviderOperationsTest {
                 providers.add(provider.deepCopy());
             }
             return providers;
+        }
+
+        /**
+         * 模型同步成功后需要推送统一目录；测试里返回空 catalog 即可验证回调被触发。
+         */
+        @Override
+        public JsonObject getCodexModelDisplayConfig() {
+            JsonObject config = new JsonObject();
+            config.add("catalog", new JsonArray());
+            config.add("visibility", new JsonObject());
+            return config;
+        }
+
+        /**
+         * 模拟 settings service 在保存 CLI discovered models 时的副作用。
+         * 这里除了记录最新缓存，还要同步记录“已按 provider 维度清理 exclusion”，
+         * 以便 handler 测试继续校验完整的同步语义，而不是只校验数组写入。
+         *
+         * @param discoveredModels 待保存的 CLI discovered models
+         */
+        @Override
+        public void saveCodexCliLoginDiscoveredModels(JsonArray discoveredModels) {
+            this.savedCliLoginDiscoveredModels = discoveredModels == null ? new JsonArray() : discoveredModels.deepCopy();
+            this.lastClearedExclusionProviderId = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID;
+        }
+
+        @Override
+        public JsonArray getCodexCliLoginDiscoveredModels() {
+            return existingCliLoginDiscoveredModels.deepCopy();
+        }
+
+        @Override
+        public void clearCodexModelCatalogExclusionsByProviderId(String providerId) {
+            this.lastClearedExclusionProviderId = providerId == null ? "" : providerId;
         }
     }
 
@@ -462,6 +660,47 @@ public class CodexProviderOperationsTest {
         }
     }
 
+    /**
+     * 用于给 CLI Login 本地模型同步链路注入可预测结果的同步服务桩。
+     * 该桩只记录“是否被调用”和预设结果，避免单元测试依赖真实 ~/.codex 文件或网络请求。
+     */
+    private static class FailingLocalModelSyncService extends CodexLocalModelSyncService {
+        private final TrackingFetchSettingsService settingsService;
+        private final IOException failure;
+
+        FailingLocalModelSyncService(TrackingFetchSettingsService settingsService, IOException failure) {
+            super(settingsService, ignored -> "", null);
+            this.settingsService = settingsService;
+            this.failure = failure;
+        }
+
+        @Override
+        public LocalModelSyncResult syncLocalModels() throws IOException {
+            settingsService.localSyncCalled = true;
+            throw failure;
+        }
+    }
+
+    private static class RecordingLocalModelSyncService extends CodexLocalModelSyncService {
+        private final TrackingFetchSettingsService settingsService;
+        private final LocalModelSyncResult result;
+
+        RecordingLocalModelSyncService(
+                TrackingFetchSettingsService settingsService,
+                LocalModelSyncResult result
+        ) {
+            super(settingsService, ignored -> "", null);
+            this.settingsService = settingsService;
+            this.result = result;
+        }
+
+        @Override
+        public LocalModelSyncResult syncLocalModels() throws IOException {
+            settingsService.localSyncCalled = true;
+            return result;
+        }
+    }
+
     private static class RecordingCodexSDKBridge extends CodexSDKBridge {
         @Override
         public CompletableFuture<SDKResult> sendMessage(
@@ -487,6 +726,7 @@ public class CodexProviderOperationsTest {
         private String lastFunctionName = "";
         private final List<String> lastArgs = new ArrayList<>();
         private final List<String> functionHistory = new ArrayList<>();
+        private final List<String> argHistory = new ArrayList<>();
 
         @Override
         public void callJavaScript(String functionName, String... args) {
@@ -496,6 +736,7 @@ public class CodexProviderOperationsTest {
             if (args != null) {
                 for (String arg : args) {
                     this.lastArgs.add(arg);
+                    this.argHistory.add(arg);
                 }
             }
         }
@@ -521,6 +762,25 @@ public class CodexProviderOperationsTest {
          */
         boolean hasFunctionCall(String functionName) {
             return functionHistory.contains(functionName);
+        }
+
+        /**
+         * 判断当前测试过程中任一 JS 参数中是否出现指定片段。
+         * 该辅助方法用于断言成功提示文案内容，避免测试误依赖“最后一次回调一定是提示框”。
+         *
+         * @param fragment 需要匹配的参数片段
+         * @return 只要任一历史参数包含该片段就返回 true
+         */
+        boolean containsArgFragment(String fragment) {
+            if (fragment == null || fragment.isEmpty()) {
+                return false;
+            }
+            for (String arg : argHistory) {
+                if (arg != null && arg.contains(fragment)) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

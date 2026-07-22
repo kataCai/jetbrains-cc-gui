@@ -141,6 +141,37 @@ public class ModelProviderHandlerTest {
         assertTrue(jsCallback.lastArg.startsWith("["));
     }
 
+    /**
+     * 验证目标：设置页删除单个模型目录项时，handler 应提供独立入口并在成功后刷新统一目录。
+     * 前置条件：后端配置服务已经能按来源处理删除逻辑；这里的 handler 只负责桥接调用与目录回推。
+     * 断言意图：
+     * 1. handler 会把完整目录项 payload 交给 settings service；
+     * 2. 删除成功后会重新推送最新 catalog；
+     * 3. 不会误走“保存 visibility 配置”的旧链路。
+     */
+    @Test
+    public void shouldDeleteCodexModelCatalogItemAndRefreshCatalog() throws Exception {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        CatalogDeleteSettingsService settingsService = new CatalogDeleteSettingsService();
+        HandlerContext context = new HandlerContext(
+                null,
+                null,
+                null,
+                settingsService,
+                jsCallback
+        );
+        ModelProviderHandler handler = new ModelProviderHandler(context, new UsagePushService(context));
+
+        handler.handleDeleteCodexModelCatalogItem(
+                "{\"key\":\"minimax::MiniMax-M3\",\"providerId\":\"minimax\",\"modelId\":\"MiniMax-M3\",\"source\":\"managed_provider\"}"
+        );
+
+        assertEquals("minimax::MiniMax-M3", settingsService.lastDeletedCatalogKey);
+        assertEquals("managed_provider", settingsService.lastDeletedCatalogSource);
+        assertTrue(settingsService.deleteCatalogItemCalled);
+        assertTrue(jsCallback.functionNames.contains("window.updateCodexModelCatalog"));
+    }
+
     @Test
     public void shouldKeepSelectCodexModelScopedToCurrentTabWithoutMutatingActiveSession() {
         RecordingJsCallback jsCallback = new RecordingJsCallback();
@@ -297,6 +328,38 @@ public class ModelProviderHandlerTest {
         @Override
         public JsonObject getCodexModelDisplayConfig() {
             return catalogConfig.deepCopy();
+        }
+    }
+
+    /**
+     * 用于验证“删除目录项”handler 桥接行为的设置服务桩。
+     * 该桩只记录删除入参与刷新后的目录内容，不承担真实配置持久化职责。
+     */
+    private static class CatalogDeleteSettingsService extends CodemossSettingsService {
+        private boolean deleteCatalogItemCalled;
+        private String lastDeletedCatalogKey = "";
+        private String lastDeletedCatalogSource = "";
+
+        @Override
+        public void deleteCodexModelCatalogItem(JsonObject payload) {
+            deleteCatalogItemCalled = true;
+            lastDeletedCatalogKey = payload.get("key").getAsString();
+            lastDeletedCatalogSource = payload.get("source").getAsString();
+        }
+
+        @Override
+        public JsonObject getCodexModelDisplayConfig() {
+            JsonObject config = new JsonObject();
+            JsonArray catalog = new JsonArray();
+            JsonObject item = new JsonObject();
+            item.addProperty("key", "minimax::MiniMax-M3-Preview");
+            item.addProperty("providerId", "minimax");
+            item.addProperty("modelId", "MiniMax-M3-Preview");
+            item.addProperty("visible", true);
+            catalog.add(item);
+            config.add("catalog", catalog);
+            config.add("visibility", new JsonObject());
+            return config;
         }
     }
 

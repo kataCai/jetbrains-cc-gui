@@ -49,6 +49,20 @@ public class CodexProviderModelDiscoveryService {
     }
 
     /**
+     * 创建使用默认 HTTP 传输、但允许注入环境变量读取器的模型发现服务。
+     * 该入口主要服务于需要自定义环境变量来源、但仍希望复用生产级 HttpClient 实现的调用方。
+     *
+     * @param settingsService 提供 runtime profile 解析所需的设置访问能力
+     * @param environmentReader 读取环境变量值的函数
+     */
+    public CodexProviderModelDiscoveryService(
+            CodemossSettingsService settingsService,
+            Function<String, String> environmentReader
+    ) {
+        this(settingsService, environmentReader, new JavaHttpTransport());
+    }
+
+    /**
      * 创建可注入依赖的模型发现服务。
      * 该入口主要服务于单元测试，允许替换环境变量读取器与 HTTP 传输层。
      *

@@ -20,6 +20,9 @@ const activeProviderListeners = new Set<ActiveProviderListener>();
 const codexProviderListListeners = new Set<ProviderListListener>();
 const activeCodexProviderListeners = new Set<ActiveProviderListener>();
 const codexModelCatalogListeners = new Set<CodexModelCatalogListener>();
+// 统一目录可能先于具体 React 消费者挂载完成就被后端推送，因此这里缓存最近一次 payload，
+// 确保设置页、聊天区等晚订阅者也能立即收到最新目录，而不是永远停留在初始 loading/旧数据。
+let latestCodexModelCatalogPayload: string | null = null;
 
 function emit<T>(listeners: Set<(value: T) => void>, value: T): void {
   // Snapshot to avoid mutation during iteration.
@@ -38,6 +41,10 @@ function emit<T>(listeners: Set<(value: T) => void>, value: T): void {
  * re-attaches the dispatcher.
  */
 export function installRuntimeProviderDispatchers(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
   window.updateProviders = (json: string) => {
     emit(providerListListeners, json);
   };
@@ -55,6 +62,7 @@ export function installRuntimeProviderDispatchers(): void {
   };
 
   window.updateCodexModelCatalog = (json: string) => {
+    latestCodexModelCatalogPayload = json;
     emit(codexModelCatalogListeners, json);
   };
 }
@@ -113,7 +121,37 @@ export function subscribeActiveCodexProvider(listener: ActiveProviderListener): 
 export function subscribeCodexModelCatalog(listener: CodexModelCatalogListener): () => void {
   ensureInstalled();
   codexModelCatalogListeners.add(listener);
+  if (latestCodexModelCatalogPayload !== null) {
+    listener(latestCodexModelCatalogPayload);
+  }
   return () => {
     codexModelCatalogListeners.delete(listener);
   };
+}
+
+/**
+ * 仅供测试使用：清理 dispatcher 缓存与 window 桥接回调。
+ * 统一目录现在支持“最新 payload 回放”，测试若不显式重置会互相污染。
+ */
+export function resetRuntimeProviderCapabilitiesForTest(): void {
+  providerListListeners.clear();
+  activeProviderListeners.clear();
+  codexProviderListListeners.clear();
+  activeCodexProviderListeners.clear();
+  codexModelCatalogListeners.clear();
+  latestCodexModelCatalogPayload = null;
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.updateProviders = undefined;
+  window.updateActiveProvider = undefined;
+  window.updateCodexProviders = undefined;
+  window.updateActiveCodexProvider = undefined;
+  window.updateCodexModelCatalog = undefined;
+}
+
+// 模块一旦被任意消费者导入，就先安装统一 dispatcher。
+// 这样即使后端比 React effect 更早推送目录，也会先进入共享缓存，再由晚订阅者回放消费。
+if (typeof window !== 'undefined') {
+  installRuntimeProviderDispatchers();
 }

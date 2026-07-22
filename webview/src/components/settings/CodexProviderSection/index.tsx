@@ -169,6 +169,7 @@ const CodexProviderSection = ({
   );
   const isCliLoginActive = cliLoginProvider?.isActive === true;
   const isCliLoginAuthorized = codexLocalConfigAuthorized || cliLoginProvider?.isAuthorized === true;
+  const isCliLoginSyncingModels = syncingCodexProviderId === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN;
   const cliLoginStatusItems = useMemo(
     () => buildCliLoginStatusItems(isCliLoginAuthorized, isCliLoginActive, t),
     [isCliLoginActive, isCliLoginAuthorized, t]
@@ -309,13 +310,27 @@ const CodexProviderSection = ({
                       {t('settings.codexProvider.cliLogin.authorizeOnly')}
                     </button>
                   ) : (
-                    <button
-                      className={sharedStyles.revokeButton}
-                      onClick={() => setShowCliLoginDisableConfirm(true)}
-                    >
-                      <span className="codicon codicon-circle-slash" />
-                      {t('settings.provider.revokeAuthorization')}
-                    </button>
+                    <>
+                      <button
+                        className={sharedStyles.iconBtn}
+                        onClick={() => cliLoginProvider && onFetchCodexProviderModels(cliLoginProvider)}
+                        title={isCliLoginSyncingModels
+                          ? t('settings.codexProvider.fetchModelsLoading')
+                          : t('settings.codexProvider.fetchModels')}
+                        disabled={isCliLoginSyncingModels}
+                      >
+                        <span className={isCliLoginSyncingModels
+                          ? 'codicon codicon-loading codicon-modifier-spin'
+                          : 'codicon codicon-refresh'} />
+                      </button>
+                      <button
+                        className={sharedStyles.revokeButton}
+                        onClick={() => setShowCliLoginDisableConfirm(true)}
+                      >
+                        <span className="codicon codicon-circle-slash" />
+                        {t('settings.provider.revokeAuthorization')}
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

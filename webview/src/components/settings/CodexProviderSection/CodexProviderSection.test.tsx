@@ -144,6 +144,71 @@ describe('CodexProviderSection', () => {
   });
 
   /**
+   * 验证已授权后的本地 Codex 配置卡片会补出“同步模型”入口，并复用同一条 provider 模型拉取回调。
+   * 断言意图：CLI Login 不应再走独立的新前端协议，而是继续复用 `fetch_codex_provider_models`。
+   */
+  it('shows a fetch-models action for the authorized local Codex config card and forwards the CLI pseudo provider', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN,
+            name: 'Virtual CLI Login',
+            isActive: true,
+          },
+        ]}
+        codexLocalConfigAuthorized={true}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('Fetch Model List'));
+
+    expect(onFetchCodexProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN }),
+    );
+  });
+
+  /**
+   * 验证本地 Codex 配置卡片同步模型时会进入独立 loading 态，且不会影响撤销授权按钮。
+   * 断言意图：CLI Login 的同步状态应与普通 provider 共用同一套 loading 协议，而不是额外分叉一份前端状态。
+   */
+  it('shows an isolated loading state for the local Codex config sync button', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN,
+            name: 'Virtual CLI Login',
+            isActive: true,
+          },
+        ]}
+        codexLocalConfigAuthorized={true}
+        codexLoading={false}
+        syncingCodexProviderId={SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN}
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const fetchButton = screen.getByTitle('Fetching Model List') as HTMLButtonElement;
+    expect(fetchButton.disabled).toBe(true);
+    expect(fetchButton.querySelector('.codicon-loading')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Revoke Authorization' })).toBeTruthy();
+  });
+
+  /**
    * 验证撤销授权流程仍然保留 fallback provider 回退逻辑。
    * 本次只收敛入口，不应破坏既有的安全回退路径。
    */

@@ -43,6 +43,7 @@ public class SettingsHandler extends BaseMessageHandler {
         "get_codex_model_state",
         "get_codex_model_catalog",
         "set_codex_model_visibility",
+        "delete_codex_model_catalog_item",
         "get_node_path",
         "set_node_path",
         "get_claude_cli_path",
@@ -193,6 +194,9 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "set_codex_model_visibility":
                 modelProviderHandler.handleSetCodexModelVisibility(content);
+                return true;
+            case "delete_codex_model_catalog_item":
+                modelProviderHandler.handleDeleteCodexModelCatalogItem(content);
                 return true;
             // Node path
             case "get_node_path":

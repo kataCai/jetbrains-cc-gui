@@ -8,7 +8,7 @@ import ProviderTabSection from './ProviderTabSection';
 
 /**
  * 构造真实设置页集成测试使用的 Codex provider 列表。
- * 这里同时覆盖 CLI Login 卡片和普通托管 provider，确保中英文切换时两类文案都走真实 locale。
+ * 这里同时覆盖 CLI Login 卡片和普通托管 provider，确保真实 locale 下两类文案都正常显示。
  *
  * @return 用于设置页渲染的最小 provider 集合。
  */
@@ -35,10 +35,10 @@ function createCodexProviders(): CodexProviderConfig[] {
 
 /**
  * 构造模型目录场景：
- * 1. 默认可见但未授权的 CLI Login 模型；
- * 2. 默认隐藏的托管 provider 模型；
- * 3. 默认可见的本地兜底模型。
- * 这样可以同时覆盖截图 1 的授权提示和截图 2 的折叠/展开模型视图。
+ * 1. CLI Login 分组下有一个可见但未授权模型；
+ * 2. MiniMax 分组下有一个可见模型和两个隐藏模型；
+ * 3. Local Config 分组下有一个可见模型。
+ * 这样可以覆盖默认分组视图、展开视图和组级开关文案。
  *
  * @return 用于设置页集成渲染的统一模型目录。
  */
@@ -56,12 +56,34 @@ function createCatalog(): CodexModelCatalogItem[] {
       runnable: false,
     },
     {
-      key: 'minimax::MiniMax-M3',
+      key: 'managed-provider::MiniMax-M3',
       providerId: 'managed-provider',
       providerName: 'MiniMax',
       modelId: 'MiniMax-M3',
       label: 'MiniMax-M3',
-      description: 'Managed provider model',
+      description: 'Visible managed provider model',
+      source: 'managed_provider',
+      visible: true,
+      runnable: true,
+    },
+    {
+      key: 'managed-provider::MiniMax-M3-Preview',
+      providerId: 'managed-provider',
+      providerName: 'MiniMax',
+      modelId: 'MiniMax-M3-Preview',
+      label: 'MiniMax-M3-Preview',
+      description: 'Hidden managed provider model',
+      source: 'managed_provider',
+      visible: false,
+      runnable: true,
+    },
+    {
+      key: 'managed-provider::MiniMax-Reasoner',
+      providerId: 'managed-provider',
+      providerName: 'MiniMax',
+      modelId: 'MiniMax-Reasoner',
+      label: 'MiniMax-Reasoner',
+      description: 'Another hidden managed provider model',
       source: 'managed_provider',
       visible: false,
       runnable: true,
@@ -77,6 +99,17 @@ function createCatalog(): CodexModelCatalogItem[] {
       visible: true,
       runnable: true,
     },
+    {
+      key: 'oppo::oppo-a',
+      providerId: 'oppo',
+      providerName: 'OPPO',
+      modelId: 'oppo-a',
+      label: 'OPPO-A',
+      description: 'Hidden OPPO model',
+      source: 'managed_provider',
+      visible: false,
+      runnable: true,
+    },
   ];
 }
 
@@ -84,7 +117,7 @@ function createCatalog(): CodexModelCatalogItem[] {
  * 使用真实 i18n 资源渲染 Codex 设置页页签。
  * 该辅助方法不 mock 翻译，专门用于确认真实 locale 下不会再出现 `settings.codexProvider.*` 裸 key。
  *
- * @return Testing Library 的渲染结果，便于后续直接检查整棵 DOM 文本。
+ * @return Testing Library 的渲染结果，便于直接检查完整 DOM 文本。
  */
 async function renderCodexSettingsTab() {
   let renderResult: ReturnType<typeof render> | undefined;
@@ -113,9 +146,10 @@ async function renderCodexSettingsTab() {
           onRevokeCodexLocalConfigAuthorization={vi.fn()}
           onRefreshCodexModelCatalog={vi.fn()}
           onSaveCodexModelVisibility={vi.fn()}
+          onDeleteCodexModelCatalogItem={vi.fn()}
           addToast={vi.fn()}
         />
-      </I18nextProvider>
+      </I18nextProvider>,
     );
   });
   return renderResult!;
@@ -136,26 +170,32 @@ describe('Codex settings real-i18n integration', () => {
   });
 
   /**
-   * 验证英文场景下整张 Codex 设置页不会再暴露原始 i18n key。
-   * 断言意图：真实 locale 资源而非 mock 翻译已经补齐，CLI Login 卡片与 Models 面板都能直接面向用户展示。
+   * 验证英文场景下整张 Codex 设置页不会出现裸翻译 key，并且 Models 区域已经按供应商分组。
    */
-  it('renders the Codex settings tab in English without raw translation keys', async () => {
+  it('renders the Codex settings tab in English without raw translation keys and with provider-grouped models', async () => {
     const { container } = await renderCodexSettingsTab();
 
     expect(container.textContent).not.toContain('settings.codexProvider.');
     expect(screen.getByText('Use local Codex CLI profile')).toBeTruthy();
     expect(screen.getByText('Models')).toBeTruthy();
     expect(screen.getByText('Available after authorization')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'View All Models' })).toBeTruthy();
+    expect(screen.getByTestId('provider-group:__codex_cli_login__')).toBeTruthy();
+    expect(screen.getByTestId('provider-group:managed-provider')).toBeTruthy();
+    // 多个已全选分组会同时展示相同文案，这里只验证真实 locale 文案至少存在一个即可。
+    expect(screen.getAllByText('Deselect All').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('provider-group:oppo')).toBeTruthy();
+    expect(screen.getByText('OPPO-A')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'View All Models' })).toBeNull();
   });
 
   /**
-   * 验证中文场景下截图对应问题已经收口：
-   * 1. CLI Login 区不再显示裸 key；
-   * 2. Models 区默认只展示可见模型；
-   * 3. 展开后可以看到隐藏模型，符合新 UI 的折叠/展开设计。
+   * 验证中文场景下：
+   * 1. 真实中文文案不再回退成 key；
+   * 2. 默认态下隐藏模型不会直接出现；
+   * 3. 展开后会在 MiniMax 分组下看到隐藏模型；
+   * 4. 组级文案即使在多个分组重复出现，也能按真实 locale 正常显示。
    */
-  it('renders the Chinese Codex settings tab with readable status copy and expandable model list', async () => {
+  it('renders the Chinese Codex settings tab with readable grouped model cards and expandable provider sections', async () => {
     await act(async () => {
       await i18n.changeLanguage('zh');
     });
@@ -165,15 +205,21 @@ describe('Codex settings real-i18n integration', () => {
     expect(screen.getByText('使用本地 Codex 配置')).toBeTruthy();
     expect(screen.getByText('授权状态')).toBeTruthy();
     expect(screen.getByText('当前请求来源')).toBeTruthy();
-    expect(screen.getByText('当前显示的模型')).toBeTruthy();
-    expect(screen.queryByText('MiniMax-M3')).toBeNull();
+    expect(screen.getByTestId('provider-group:__codex_cli_login__')).toBeTruthy();
+    expect(screen.getByTestId('provider-group:managed-provider')).toBeTruthy();
+    expect(screen.getByTestId('provider-group:oppo')).toBeTruthy();
+    expect(screen.getByText('OPPO-A')).toBeTruthy();
+    // 中文场景同样可能出现多个“全不选”，断言“至少存在”即可避免把重复文案误判成异常。
+    expect(screen.getAllByText('全不选').length).toBeGreaterThan(0);
+    expect(screen.queryByText('MiniMax-M3-Preview')).toBeNull();
+    expect(screen.queryByRole('button', { name: '查看全部模型' })).toBeNull();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '查看全部模型' }));
+      fireEvent.click(screen.getByRole('button', { name: 'toggle-provider-group:managed-provider' }));
     });
 
-    expect(screen.getByText('全部匹配模型')).toBeTruthy();
-    expect(screen.getByText('MiniMax-M3')).toBeTruthy();
+    expect(screen.getByText('MiniMax-M3-Preview')).toBeTruthy();
+    expect(screen.getByText('MiniMax-Reasoner')).toBeTruthy();
     expect(screen.getByText('授权后可用')).toBeTruthy();
   });
 });

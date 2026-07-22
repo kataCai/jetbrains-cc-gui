@@ -4,6 +4,10 @@ import { useSettingsWindowCallbacks, type SettingsWindowCallbacksDeps } from './
 import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
 import type { PromptEnhancerConfig } from '../../../types/promptEnhancer';
 import * as debugModule from '../../../utils/debug';
+import {
+  resetRuntimeProviderCapabilitiesForTest,
+  subscribeCodexModelCatalog,
+} from '../../../utils/runtimeProviderCapabilities';
 
 const translations: Record<string, string> = {
   'settings.codexProvider.runtimeSourceLabel': 'Runtime Source: {{source}}',
@@ -11,6 +15,8 @@ const translations: Record<string, string> = {
   'settings.codexProvider.runtimeSource.codexLocalConfig': 'Codex Local Config',
   'settings.codexProvider.runtimeSource.sdkDefault': 'SDK Default',
   'settings.codexProvider.runtimeSource.proxyFallback': 'Proxy Fallback',
+  'settings.codexProvider.fetchModelsResult.added': '{{providerName}}: Added {{addedCount}} models. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.',
+  'settings.codexProvider.fetchModelsResult.removedStaleSuffix': ' Removed {{removedCount}} stale models from the previous cache.',
 };
 
 vi.mock('react-i18next', () => ({
@@ -94,6 +100,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
   });
 
   beforeEach(() => {
+    resetRuntimeProviderCapabilitiesForTest();
     window.sendToJava = vi.fn();
     window.applyUiFontConfig = vi.fn();
   });
@@ -145,6 +152,40 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
   });
 
   /**
+   * 验证目标：统一目录刷新后，设置页订阅者与聊天区订阅者应收到同一份 catalog payload。
+   * 断言意图：
+   * 1. 设置页会把 JSON 解析后回写状态；
+   * 2. 聊天区这类外部订阅者会收到原始 payload；
+   * 3. 两端都复用同一 dispatcher，而不是各自维护分叉回调。
+   */
+  it('keeps settings and chat-side catalog subscribers in sync after unified catalog refresh', () => {
+    const deps = createDeps();
+    const chatSideListener = vi.fn();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+    const unsubscribe = subscribeCodexModelCatalog(chatSideListener);
+
+    window.updateCodexModelCatalog?.('[{"key":"managed-provider::gpt-5.5","providerId":"managed-provider","providerName":"Managed","modelId":"gpt-5.5","label":"gpt-5.5","source":"managed_provider","visible":true,"runnable":true}]');
+
+    expect(deps.updateCodexModelCatalog).toHaveBeenCalledWith([
+      {
+        key: 'managed-provider::gpt-5.5',
+        providerId: 'managed-provider',
+        providerName: 'Managed',
+        modelId: 'gpt-5.5',
+        label: 'gpt-5.5',
+        source: 'managed_provider',
+        visible: true,
+        runnable: true,
+      },
+    ]);
+    expect(chatSideListener).toHaveBeenCalledWith(
+      '[{"key":"managed-provider::gpt-5.5","providerId":"managed-provider","providerName":"Managed","modelId":"gpt-5.5","label":"gpt-5.5","source":"managed_provider","visible":true,"runnable":true}]'
+    );
+
+    unsubscribe();
+  });
+
+  /**
    * 验证后端只返回成功提示但不刷新 provider 列表时，设置页仍会清掉“获取模型列表”按钮的 loading 态。
    * 断言意图：处理“无新增模型”这类无列表刷新场景，避免按钮一直卡在 spinning 状态。
    */
@@ -159,6 +200,57 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
   });
 
   /**
+   * 验证目标：`window.showSuccess` 能解析结构化 i18n payload，并按当前语言插值后展示。
+   * 前置条件：后端回传 `{mode:i18n,key,params,suffixKey,suffixParams}` JSON 字符串。
+   * 断言意图：
+   * 1. 主句与后缀句都会经过翻译；
+   * 2. loading 清理逻辑仍然执行。
+   */
+  it('translates structured i18n success payloads before showing the success alert', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showSuccess?.(JSON.stringify({
+      mode: 'i18n',
+      key: 'settings.codexProvider.fetchModelsResult.added',
+      params: {
+        providerName: 'OPPO',
+        addedCount: 2,
+        duplicateCount: 3,
+        invalidCount: 1,
+      },
+      suffixKey: 'settings.codexProvider.fetchModelsResult.removedStaleSuffix',
+      suffixParams: {
+        removedCount: 4,
+      },
+    }));
+
+    expect(deps.showAlert).toHaveBeenCalledWith(
+      'success',
+      'toast.operationSuccess',
+      'OPPO: Added 2 models. Skipped 3 duplicates and 1 invalid entries. Removed 4 stale models from the previous cache.',
+    );
+    expect(deps.setSyncingCodexProviderId).toHaveBeenCalledWith('');
+  });
+
+  /**
+   * 验证目标：无法识别的 JSON 或非 i18n payload 仍按旧纯字符串逻辑直接展示。
+   * 断言意图：保证历史 `window.showSuccess('plain text')` 调用不回归。
+   */
+  it('keeps plain-string success messages compatible when payload is not structured i18n', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showSuccess?.('{"hello":"world"}');
+
+    expect(deps.showAlert).toHaveBeenCalledWith(
+      'success',
+      'toast.operationSuccess',
+      '{"hello":"world"}',
+    );
+  });
+
+  /**
    * 验证模型拉取失败会通过通用错误链路同步清理 loading 状态。
    * 断言意图：确保网络错误、鉴权错误或网关不支持 `/v1/models` 时，用户可以立即再次重试。
    */
@@ -170,6 +262,8 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
 
     expect(deps.showAlert).toHaveBeenCalledWith('error', 'toast.operationFailed', 'provider failed');
     expect(deps.setSyncingCodexProviderId).toHaveBeenCalledWith('');
+    // 删除/同步统一目录失败时也必须退出 loading，避免 Models 面板卡在加载中。
+    expect(deps.setCodexModelCatalogLoading).toHaveBeenCalledWith(false);
   });
 
   /**

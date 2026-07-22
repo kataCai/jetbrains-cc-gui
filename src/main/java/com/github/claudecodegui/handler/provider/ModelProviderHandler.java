@@ -209,6 +209,26 @@ public class ModelProviderHandler {
     }
 
     /**
+     * 删除统一 Codex 模型目录中的单个目录项。
+     * 该入口与“仅切换可见性”不同，后端需要根据目录来源决定是改写 provider.models、
+     * 还是更新 CLI Login discovered models / exclusion 表，因此这里单独提供桥接并在完成后刷新统一目录。
+     *
+     * @param content 前端传入的目录项删除载荷，至少包含 key/providerId/modelId/source
+     */
+    public void handleDeleteCodexModelCatalogItem(String content) {
+        try {
+            JsonObject payload = gson.fromJson(content, JsonObject.class);
+            context.getSettingsService().deleteCodexModelCatalogItem(payload == null ? new JsonObject() : payload);
+            handleGetCodexModelCatalog();
+        } catch (Exception e) {
+            LOG.error("[ModelProviderHandler] Failed to delete Codex model catalog item: " + e.getMessage(), e);
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.showError", context.escapeJs(e.getMessage()))
+            );
+        }
+    }
+
+    /**
      * 持久化聊天区当前选中的 Codex provider/model 组合。
      * 该入口只收敛“下一条消息想发送到哪里”的目标选择态，并把结果写入 CC-GUI 自有配置；
      * 不会直接改写当前活动 session 的 provider/model/binding，真正的 runtime 切换必须延后到发送链路。

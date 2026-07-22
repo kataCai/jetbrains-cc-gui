@@ -57,6 +57,112 @@ describe('useCodexProviderManagement', () => {
   });
 
   /**
+   * 验证本地 Codex 配置卡片的“同步模型”同样复用 `fetch_codex_provider_models`，
+   * 只是把 provider id 固定为 `__codex_cli_login__`。
+   */
+  it('reuses fetch provider models bridge message for the local Codex config pseudo provider', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleFetchCodexProviderModels({ id: '__codex_cli_login__', name: 'Local Codex Config' });
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'fetch_codex_provider_models:{"id":"__codex_cli_login__"}'
+    );
+    expect(result.current.syncingCodexProviderId).toBe('__codex_cli_login__');
+  });
+
+  /**
+   * 验证目标：设置页删除单个目录项时，前端必须走独立桥接消息，避免被误当成“只改 visible=false”的普通显示配置保存。
+   * 断言意图：
+   * 1. Java bridge 收到的 payload 必须保留 key/providerId/modelId/source；
+   * 2. 该操作不应复用 `set_codex_model_visibility`；
+   * 3. 删除请求发出后，目录 loading 应进入刷新态。
+   */
+  it('opens confirm state before sending dedicated delete catalog item bridge message', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleDeleteCodexModelCatalogItem({
+        key: 'minimax::MiniMax-M3',
+        providerId: 'minimax',
+        providerName: 'MiniMax',
+        modelId: 'MiniMax-M3',
+        label: 'MiniMax-M3',
+        source: 'managed_provider',
+        visible: true,
+        runnable: true,
+      });
+    });
+
+    // 删除按钮只打开确认框，不应立刻发桥接请求。
+    expect(window.sendToJava).not.toHaveBeenCalled();
+    expect(result.current.deleteCodexModelCatalogConfirm.isOpen).toBe(true);
+    expect(result.current.deleteCodexModelCatalogConfirm.catalogItem?.key).toBe('minimax::MiniMax-M3');
+
+    act(() => {
+      result.current.confirmDeleteCodexModelCatalogItem();
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'delete_codex_model_catalog_item:{"key":"minimax::MiniMax-M3","providerId":"minimax","modelId":"MiniMax-M3","source":"managed_provider"}'
+    );
+    expect(result.current.codexModelCatalogLoading).toBe(true);
+    expect(result.current.deleteCodexModelCatalogConfirm.isOpen).toBe(false);
+  });
+
+  /**
+   * 验证目标：只读来源目录项删除时，前端桥接参数中的 `source` 必须保持原值。
+   * 断言意图：避免 hook 层把 local_config / codex_cli_login 误归并成 managed_provider，导致后端走错删除分支。
+   */
+  it('preserves readonly source markers in confirmed delete catalog item bridge payloads', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleDeleteCodexModelCatalogItem({
+        key: '__codex_cli_login__::gpt-5.5',
+        providerId: '__codex_cli_login__',
+        providerName: 'Codex CLI',
+        modelId: 'gpt-5.5',
+        label: 'gpt-5.5',
+        source: 'codex_cli_login',
+        visible: true,
+        runnable: false,
+      });
+    });
+    act(() => {
+      result.current.confirmDeleteCodexModelCatalogItem();
+    });
+
+    act(() => {
+      result.current.handleDeleteCodexModelCatalogItem({
+        key: '__codex_cli_login__::gpt-5.4-local',
+        providerId: '__codex_cli_login__',
+        providerName: 'Codex CLI',
+        modelId: 'gpt-5.4-local',
+        label: 'gpt-5.4-local',
+        source: 'local_config',
+        visible: true,
+        runnable: true,
+      });
+    });
+    act(() => {
+      result.current.confirmDeleteCodexModelCatalogItem();
+    });
+
+    expect(window.sendToJava).toHaveBeenNthCalledWith(
+      1,
+      'delete_codex_model_catalog_item:{"key":"__codex_cli_login__::gpt-5.5","providerId":"__codex_cli_login__","modelId":"gpt-5.5","source":"codex_cli_login"}'
+    );
+    expect(window.sendToJava).toHaveBeenNthCalledWith(
+      2,
+      'delete_codex_model_catalog_item:{"key":"__codex_cli_login__::gpt-5.4-local","providerId":"__codex_cli_login__","modelId":"gpt-5.4-local","source":"local_config"}'
+    );
+    expect(result.current.codexModelCatalogLoading).toBe(true);
+  });
+
+  /**
    * 验证新增 provider 时，前端 payload 会完整保留模板与站点元信息。
    * 本测试覆盖本次方案新增的 providerType / presetId / websiteUrl / apiKeyApplyUrl，
    * 防止表单字段虽然存在，但在发往 Java 的桥接载荷里被静默丢失。

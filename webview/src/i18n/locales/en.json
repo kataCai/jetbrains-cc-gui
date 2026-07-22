@@ -852,6 +852,9 @@
       "modelsVisibleSectionTitle": "Visible models",
       "modelsAllSectionTitle": "All matching models",
       "modelsUnavailable": "Available after authorization",
+      "modelsGroupSelectAll": "Select All",
+      "modelsGroupDeselectAll": "Deselect All",
+      "modelsGroupCount": "{{count}} Models",
       "modelsSource": {
         "codex_cli_login": "CLI Login",
         "managed_provider": "Managed Provider",
@@ -860,9 +863,20 @@
       }
       ,
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "Fetch Model List",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "Fetch Model List",
       "fetchModelsLoading": "Fetching Model List",
-      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet."
+      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet.",
+      "fetchModelsResult": {
+        "added": "{{providerName}}: Added {{addedCount}} models. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
+        "noNewModels": "{{providerName}}: No new models found. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
+        "localRemoteDiscovered": "Local Codex Config: Synced {{totalCount}} models from {{baseUrl}} ({{addedCount}} new). Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
+        "localFallbackRefreshed": "Local Codex Config: Refreshed fallback model catalog. Using builtin models plus the current local model because no safe remote discovery path is available.",
+        "removedStaleSuffix": " Removed {{removedCount}} stale models from the previous cache."
+      },
+      "deleteModelConfirmTitle": "Confirm Delete Model",
+      "deleteModelConfirmMessageManaged": "Delete model \"{{modelLabel}}\" from this provider configuration? This permanently updates the provider models list.",
+      "deleteModelConfirmMessageReadonly": "Remove model \"{{modelLabel}}\" from the unified catalog? This is a readonly catalog item and can reappear after resync."
 
     },
     "chat": {

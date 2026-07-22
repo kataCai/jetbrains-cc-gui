@@ -41,6 +41,58 @@ const sendToJava = (message: string) => {
   }
 };
 
+/**
+ * 设置页成功提示支持的结构化 i18n payload。
+ * 该协议由后端以 JSON 字符串形式通过 `window.showSuccess` 回传：
+ * 1. `mode=i18n` 时前端走当前语言插值；
+ * 2. 可选 `suffixKey` 用于附加条件句，避免后端继续拼自然语言；
+ * 3. 解析失败时保持旧的纯字符串展示兼容。
+ */
+interface SettingsSuccessI18nPayload {
+  mode: 'i18n';
+  key: string;
+  params?: Record<string, string | number>;
+  suffixKey?: string;
+  suffixParams?: Record<string, string | number>;
+}
+
+/**
+ * 解析 `window.showSuccess` 入参，兼容纯字符串与结构化 i18n payload。
+ * 关键逻辑：
+ * 1. 非 JSON / 非 `mode=i18n` 时直接回退原文；
+ * 2. 命中结构化协议后，用当前 `t(...)` 翻译主句；
+ * 3. 若存在 `suffixKey`，再拼接后缀句翻译结果。
+ *
+ * @param message 后端回传的成功提示字符串
+ * @param translate 当前设置页语言下的翻译函数
+ * @return 可直接展示给成功弹窗的最终文案
+ */
+function resolveShowSuccessMessage(
+  message: string,
+  translate: (key: string, options?: Record<string, string | number>) => string,
+): string {
+  const trimmed = (message ?? '').trim();
+  if (!trimmed.startsWith('{')) {
+    return message;
+  }
+
+  try {
+    const payload = JSON.parse(trimmed) as Partial<SettingsSuccessI18nPayload>;
+    if (payload.mode !== 'i18n' || typeof payload.key !== 'string' || !payload.key.trim()) {
+      return message;
+    }
+
+    const mainMessage = translate(payload.key, payload.params ?? {});
+    if (typeof payload.suffixKey === 'string' && payload.suffixKey.trim()) {
+      return `${mainMessage}${translate(payload.suffixKey, payload.suffixParams ?? {})}`;
+    }
+    return mainMessage;
+  } catch {
+    // 兼容历史纯字符串成功提示，解析失败时直接展示原文。
+    return message;
+  }
+}
+
 export interface SettingsWindowCallbacksDeps {
   setNodePath: (path: string) => void;
   setNodeVersion: (version: string | null) => void;
@@ -131,10 +183,13 @@ export interface SettingsWindowCallbacksDeps {
 export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
   const { t } = useTranslation();
   const depsRef = useRef(deps);
+  const tRef = useRef(t);
   depsRef.current = deps;
+  tRef.current = t;
 
   useEffect(() => {
     const d = () => depsRef.current;
+    const translate = (key: string, options?: Record<string, string | number>) => tRef.current(key, options);
 
     const unsubscribeProviders = subscribeProviderList((jsonStr: string) => {
       try {
@@ -192,9 +247,11 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     });
 
     window.showError = (message: string) => {
-      d().showAlert('error', t('toast.operationFailed'), message);
+      d().showAlert('error', translate('toast.operationFailed'), message);
       d().setSyncingCodexProviderId('');
       d().setLoading(false);
+      // 删除/同步统一目录失败时也必须退出 loading，避免 Models 面板卡在“加载中”。
+      d().setCodexModelCatalogLoading(false);
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
@@ -203,7 +260,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     };
 
     window.showSwitchSuccess = (message: string) => {
-      d().showAlert('success', t('toast.switchSuccess'), message);
+      d().showAlert('success', translate('toast.switchSuccess'), message);
     };
 
     window.showTestResult = (payloadOrSuccess: string | boolean, legacyMessage?: string) => {
@@ -212,8 +269,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       const runtimeSource = resolveCodexRuntimeSource(payload);
       d().showAlert(
         payload.success ? 'success' : 'error',
-        payload.success ? t('toast.testResultPassed') : t('toast.testResultFailed'),
-        formatCodexProviderTestResultMessage(payload, t, runtimeSource)
+        payload.success ? translate('toast.testResultPassed') : translate('toast.testResultFailed'),
+        formatCodexProviderTestResultMessage(payload, translate, runtimeSource)
       );
     };
 
@@ -279,7 +336,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     };
 
     window.showSuccess = (message: string) => {
-      d().showAlert('success', t('toast.operationSuccess'), message);
+      // 兼容旧纯字符串与新结构化 i18n payload，确保 provider 模型同步提示可跟随设置页语言切换。
+      const resolvedMessage = resolveShowSuccessMessage(message, translate);
+      d().showAlert('success', translate('toast.operationSuccess'), resolvedMessage);
       d().setSyncingCodexProviderId('');
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
@@ -288,7 +347,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     };
 
     window.showSuccessI18n = (i18nKey: string) => {
-      d().addToast(t(i18nKey), 'success');
+      d().addToast(translate(i18nKey), 'success');
     };
 
     window.onEditorFontConfigReceived = (jsonStr: string) => {
@@ -362,11 +421,11 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         const data = JSON.parse(jsonStr);
         d().setCommitPrompt(data.commitPrompt || '');
         if (data.saved) {
-          d().addToast(t('toast.saveSuccess'), 'success');
+          d().addToast(translate('toast.saveSuccess'), 'success');
         }
       } catch (error) {
         console.error('[SettingsView] Failed to parse commit prompt:', error);
-        d().addToast(t('toast.saveFailed'), 'error');
+        d().addToast(translate('toast.saveFailed'), 'error');
       } finally {
         d().setSavingCommitPrompt(false);
       }
@@ -669,7 +728,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.updateCurrentCodexConfig = undefined;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t]);
+  }, []);
 }
 
 /**

@@ -304,6 +304,7 @@ const SettingsView = ({
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
+    deleteCodexModelCatalogConfirm,
     codexModelCatalog,
     codexModelCatalogLoading,
     loadCodexProviders,
@@ -319,6 +320,9 @@ const SettingsView = ({
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
     handleFetchCodexProviderModels,
+    handleDeleteCodexModelCatalogItem,
+    confirmDeleteCodexModelCatalogItem,
+    cancelDeleteCodexModelCatalogItem,
     handleTestCodexProvider,
     handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
@@ -695,6 +699,7 @@ const SettingsView = ({
               onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
               onRefreshCodexModelCatalog={loadCodexModelCatalog}
               onSaveCodexModelVisibility={saveCodexModelVisibility}
+              onDeleteCodexModelCatalogItem={handleDeleteCodexModelCatalogItem}
               addToast={addToast}
             />
           </div>
@@ -829,10 +834,13 @@ const SettingsView = ({
         onCancelDeleteProvider={cancelDeleteProvider}
         codexProviderDialog={codexProviderDialog}
         deleteCodexConfirm={deleteCodexConfirm}
+        deleteCodexModelCatalogConfirm={deleteCodexModelCatalogConfirm}
         onCloseCodexProviderDialog={handleCloseCodexProviderDialog}
         onSaveCodexProvider={handleSaveCodexProviderFromDialog}
         onConfirmDeleteCodexProvider={confirmDeleteCodexProvider}
         onCancelDeleteCodexProvider={cancelDeleteCodexProvider}
+        onConfirmDeleteCodexModelCatalogItem={confirmDeleteCodexModelCatalogItem}
+        onCancelDeleteCodexModelCatalogItem={cancelDeleteCodexModelCatalogItem}
         agentDialog={agentDialog}
         deleteAgentConfirm={deleteAgentConfirm}
         onCloseAgentDialog={handleCloseAgentDialog}

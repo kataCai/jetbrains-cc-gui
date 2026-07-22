@@ -46,6 +46,7 @@ interface ProviderTabSectionProps {
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   onRefreshCodexModelCatalog: () => void;
   onSaveCodexModelVisibility: (visibilityConfig: CodexModelVisibilityConfig) => void;
+  onDeleteCodexModelCatalogItem: (catalogItem: CodexModelCatalogItem) => void;
   // Shared
   addToast: (message: string, type: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -74,6 +75,7 @@ const ProviderTabSection = ({
   onRevokeCodexLocalConfigAuthorization,
   onRefreshCodexModelCatalog,
   onSaveCodexModelVisibility,
+  onDeleteCodexModelCatalogItem,
   addToast,
 }: ProviderTabSectionProps) => {
   const { t } = useTranslation();
@@ -294,6 +296,7 @@ const ProviderTabSection = ({
               loading={codexModelCatalogLoading}
               onRefresh={onRefreshCodexModelCatalog}
               onSaveVisibility={onSaveCodexModelVisibility}
+              onDeleteCatalogItem={onDeleteCodexModelCatalogItem}
               showHeader={false}
             />
           </section>

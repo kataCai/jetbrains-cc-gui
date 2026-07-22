@@ -74,6 +74,8 @@ public class CodemossSettingsService {
     private static final String CODEX_MODEL_DISPLAY_VISIBLE_KEY = "visible";
     private static final String CODEX_MODEL_DISPLAY_CATALOG_KEY = "catalog";
     private static final String CODEX_MODEL_DISPLAY_VISIBILITY_KEY = "visibility";
+    private static final String CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY = "cliLoginDiscoveredModels";
+    private static final String CODEX_MODEL_CATALOG_EXCLUSIONS_KEY = "modelCatalogExclusions";
     private static final String CODEX_LOGICAL_CONVERSATIONS_KEY = "logicalConversations";
     private static final String CODEX_CONVERSATION_SEGMENTS_KEY = "conversationSegments";
     private static final String CODEX_MODEL_DESCRIPTION_KEY = "description";
@@ -326,6 +328,8 @@ public class CodemossSettingsService {
         codex.addProperty("current", "");
         codex.add("providers", new JsonObject());
         codex.add(CODEX_MODEL_DISPLAY_KEY, new JsonObject());
+        codex.add(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY, new JsonArray());
+        codex.add(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY, new JsonObject());
         codex.addProperty("localConfigAuthorized", false);
         codex.add(CODEX_HISTORY_IMAGE_CACHE_KEY, createDefaultCodexHistoryImageCacheConfig());
         config.add(CODEX_CONFIG_KEY, codex);
@@ -2627,6 +2631,161 @@ public class CodemossSettingsService {
     }
 
     /**
+     * 读取 CLI Login 最近一次同步得到的模型缓存。
+     * 该缓存只承载“本地 Codex 配置卡片同步模型”动作的目录结果，
+     * 供统一模型目录优先复用，避免每次都回退到内建默认模型集合。
+     *
+     * @return 归一化后的 discovered models 数组
+     * @throws IOException 配置读取失败时抛出
+     */
+    public JsonArray getCodexCliLoginDiscoveredModels() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        return normalizeCodexCliLoginDiscoveredModels(codex.getAsJsonArray(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY));
+    }
+
+    /**
+     * 保存 CLI Login 最近一次同步得到的模型缓存。
+     * 这里只接受合法模型节点的最小结构：`id` 必填，`label/description/reasoningEffort` 可选；
+     * 其余字段会被忽略，避免把远端响应中的噪声数据直接写进配置。
+     * 同时这里会一并清理 `__codex_cli_login__::*` exclusion，
+     * 确保 CLI Login / local_config 目录在重新同步后恢复显示，而不是继续被历史逻辑删除遮蔽。
+     *
+     * @param discoveredModels 待持久化的 discovered models 数组
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void saveCodexCliLoginDiscoveredModels(JsonArray discoveredModels) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        codex.add(
+                CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY,
+                normalizeCodexCliLoginDiscoveredModels(discoveredModels)
+        );
+        // CLI Login 目录刷新后，应立即恢复该 provider 下此前被逻辑删除的只读目录项。
+        clearCodexModelCatalogExclusionsByProviderId(
+                codex,
+                CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID
+        );
+        writeConfig(config);
+    }
+
+    /**
+     * 读取统一模型目录排除表。
+     * 该排除表按 `providerId::modelId -> true` 保存逻辑删除状态，
+     * 供统一目录在构建阶段先过滤掉只读来源或已逻辑删除的目录项。
+     *
+     * @return 归一化后的 exclusion 映射
+     * @throws IOException 配置读取失败时抛出
+     */
+    public JsonObject getCodexModelCatalogExclusions() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        return normalizeCodexModelCatalogExclusions(codex.getAsJsonObject(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY));
+    }
+
+    /**
+     * 保存统一模型目录排除表。
+     * 这里只保留布尔值为 `true` 的条目；`false`、空 key 或非法类型都会被清理，
+     * 这样可以让“恢复显示”语义直接表现为移除对应 exclusion 键。
+     *
+     * @param exclusions 待持久化的 exclusion 映射
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void saveCodexModelCatalogExclusions(JsonObject exclusions) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        codex.add(
+                CODEX_MODEL_CATALOG_EXCLUSIONS_KEY,
+                normalizeCodexModelCatalogExclusions(exclusions)
+        );
+        writeConfig(config);
+    }
+
+    /**
+     * 按 provider 维度清理统一模型目录 exclusion。
+     * 该入口用于“重新同步模型”后的恢复语义：只要某个 provider 重新拉回了最新目录，
+     * 就应把该 provider 历史逻辑删除的目录项一并放开，避免用户必须逐个手动恢复。
+     *
+     * @param providerId 需要清理 exclusion 的 provider id
+     * @throws IOException 配置写入失败时抛出
+     */
+    public void clearCodexModelCatalogExclusionsByProviderId(String providerId) throws IOException {
+        String normalizedProviderId = normalizeString(providerId, "");
+        if (normalizedProviderId.isEmpty()) {
+            return;
+        }
+
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        clearCodexModelCatalogExclusionsByProviderId(codex, normalizedProviderId);
+        writeConfig(config);
+    }
+
+    /**
+     * 构造 CLI Login 目录的 fallback 模型集合。
+     * 该方法专门供“本地 Codex 配置同步模型”降级路径复用，语义与统一目录构建保持一致：
+     * 1. 先放内建默认模型；
+     * 2. 再补当前本地 `~/.codex/config.toml` 正在使用、但不在内建集合里的模型。
+     *
+     * @return 可直接持久化为 discovered models 的 fallback 模型数组
+     * @throws IOException 读取本地配置失败时抛出
+     */
+    public JsonArray buildCodexCliLoginFallbackModels() throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+        JsonArray fallbackCatalog = new JsonArray();
+        appendCodexCliLoginCatalogItems(fallbackCatalog, codex, false);
+        appendLocalConfigCatalogItems(fallbackCatalog, codex);
+        return extractCatalogItemsAsModels(fallbackCatalog);
+    }
+
+    /**
+     * 删除统一 Codex 模型目录中的单个目录项。
+     * 该删除语义不是单纯隐藏：
+     * 1. `managed_provider` 需要直接改写对应 provider 的 models；
+     * 2. `codex_cli_login` / `local_config` 等只读来源统一写入 exclusion 表；
+     * 3. 后续重新同步该 provider 时，再按 provider 维度清理 exclusion，实现“恢复显示”；
+     * 同时还必须同步清理 modelDisplay 中遗留的 visibility 脏键，避免目录已删但展示配置残留。
+     *
+     * @param payload 前端传入的目录项删除载荷，至少包含 key/providerId/modelId/source
+     * @throws IOException 配置读写失败时抛出
+     */
+    public void deleteCodexModelCatalogItem(JsonObject payload) throws IOException {
+        JsonObject normalizedPayload = payload == null ? new JsonObject() : payload;
+        String key = normalizeString(getOptionalString(normalizedPayload, "key"), "");
+        String providerId = normalizeString(getOptionalString(normalizedPayload, "providerId"), "");
+        String modelId = normalizeString(getOptionalString(normalizedPayload, "modelId"), "");
+        String source = normalizeString(getOptionalString(normalizedPayload, CODEX_MODEL_SOURCE_KEY), "");
+
+        if (key.isEmpty() || providerId.isEmpty() || modelId.isEmpty() || source.isEmpty()) {
+            throw new IllegalArgumentException("Codex model catalog deletion requires key, providerId, modelId, and source");
+        }
+
+        JsonObject config = readConfig();
+        JsonObject codex = ensureCodexConfigObject(config);
+
+        switch (source) {
+            case "managed_provider":
+                deleteManagedProviderCatalogItem(codex, providerId, modelId, key);
+                break;
+            case "codex_cli_login":
+            case "local_config":
+                excludeCatalogItem(codex, key);
+                break;
+            case "plugin_custom":
+                // 当前统一目录尚未产出 plugin_custom 来源项，避免预留分支被误当成已支持的删除闭环。
+                throw new IllegalArgumentException("Unsupported Codex model catalog source: " + source);
+            default:
+                throw new IllegalArgumentException("Unsupported Codex model catalog source: " + source);
+        }
+
+        removeCodexModelDisplayVisibilityEntry(codex, key);
+        // 若删除的是当前选中模型，立即清空 selectedModel，避免聊天区继续沿用已失效选择。
+        clearSelectedCodexModelIfMatches(codex, providerId, modelId);
+        writeConfig(config);
+    }
+
+    /**
      * 保存 Codex 会话绑定元数据。
      * 该映射把 session/thread id 与当时命中的 provider/model/requestMode 绑定，
      * 用于历史恢复后继续发送时保持运行时一致性，避免误用当前 active provider。
@@ -2979,12 +3138,16 @@ public class CodemossSettingsService {
         if (config.has("codex") && config.get("codex").isJsonObject()) {
             JsonObject codex = config.getAsJsonObject("codex");
             ensureCodexModelDisplayObject(codex);
+            ensureCodexCliLoginDiscoveredModelsArray(codex);
+            ensureCodexModelCatalogExclusionsObject(codex);
             return codex;
         }
         JsonObject codex = new JsonObject();
         codex.addProperty("current", "");
         codex.add("providers", new JsonObject());
         codex.add(CODEX_MODEL_DISPLAY_KEY, new JsonObject());
+        codex.add(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY, new JsonArray());
+        codex.add(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY, new JsonObject());
         config.add("codex", codex);
         return codex;
     }
@@ -3006,6 +3169,41 @@ public class CodemossSettingsService {
     }
 
     /**
+     * 确保 `codex.cliLoginDiscoveredModels` 为数组节点。
+     * 旧配置可能缺失该字段，或被手工改成了错误类型；这里统一兜底为空数组，
+     * 方便目录构建和同步模型链路直接复用。
+     *
+     * @param codex codex 根配置对象
+     * @return 可直接读取和写入的 discovered models 数组
+     */
+    private JsonArray ensureCodexCliLoginDiscoveredModelsArray(JsonObject codex) {
+        if (codex.has(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY)
+                && codex.get(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY).isJsonArray()) {
+            return codex.getAsJsonArray(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY);
+        }
+        JsonArray discoveredModels = new JsonArray();
+        codex.add(CODEX_CLI_LOGIN_DISCOVERED_MODELS_KEY, discoveredModels);
+        return discoveredModels;
+    }
+
+    /**
+     * 确保 `codex.modelCatalogExclusions` 为对象节点。
+     * 该节点只存逻辑删除后的排除键集合，旧配置缺失时统一补齐为空对象。
+     *
+     * @param codex codex 根配置对象
+     * @return 可直接读取和写入的 exclusion 对象
+     */
+    private JsonObject ensureCodexModelCatalogExclusionsObject(JsonObject codex) {
+        if (codex.has(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY)
+                && codex.get(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY).isJsonObject()) {
+            return codex.getAsJsonObject(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY);
+        }
+        JsonObject exclusions = new JsonObject();
+        codex.add(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY, exclusions);
+        return exclusions;
+    }
+
+    /**
      * 从当前 codex.providers[*].models 收集模型目录。
      * 该目录是后端返回给前端的等价 schema，字段名与前端类型保持一致，便于直接复用 `providerId::modelId`
      * 的展示与筛选逻辑。
@@ -3015,10 +3213,13 @@ public class CodemossSettingsService {
      */
     private JsonArray collectCodexModelDisplayCatalog(JsonObject codex) {
         JsonArray catalog = new JsonArray();
-        appendCodexCliLoginCatalogItems(catalog, codex);
+        appendCodexCliLoginCatalogItems(catalog, codex, true);
         appendManagedProviderCatalogItems(catalog, codex);
         appendLocalConfigCatalogItems(catalog, codex);
-        return catalog;
+        return filterExcludedCodexModelCatalogItems(
+                catalog,
+                ensureCodexModelCatalogExclusionsObject(codex)
+        );
     }
 
     /**
@@ -3067,13 +3268,19 @@ public class CodemossSettingsService {
      * @param catalog 待写入的目录数组
      * @param codex codex 根配置对象
      */
-    private void appendCodexCliLoginCatalogItems(JsonArray catalog, JsonObject codex) {
+    private void appendCodexCliLoginCatalogItems(JsonArray catalog, JsonObject codex, boolean preferDiscoveredModels) {
         boolean cliLoginAuthorized = codex.has("localConfigAuthorized")
                 && !codex.get("localConfigAuthorized").isJsonNull()
                 && codex.get("localConfigAuthorized").getAsBoolean();
         String providerId = CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID;
         String providerName = ClaudeCodeGuiBundle.message("provider.codexCliLogin.name");
-        for (JsonElement modelElement : buildBuiltinCodexCliModels()) {
+        JsonArray discoveredModels = normalizeCodexCliLoginDiscoveredModels(
+                ensureCodexCliLoginDiscoveredModelsArray(codex)
+        );
+        JsonArray sourceModels = preferDiscoveredModels && discoveredModels.size() > 0
+                ? discoveredModels
+                : buildBuiltinCodexCliModels();
+        for (JsonElement modelElement : sourceModels) {
             if (modelElement == null || !modelElement.isJsonObject()) {
                 continue;
             }
@@ -3372,6 +3579,141 @@ public class CodemossSettingsService {
     }
 
     /**
+     * 从 managed provider 的模型列表中真正移除指定模型。
+     * 删除成功后还会同步清理 exclusion 表中的同 key 脏记录，避免后续用户重新添加同名模型时被历史排除项误伤。
+     *
+     * @param codex codex 根配置对象
+     * @param providerId 目标 managed provider id
+     * @param modelId 需要删除的模型 id
+     * @param key 统一目录使用的复合 key
+     */
+    private void deleteManagedProviderCatalogItem(
+            JsonObject codex,
+            String providerId,
+            String modelId,
+            String key
+    ) {
+        if (!codex.has("providers") || !codex.get("providers").isJsonObject()) {
+            throw new IllegalArgumentException("Codex providers config is missing");
+        }
+        JsonObject providers = codex.getAsJsonObject("providers");
+        if (!providers.has(providerId) || !providers.get(providerId).isJsonObject()) {
+            throw new IllegalArgumentException("Codex provider not found: " + providerId);
+        }
+
+        JsonObject provider = providers.getAsJsonObject(providerId);
+        JsonArray existingModels = readProviderModels(provider);
+        JsonArray remainingModels = new JsonArray();
+        boolean removed = false;
+        for (JsonElement modelElement : existingModels) {
+            if (modelElement == null || !modelElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject model = modelElement.getAsJsonObject();
+            String currentModelId = normalizeString(getOptionalString(model, "id"), "");
+            if (!removed && modelId.equals(currentModelId)) {
+                removed = true;
+                continue;
+            }
+            remainingModels.add(model.deepCopy());
+        }
+        if (!removed) {
+            throw new IllegalArgumentException("Managed provider model not found: " + key);
+        }
+
+        if (provider.has("models") && provider.get("models").isJsonArray()) {
+            provider.add("models", remainingModels);
+        } else if (provider.has("customModels") && provider.get("customModels").isJsonArray()) {
+            provider.add("customModels", remainingModels);
+        } else {
+            provider.add("models", remainingModels);
+        }
+        ensureCodexModelCatalogExclusionsObject(codex).remove(key);
+    }
+
+    /**
+     * 将无法直接改写源数据的目录项加入 exclusion 表。
+     * 这类目录项仍然存在于底层 discovered/builtin/local fallback 推导链路中，
+     * 因此只能通过统一目录排除表实现逻辑删除，并等待后续 provider 级同步触发恢复。
+     *
+     * @param codex codex 根配置对象
+     * @param key 需要排除的统一目录复合 key
+     */
+    private void excludeCatalogItem(JsonObject codex, String key) {
+        JsonObject exclusions = normalizeCodexModelCatalogExclusions(
+                ensureCodexModelCatalogExclusionsObject(codex)
+        );
+        exclusions.addProperty(key, true);
+        codex.add(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY, exclusions);
+    }
+
+    /**
+     * 按 provider 维度清理 exclusion 表。
+     * 该方法只删除 `providerId::` 前缀命中的逻辑删除项，其它 provider 的排除记录保持不变，
+     * 以便“重新同步某个 provider”不会误恢复其他来源的用户删除结果。
+     *
+     * @param codex codex 根配置对象
+     * @param providerId 需要恢复的 provider id
+     */
+    private void clearCodexModelCatalogExclusionsByProviderId(JsonObject codex, String providerId) {
+        String normalizedProviderId = normalizeString(providerId, "");
+        if (normalizedProviderId.isEmpty()) {
+            return;
+        }
+
+        String keyPrefix = normalizedProviderId + "::";
+        JsonObject currentExclusions = normalizeCodexModelCatalogExclusions(
+                ensureCodexModelCatalogExclusionsObject(codex)
+        );
+        JsonObject remainingExclusions = new JsonObject();
+        for (Map.Entry<String, JsonElement> entry : currentExclusions.entrySet()) {
+            String key = normalizeString(entry.getKey(), "");
+            if (key.isEmpty() || key.startsWith(keyPrefix)) {
+                continue;
+            }
+            remainingExclusions.addProperty(key, true);
+        }
+        codex.add(CODEX_MODEL_CATALOG_EXCLUSIONS_KEY, remainingExclusions);
+    }
+
+    /**
+     * 删除 modelDisplay 中已经失效的 visibility 记录。
+     * 统一目录项被真正删除后，如果继续保留旧 key 的 visibility，会导致后续配置长期残留无效项。
+     *
+     * @param codex codex 根配置对象
+     * @param key 需要清理的统一目录复合 key
+     */
+    private void removeCodexModelDisplayVisibilityEntry(JsonObject codex, String key) {
+        JsonObject modelDisplay = normalizeCodexModelDisplayVisibility(
+                ensureCodexModelDisplayObject(codex),
+                null,
+                false
+        );
+        modelDisplay.remove(key);
+        codex.add(CODEX_MODEL_DISPLAY_KEY, modelDisplay);
+    }
+
+    /**
+     * 当被删除的目录项正好是当前 selectedCodexModel 时，清理该选中态。
+     * 这样可以避免目录项已删、但聊天区继续展示/发送失效模型的不一致状态。
+     *
+     * @param codex codex 根配置对象
+     * @param providerId 被删除模型所属 provider id
+     * @param modelId 被删除的模型 id
+     */
+    private void clearSelectedCodexModelIfMatches(JsonObject codex, String providerId, String modelId) {
+        if (codex == null || !codex.has("selectedModel") || !codex.get("selectedModel").isJsonObject()) {
+            return;
+        }
+        JsonObject selectedModel = codex.getAsJsonObject("selectedModel");
+        String selectedProviderId = normalizeString(getOptionalString(selectedModel, "providerId"), "");
+        String selectedModelId = normalizeString(getOptionalString(selectedModel, "modelId"), "");
+        if (providerId.equals(selectedProviderId) && modelId.equals(selectedModelId)) {
+            codex.remove("selectedModel");
+        }
+    }
+
+    /**
      * 判断目录中是否已经存在指定复合 key。
      *
      * @param catalog 当前目录数组
@@ -3389,6 +3731,145 @@ public class CodemossSettingsService {
             }
         }
         return false;
+    }
+
+    /**
+     * 从统一目录项中抽取可持久化的 discovered model 结构。
+     * 这里只保留本地同步后真正需要缓存的字段，避免把 providerId/source/visible 等展示层属性塞回 discovered models。
+     *
+     * @param catalog 统一目录项数组
+     * @return discovered models 数组
+     */
+    private JsonArray extractCatalogItemsAsModels(JsonArray catalog) {
+        JsonArray models = new JsonArray();
+        for (JsonElement element : catalog) {
+            if (element == null || !element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            String modelId = normalizeString(getOptionalString(item, "modelId"), "");
+            if (modelId.isEmpty()) {
+                continue;
+            }
+            JsonObject model = new JsonObject();
+            model.addProperty("id", modelId);
+
+            String label = normalizeString(getOptionalString(item, "label"), "");
+            if (!label.isEmpty()) {
+                model.addProperty("label", label);
+            }
+            String description = normalizeString(getOptionalString(item, CODEX_MODEL_DESCRIPTION_KEY), "");
+            if (!description.isEmpty()) {
+                model.addProperty(CODEX_MODEL_DESCRIPTION_KEY, description);
+            }
+            String reasoningEffort = normalizeString(getOptionalString(item, CODEX_MODEL_REASONING_EFFORT_KEY), "");
+            if (!reasoningEffort.isEmpty()) {
+                model.addProperty(CODEX_MODEL_REASONING_EFFORT_KEY, reasoningEffort);
+            }
+            models.add(model);
+        }
+        return models;
+    }
+
+    /**
+     * 归一化 CLI Login 发现模型缓存。
+     * 只保留带合法 `id` 的模型节点，并复制允许透传的展示字段，
+     * 其余无关字段全部丢弃，避免把远端响应噪声直接写进本地配置。
+     *
+     * @param source 原始 discovered models 数组，允许为 null
+     * @return 清洗后的 discovered models 数组
+     */
+    private JsonArray normalizeCodexCliLoginDiscoveredModels(JsonArray source) {
+        JsonArray normalized = new JsonArray();
+        if (source == null) {
+            return normalized;
+        }
+        for (JsonElement modelElement : source) {
+            if (modelElement == null || !modelElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject rawModel = modelElement.getAsJsonObject();
+            String modelId = normalizeString(getOptionalString(rawModel, "id"), "");
+            if (modelId.isEmpty()) {
+                continue;
+            }
+            JsonObject model = new JsonObject();
+            model.addProperty("id", modelId);
+
+            String label = normalizeString(getOptionalString(rawModel, "label"), "");
+            if (!label.isEmpty()) {
+                model.addProperty("label", label);
+            }
+
+            String description = normalizeString(getOptionalString(rawModel, CODEX_MODEL_DESCRIPTION_KEY), "");
+            if (!description.isEmpty()) {
+                model.addProperty(CODEX_MODEL_DESCRIPTION_KEY, description);
+            }
+
+            String reasoningEffort = normalizeString(getOptionalString(rawModel, CODEX_MODEL_REASONING_EFFORT_KEY), "");
+            if (!reasoningEffort.isEmpty()) {
+                model.addProperty(CODEX_MODEL_REASONING_EFFORT_KEY, reasoningEffort);
+            }
+            normalized.add(model);
+        }
+        return normalized;
+    }
+
+    /**
+     * 归一化统一模型目录排除表。
+     * 该表只保留 `providerId::modelId -> true` 这样的显式逻辑删除项；
+     * false、空 key 或非法类型全部忽略，让“恢复”语义等价于移除键。
+     *
+     * @param source 原始 exclusion 对象，允许为 null
+     * @return 清洗后的 exclusion 对象
+     */
+    private JsonObject normalizeCodexModelCatalogExclusions(JsonObject source) {
+        JsonObject normalized = new JsonObject();
+        if (source == null) {
+            return normalized;
+        }
+        for (Map.Entry<String, JsonElement> entry : source.entrySet()) {
+            String key = normalizeString(entry.getKey(), "");
+            JsonElement value = entry.getValue();
+            if (key.isEmpty()
+                    || value == null
+                    || !value.isJsonPrimitive()
+                    || !value.getAsJsonPrimitive().isBoolean()
+                    || !value.getAsBoolean()) {
+                continue;
+            }
+            normalized.addProperty(key, true);
+        }
+        return normalized;
+    }
+
+    /**
+     * 按排除表过滤统一模型目录。
+     * 过滤发生在可见性配置回填之前，确保被逻辑删除的目录项不会继续出现在 catalog 或 visibility 里。
+     *
+     * @param catalog 原始目录数组
+     * @param exclusions 原始 exclusion 对象
+     * @return 过滤后的目录数组
+     */
+    private JsonArray filterExcludedCodexModelCatalogItems(JsonArray catalog, JsonObject exclusions) {
+        JsonObject normalizedExclusions = normalizeCodexModelCatalogExclusions(exclusions);
+        if (normalizedExclusions.size() == 0) {
+            return catalog;
+        }
+
+        JsonArray filteredCatalog = new JsonArray();
+        for (JsonElement element : catalog) {
+            if (element == null || !element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            String key = normalizeString(getOptionalString(item, "key"), "");
+            if (key.isEmpty() || normalizedExclusions.has(key)) {
+                continue;
+            }
+            filteredCatalog.add(item);
+        }
+        return filteredCatalog;
     }
 
     /**

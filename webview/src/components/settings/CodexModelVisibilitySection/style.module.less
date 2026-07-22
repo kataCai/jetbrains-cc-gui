@@ -94,7 +94,104 @@
   color: var(--text-secondary);
 }
 
-.modelList {
+.providerGroupList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.providerGroupCard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border-secondary) 82%, transparent);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 76%, transparent), color-mix(in srgb, var(--bg-primary) 94%, transparent));
+}
+
+.providerGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.providerGroupHeaderExpandable {
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background 0.2s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--button-primary-background, #0078d4);
+    outline-offset: 2px;
+  }
+}
+
+.providerGroupTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.providerGroupChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.providerGroupTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.providerGroupExpandHint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.providerGroupBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-secondary) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-tertiary, var(--bg-secondary)) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.providerGroupActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.providerGroupActionLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.providerGroupModels {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -109,6 +206,31 @@
   border: 1px solid var(--border-primary);
   border-radius: 12px;
   background: var(--bg-primary);
+}
+
+.modelActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.deleteButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, #dc2626 28%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #dc2626 10%, transparent);
+  color: #f87171;
+  cursor: pointer;
+
+  &:hover {
+    background: color-mix(in srgb, #dc2626 16%, transparent);
+    color: #fca5a5;
+  }
 }
 
 .modelInfo {
@@ -231,6 +353,21 @@
   .toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .providerGroupHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .providerGroupTitleRow {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .providerGroupActions {
+    justify-content: space-between;
+    flex-wrap: wrap;
   }
 
   .modelCard {

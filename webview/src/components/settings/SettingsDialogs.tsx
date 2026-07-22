@@ -13,7 +13,7 @@ import AgentImportConfirmDialog from './AgentSection/AgentImportConfirmDialog';
 import type { ToastMessage } from '../Toast';
 import type { ProviderDialogState, DeleteConfirmState } from './hooks/useProviderManagement';
 import type { AgentDialogState, DeleteAgentConfirmState, ExportDialogState as AgentExportDialogState, ImportPreviewDialogState as AgentImportPreviewDialogState } from './hooks/useAgentManagement';
-import type { CodexProviderDialogState, DeleteCodexConfirmState } from './hooks/useCodexProviderManagement';
+import type { CodexProviderDialogState, DeleteCodexConfirmState, DeleteCodexModelCatalogConfirmState } from './hooks/useCodexProviderManagement';
 import type { ConflictStrategy } from '../../types/import';
 
 interface SettingsDialogsProps {
@@ -33,10 +33,13 @@ interface SettingsDialogsProps {
   // Codex provider dialog
   codexProviderDialog: CodexProviderDialogState;
   deleteCodexConfirm: DeleteCodexConfirmState;
+  deleteCodexModelCatalogConfirm: DeleteCodexModelCatalogConfirmState;
   onCloseCodexProviderDialog: () => void;
   onSaveCodexProvider: (data: CodexProviderConfig) => void;
   onConfirmDeleteCodexProvider: () => void;
   onCancelDeleteCodexProvider: () => void;
+  onConfirmDeleteCodexModelCatalogItem: () => void;
+  onCancelDeleteCodexModelCatalogItem: () => void;
 
   // Agent dialog
   agentDialog: AgentDialogState;
@@ -72,10 +75,13 @@ const SettingsDialogs = ({
   onCancelDeleteProvider,
   codexProviderDialog,
   deleteCodexConfirm,
+  deleteCodexModelCatalogConfirm,
   onCloseCodexProviderDialog,
   onSaveCodexProvider,
   onConfirmDeleteCodexProvider,
   onCancelDeleteCodexProvider,
+  onConfirmDeleteCodexModelCatalogItem,
+  onCancelDeleteCodexModelCatalogItem,
   agentDialog,
   deleteAgentConfirm,
   onCloseAgentDialog,
@@ -166,6 +172,27 @@ const SettingsDialogs = ({
         cancelText={t('common.cancel')}
         onConfirm={onConfirmDeleteCodexProvider}
         onCancel={onCancelDeleteCodexProvider}
+      />
+
+      {/* Codex model catalog delete confirmation dialog */}
+      <ConfirmDialog
+        isOpen={deleteCodexModelCatalogConfirm.isOpen}
+        title={t('settings.codexProvider.deleteModelConfirmTitle')}
+        message={t(
+          deleteCodexModelCatalogConfirm.catalogItem?.source === 'managed_provider'
+            ? 'settings.codexProvider.deleteModelConfirmMessageManaged'
+            : 'settings.codexProvider.deleteModelConfirmMessageReadonly',
+          {
+            modelLabel:
+              deleteCodexModelCatalogConfirm.catalogItem?.label
+              || deleteCodexModelCatalogConfirm.catalogItem?.modelId
+              || '',
+          },
+        )}
+        confirmText={t('common.delete')}
+        cancelText={t('common.cancel')}
+        onConfirm={onConfirmDeleteCodexModelCatalogItem}
+        onCancel={onCancelDeleteCodexModelCatalogItem}
       />
 
       {/* Agent export dialog */}
