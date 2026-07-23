@@ -130,6 +130,29 @@ describe('ButtonArea', () => {
     expect(within(dropdown as HTMLElement).queryByText('Plan')).toBeNull();
   });
 
+  it('keeps non-model selector dropdowns free from model-specific scroll shell', () => {
+    const { container } = render(
+      <ButtonArea
+        hasInputContent
+        selectedModel="claude-sonnet-4-6"
+        permissionMode="default"
+        currentProvider="claude"
+        onSubmit={() => {}}
+        onModeSelect={() => {}}
+      />,
+    );
+
+    // 本次改造只应该落在模型下拉，不应把模式下拉也改成模型专用滚动壳。
+    const modeButton = screen.getByRole('button', { name: /Default/i });
+    fireEvent.click(modeButton);
+
+    const dropdown = container.querySelector('.selector-dropdown');
+    expect(dropdown).toBeTruthy();
+    expect((dropdown as HTMLElement).classList.contains('selector-dropdown--model')).toBe(false);
+    expect(container.querySelector('.selector-dropdown-body')).toBeNull();
+    expect(container.querySelector('.selector-dropdown-progress')).toBeNull();
+  });
+
   it('uses codex catalog entries with provider labels before falling back to built-in models', () => {
     /**
      * 验证目标：
