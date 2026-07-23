@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelSelect } from './ModelSelect';
 import { CLAUDE_MODELS, CODEX_MODELS } from '../types';
 import type { ModelInfo } from '../types';
 import { STORAGE_KEYS } from '../../../types/provider';
+import { getAppViewport } from '../../../utils/viewport';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -14,6 +15,16 @@ vi.mock('react-i18next', () => ({
       ?? key
     ),
   }),
+}));
+
+vi.mock('../../../utils/viewport', () => ({
+  getAppViewport: vi.fn(() => ({
+    width: 1280,
+    height: 720,
+    top: 0,
+    left: 0,
+    fixedPosDivisor: 1,
+  })),
 }));
 
 /**
@@ -27,10 +38,164 @@ describe('ModelSelect', () => {
     label: 'Sonnet 4.6',
     description: 'Sonnet 4.6 路 Use the default model',
   };
+  let scrollMetricsMap: WeakMap<HTMLElement, { clientHeight: number; scrollHeight: number; scrollTop: number }>;
+  let viewportState: ReturnType<typeof getAppViewport>;
+  let resizeObserverEntries: Array<{
+    callback: ResizeObserverCallback;
+    observe: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }>;
 
   beforeEach(() => {
     localStorage.clear();
+    scrollMetricsMap = new WeakMap();
+    viewportState = {
+      width: 1280,
+      height: 720,
+      top: 0,
+      left: 0,
+      fixedPosDivisor: 1,
+    };
+    vi.mocked(getAppViewport).mockImplementation(() => viewportState);
+
+    resizeObserverEntries = [];
+    const ResizeObserverMock = class implements ResizeObserver {
+      public callback: ResizeObserverCallback;
+
+      public observe = vi.fn();
+
+      public unobserve = vi.fn();
+
+      public disconnect = vi.fn();
+
+      public constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        resizeObserverEntries.push({
+          callback,
+          observe: this.observe,
+          disconnect: this.disconnect,
+        });
+      }
+    };
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback): number => {
+      callback(0);
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((): void => undefined);
   });
+
+  /**
+   * 统一清理当前测试里注入的全局替身，避免后续用例沿用旧的 viewport/observer 状态。
+   * 这里显式恢复 spy 与 stub，确保每个用例都从干净环境重新开始。
+   *
+   * @return void
+   */
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * 为 JSDOM 下的滚动容器手动注入尺寸和滚动位置。
+   * 真实浏览器会自动给出这些布局值，但单测环境需要显式模拟，
+   * 否则无法验证“超长列表进入滚动态”以及滚动态在事件驱动下的刷新。
+   *
+   * @param element 目标滚动容器
+   * @param metrics 要注入的滚动尺寸
+   * @return void
+   */
+  const mockScrollMetrics = (
+    element: HTMLElement,
+    metrics: { clientHeight: number; scrollHeight: number; scrollTop?: number },
+  ): void => {
+    const nextMetrics = {
+      clientHeight: metrics.clientHeight,
+      scrollHeight: metrics.scrollHeight,
+      scrollTop: metrics.scrollTop ?? 0,
+    };
+    scrollMetricsMap.set(element, nextMetrics);
+
+    Object.defineProperty(element, 'clientHeight', {
+      configurable: true,
+      get: () => scrollMetricsMap.get(element)?.clientHeight ?? 0,
+    });
+    Object.defineProperty(element, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollMetricsMap.get(element)?.scrollHeight ?? 0,
+    });
+    Object.defineProperty(element, 'scrollTop', {
+      configurable: true,
+      get: () => scrollMetricsMap.get(element)?.scrollTop ?? 0,
+      set: (value: number) => {
+        const current = scrollMetricsMap.get(element);
+        if (!current) {
+          return;
+        }
+        scrollMetricsMap.set(element, { ...current, scrollTop: value });
+      },
+    });
+  };
+
+  /**
+   * 为模型按钮注入稳定的布局测量结果。
+   * dropdown 的最大高度完全依赖按钮的 `getBoundingClientRect()`，
+   * 因此测试必须显式控制这些值，才能稳定覆盖 viewport 边界分支。
+   *
+   * @param button 模型选择按钮
+   * @param rect 目标布局矩形
+   * @return void
+   */
+  const mockButtonRect = (
+    button: HTMLElement,
+    rect: { top: number; left?: number; width?: number; height?: number },
+  ): void => {
+    const width = rect.width ?? 160;
+    const height = rect.height ?? 28;
+    const left = rect.left ?? 0;
+    Object.defineProperty(button, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: left,
+        y: rect.top,
+        top: rect.top,
+        left,
+        width,
+        height,
+        right: left + width,
+        bottom: rect.top + height,
+        toJSON: () => undefined,
+      }),
+    });
+  };
+
+  /**
+   * 获取当前渲染出的模型 dropdown 根节点。
+   * 新增的高度约束写在 dropdown 根元素的 `maxHeight` 上，
+   * 因此后续断言统一通过这个 helper 读取实际内联样式。
+   *
+   * @return 当前模型 dropdown 元素
+   */
+  const getModelDropdown = (): HTMLElement => {
+    const dropdown = document.querySelector('.selector-dropdown.selector-dropdown--model');
+    expect(dropdown).toBeTruthy();
+    return dropdown as HTMLElement;
+  };
+
+  /**
+   * 主动触发测试环境中的 `ResizeObserver` 回调。
+   * 真实浏览器会在内容尺寸变化后自动回调，这里手动触发，
+   * 用来验证 dropdown 是否会在 observer 链路上重新计算高度和滚动态。
+   *
+   * @return void
+   */
+  const triggerResizeObservers = (): void => {
+    act(() => {
+      resizeObserverEntries.forEach(({ callback }) => {
+        callback([], {} as ResizeObserver);
+      });
+    });
+  };
 
   /**
    * 验证 rerender 后会重新读取本地 Claude 模型映射，
@@ -350,5 +515,333 @@ describe('ModelSelect', () => {
     expect(screen.getByText('chat.manageCurrentCodexProviderModelsAction')).toBeTruthy();
     expect(screen.getByText('chat.addCodexModelAliasAction')).toBeTruthy();
     expect(onAddModel).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 验证正常 viewport 场景下，dropdown 最大高度会按按钮顶部空间收敛。
+   * 该用例覆盖“空间足够但小于默认上限”的基础路径，
+   * 防止后续修复边界分支时把常规限高逻辑一并改坏。
+   */
+  it('正常 viewport 场景下应按按钮顶部空间限制 dropdown 最大高度', async () => {
+    const model: ModelInfo = {
+      id: 'gpt-5.4',
+      label: 'gpt-5.4',
+      description: 'Strong model for everyday coding.',
+    };
+
+    render(
+      <ModelSelect
+        value={model.id}
+        onChange={vi.fn()}
+        models={[model]}
+        currentProvider="codex"
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    mockButtonRect(button, { top: 72 });
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('56px');
+    });
+  });
+
+  /**
+   * 验证 `#app` 存在顶部偏移时，不会因为 app 坐标系与窗口坐标系的差值而错误退回默认 420px。
+   * 这是本次修复要覆盖的核心缺陷：
+   * 当 app 顶部有偏移但按钮在窗口内仍然可见时，dropdown 应该退回到窗口内真实可见的顶部空间。
+   */
+  it('app viewport 顶部偏移导致 app 内可用高度为负时应退回到窗口内真实可见高度', async () => {
+    const model: ModelInfo = {
+      id: 'gpt-5.4',
+      label: 'gpt-5.4',
+      description: 'Strong model for everyday coding.',
+    };
+
+    viewportState = {
+      ...viewportState,
+      top: 80,
+    };
+
+    render(
+      <ModelSelect
+        value={model.id}
+        onChange={vi.fn()}
+        models={[model]}
+        currentProvider="codex"
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    mockButtonRect(button, { top: 90 });
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('74px');
+    });
+  });
+
+  /**
+   * 验证按钮顶部空间充足时，dropdown 仍会继续受 420px 默认上限约束。
+   * 该断言用于防止修复边界分支时误删掉原有的“最高不超过 420px”保护。
+   */
+  it('顶部空间足够大时应继续受 420px 上限约束', async () => {
+    const model: ModelInfo = {
+      id: 'gpt-5.4',
+      label: 'gpt-5.4',
+      description: 'Strong model for everyday coding.',
+    };
+
+    render(
+      <ModelSelect
+        value={model.id}
+        onChange={vi.fn()}
+        models={[model]}
+        currentProvider="codex"
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    mockButtonRect(button, { top: 620 });
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('420px');
+    });
+  });
+
+  /**
+   * 验证窗口尺寸变化后，dropdown 会重新读取最新的布局测量结果并更新最大高度。
+   * 这样可以直接覆盖 `window.resize -> refreshDropdownLayout` 这条刷新链路，
+   * 避免只靠滚动测试间接推断高度重算仍然有效。
+   */
+  it('window.resize 后应重新计算 dropdown 最大高度', async () => {
+    const model: ModelInfo = {
+      id: 'gpt-5.4',
+      label: 'gpt-5.4',
+      description: 'Strong model for everyday coding.',
+    };
+
+    render(
+      <ModelSelect
+        value={model.id}
+        onChange={vi.fn()}
+        models={[model]}
+        currentProvider="codex"
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    const buttonRectState = { top: 320 };
+    mockButtonRect(button, buttonRectState);
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('304px');
+    });
+
+    buttonRectState.top = 210;
+    mockButtonRect(button, buttonRectState);
+    fireEvent(window, new Event('resize'));
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('194px');
+    });
+  });
+
+  /**
+   * 验证内容尺寸变化触发 `ResizeObserver` 后，dropdown 会重新同步滚动态和高度约束。
+   * 该用例直接覆盖 observer 回调链路，避免后续重构时 observer 失效但测试仍然全部通过。
+   */
+  it('ResizeObserver 回调后应同步刷新滚动态与 dropdown 最大高度', async () => {
+    const models: ModelInfo[] = Array.from({ length: 18 }, (_, index) => ({
+      id: `observer-model-${index}`,
+      label: `Observer Model ${index}`,
+      description: `Observer Description ${index}`,
+    }));
+
+    render(
+      <ModelSelect
+        value={models[0].id}
+        onChange={vi.fn()}
+        models={models}
+        currentProvider="codex"
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    const buttonRectState = { top: 340 };
+    mockButtonRect(button, buttonRectState);
+
+    fireEvent.click(button);
+
+    const scrollBody = await screen.findByTestId('model-select-scroll-body');
+    mockScrollMetrics(scrollBody, {
+      clientHeight: 220,
+      scrollHeight: 220,
+      scrollTop: 0,
+    });
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('324px');
+    });
+    expect(scrollBody.classList.contains('selector-dropdown-body--scrollable')).toBe(false);
+
+    buttonRectState.top = 180;
+    mockButtonRect(button, buttonRectState);
+    mockScrollMetrics(scrollBody, {
+      clientHeight: 180,
+      scrollHeight: 540,
+      scrollTop: 0,
+    });
+    triggerResizeObservers();
+
+    await waitFor(() => {
+      expect(getModelDropdown().style.maxHeight).toBe('164px');
+      expect(scrollBody.classList.contains('selector-dropdown-body--scrollable')).toBe(true);
+    });
+  });
+
+  /**
+   * 验证 warning banner、可滚动长列表和 footer 同时存在时仍能稳定共存。
+   * 该用例直接覆盖整改清单里的组合场景，确保新增的高度约束不会把 banner 或 footer 挤出可见区，
+   * 也不会让 Codex 的“添加模型”入口在滚动态下失效。
+   */
+  it('warning banner 与 footer 在长列表滚动态下应继续可见且可触发 Codex 管理动作', async () => {
+    const onAddModel = vi.fn();
+    const models: ModelInfo[] = Array.from({ length: 20 }, (_, index) => ({
+      id: `codex-warning-model-${index}`,
+      label: `Codex Warning Model ${index}`,
+      description: `Codex Warning Description ${index}`,
+    }));
+
+    render(
+      <ModelSelect
+        value={models[0].id}
+        onChange={vi.fn()}
+        models={models}
+        currentProvider="codex"
+        onAddModel={onAddModel}
+        codexBaseUrl="https://gateway.example.com"
+        codexUsesCustomBaseUrl
+      />,
+    );
+
+    const button = screen.getByRole('button');
+    mockButtonRect(button, { top: 260 });
+    fireEvent.click(button);
+
+    const dropdown = getModelDropdown();
+    const scrollBody = await screen.findByTestId('model-select-scroll-body');
+    mockScrollMetrics(scrollBody, {
+      clientHeight: 160,
+      scrollHeight: 560,
+      scrollTop: 0,
+    });
+    fireEvent.scroll(scrollBody);
+
+    await waitFor(() => {
+      expect(dropdown.style.maxHeight).toBe('244px');
+      expect(scrollBody.classList.contains('selector-dropdown-body--scrollable')).toBe(true);
+    });
+
+    expect(screen.getByText('Custom OpenAI base URL')).toBeTruthy();
+    expect(screen.getByText('models.addModel')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('models.addModel'));
+
+    expect(screen.getByText('chat.addCodexProviderAction')).toBeTruthy();
+    expect(screen.getByText('chat.manageCurrentCodexProviderModelsAction')).toBeTruthy();
+    expect(screen.getByText('chat.addCodexModelAliasAction')).toBeTruthy();
+    expect(onAddModel).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 验证模型列表过长时，会进入“独立滚动主体”模式，
+   * 该用例覆盖本次改造的核心回归点：
+   * 1. 模型下拉不再单纯无限增高；
+   * 2. 列表主体会成为独立滚动容器；
+   * 3. 当前实现只保留原生滚动条，不再额外渲染自定义蓝色进度条。
+   */
+  it('超长模型列表应启用独立滚动主体且不再渲染自定义进度条', async () => {
+    const models: ModelInfo[] = Array.from({ length: 30 }, (_, index) => ({
+      id: `gpt-custom-${index}`,
+      label: `Custom Model ${index}`,
+      description: `Description ${index}`,
+    }));
+
+    render(
+      <ModelSelect
+        value={models[0].id}
+        onChange={vi.fn()}
+        models={models}
+        currentProvider="codex"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    const scrollBody = await screen.findByTestId('model-select-scroll-body');
+    mockScrollMetrics(scrollBody, {
+      clientHeight: 180,
+      scrollHeight: 720,
+      scrollTop: 0,
+    });
+    fireEvent.scroll(scrollBody);
+
+    expect(scrollBody).toBeTruthy();
+    expect(scrollBody.classList.contains('selector-dropdown-body--scrollable')).toBe(true);
+    expect(screen.queryByTestId('model-select-progress')).toBeNull();
+    expect(screen.queryByTestId('model-select-progress-thumb')).toBeNull();
+  });
+
+  /**
+   * 验证滚动主体的可滚动态仍会随最新尺寸刷新。
+   * 删除自定义进度条后，组件仍需保留滚动能力判定，
+   * 否则后续若要根据滚动态补充样式或可访问性信息，将失去可靠状态来源。
+   */
+  it('滚动主体在尺寸变化后应继续同步更新可滚动态且不渲染自定义进度条', async () => {
+    const models: ModelInfo[] = Array.from({ length: 24 }, (_, index) => ({
+      id: `scroll-model-${index}`,
+      label: `Scroll Model ${index}`,
+      description: `Scroll Description ${index}`,
+    }));
+
+    render(
+      <ModelSelect
+        value={models[0].id}
+        onChange={vi.fn()}
+        models={models}
+        currentProvider="codex"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    const scrollBody = await screen.findByTestId('model-select-scroll-body');
+    mockScrollMetrics(scrollBody, {
+      clientHeight: 200,
+      scrollHeight: 800,
+      scrollTop: 0,
+    });
+    fireEvent.scroll(scrollBody);
+
+    expect(scrollBody.classList.contains('selector-dropdown-body--scrollable')).toBe(true);
+    expect(screen.queryByTestId('model-select-progress')).toBeNull();
+
+    mockScrollMetrics(scrollBody, {
+      clientHeight: 200,
+      scrollHeight: 200,
+      scrollTop: 0,
+    });
+    fireEvent.scroll(scrollBody);
+
+    expect(scrollBody.classList.contains('selector-dropdown-body--scrollable')).toBe(false);
+    expect(screen.queryByTestId('model-select-progress-thumb')).toBeNull();
   });
 });

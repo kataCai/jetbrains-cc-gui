@@ -9,11 +9,13 @@ import {
 import type { ModelInfo } from '../types';
 import { parseCodexModelCatalogKey } from '../../../types/provider';
 import { readClaudeModelMapping } from '../../../utils/claudeModelMapping';
+import { getAppViewport } from '../../../utils/viewport';
 import { ProviderModelIcon } from '../../shared/ProviderModelIcon';
 import Switch from 'antd/es/switch';
 
 const RELATIVE_INLINE_BLOCK_STYLE: React.CSSProperties = { position: 'relative', display: 'inline-block' };
 const CHEVRON_ICON_STYLE: React.CSSProperties = { fontSize: '10px', marginLeft: '2px' };
+const FOOTER_DIVIDER_STYLE: React.CSSProperties = { margin: 0 };
 const DROPDOWN_STYLE: React.CSSProperties = {
   position: 'absolute',
   bottom: '100%',
@@ -33,6 +35,9 @@ const EMPTY_MODEL_FALLBACK: ModelInfo = {
   id: '__empty_model__',
   label: 'No model configured',
 };
+const MODEL_SELECTOR_MAX_HEIGHT_PX = 420;
+const MODEL_SELECTOR_MIN_HEIGHT_PX = 120;
+const MODEL_SELECTOR_VIEWPORT_MARGIN_PX = 16;
 
 interface SelectorModelInfo extends ModelInfo {
   providerId?: string;
@@ -192,8 +197,12 @@ export const ModelSelect = ({
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [showCodexManagementActions, setShowCodexManagementActions] = useState(false);
+  const [dropdownMaxHeight, setDropdownMaxHeight] = useState(MODEL_SELECTOR_MAX_HEIGHT_PX);
+  const [isScrollable, setIsScrollable] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const scrollBodyRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
 
   const effectiveCodexSelectionValue = currentProvider === 'codex'
     ? selectedCodexSelectionKey.trim() || value
@@ -321,6 +330,91 @@ export const ModelSelect = ({
     return descriptionKey ? t(descriptionKey) : model.description;
   };
 
+  /**
+   * 计算模型下拉在当前 viewport 内允许占用的最大高度。
+   * 这里显式基于 app viewport 和按钮位置计算，避免 JCEF/zoom 场景下直接依赖 100vh 导致的高度误差。
+   *
+   * @return 当前下拉允许的最大高度，单位像素
+   */
+  const computeDropdownMaxHeight = useCallback((): number => {
+    const buttonEl = buttonRef.current;
+    if (!buttonEl) {
+      return MODEL_SELECTOR_MAX_HEIGHT_PX;
+    }
+
+    const buttonRect = buttonEl.getBoundingClientRect();
+    // 中文注释：仅把“布局测量根本不可用”的情况视为测量失败。
+    // 如果按钮本身仍在窗口可见区域内，只是 #app 的 top 偏移让 app 内坐标变成负值，
+    // 这里不能直接退回 420px，否则会把最需要限高的边界场景重新放大。
+    const hasInvalidMeasurement = buttonRect.top <= 0 && buttonRect.width <= 0 && buttonRect.height <= 0;
+    if (hasInvalidMeasurement) {
+      return MODEL_SELECTOR_MAX_HEIGHT_PX;
+    }
+
+    const viewport = getAppViewport();
+    const appRelativeAvailableHeight = buttonRect.top - viewport.top - MODEL_SELECTOR_VIEWPORT_MARGIN_PX;
+    const windowVisibleAvailableHeight = buttonRect.top - MODEL_SELECTOR_VIEWPORT_MARGIN_PX;
+
+    // 中文注释：正常情况下优先沿用 #app 坐标系；
+    // 但当 #app 顶部偏移导致 app 内可用高度为负，而按钮在窗口里仍可见时，
+    // 退回到窗口可见高度，避免错误回退到默认 420px。
+    const availableHeight = appRelativeAvailableHeight > 0
+      ? appRelativeAvailableHeight
+      : windowVisibleAvailableHeight;
+
+    if (availableHeight <= 0) {
+      // 中文注释：当前实现仍保持“只向上展开”，因此极端情况下至少保留按钮上方实际可见的像素高度，
+      // 避免把完全不足的可用空间重新扩成默认高度。
+      return Math.max(Math.round(buttonRect.top), 0);
+    }
+    if (availableHeight <= MODEL_SELECTOR_MIN_HEIGHT_PX) {
+      return Math.round(availableHeight);
+    }
+    return Math.round(Math.min(availableHeight, MODEL_SELECTOR_MAX_HEIGHT_PX));
+  }, []);
+
+  /**
+   * 根据滚动容器当前尺寸刷新“是否需要进入滚动态”。
+   * 这里不再维护自定义蓝色进度条，而是只保留一个可靠的滚动态判定，
+   * 供样式和测试确认当前列表是否已经进入原生滚动条模式。
+   *
+   * @return void
+   */
+  const updateScrollMetrics = useCallback((): void => {
+    const scrollBody = scrollBodyRef.current;
+    if (!scrollBody) {
+      setIsScrollable(false);
+      return;
+    }
+
+    const { clientHeight, scrollHeight } = scrollBody;
+    const scrollableRange = Math.max(scrollHeight - clientHeight, 0);
+    const nextScrollable = clientHeight > 0 && scrollableRange > 1;
+    setIsScrollable(nextScrollable);
+  }, []);
+
+  /**
+   * 统一刷新当前弹框的高度约束和滚动态。
+   * 打开弹框、窗口尺寸变化、列表内容变化时都应复用这一入口。
+   *
+   * @return void
+   */
+  const refreshDropdownLayout = useCallback((): void => {
+    setDropdownMaxHeight(computeDropdownMaxHeight());
+    updateScrollMetrics();
+  }, [computeDropdownMaxHeight, updateScrollMetrics]);
+
+  /**
+   * 响应滚动主体的滚动事件，并同步刷新滚动态。
+   * 删除自定义进度条后，滚动事件仍需要驱动一次最新尺寸判定，
+   * 以便在测试和后续样式上准确反映当前是否处于原生滚动模式。
+   *
+   * @return void
+   */
+  const handleBodyScroll = useCallback(() => {
+    updateScrollMetrics();
+  }, [updateScrollMetrics]);
+
   const handleToggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(!isOpen);
@@ -334,6 +428,12 @@ export const ModelSelect = ({
     setIsOpen(false);
     setShowCodexManagementActions(false);
   }, [onChange]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsScrollable(false);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -362,6 +462,52 @@ export const ModelSelect = ({
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleWindowResize = () => {
+      refreshDropdownLayout();
+    };
+
+    const rafId = window.requestAnimationFrame(() => {
+      refreshDropdownLayout();
+    });
+
+    window.addEventListener('resize', handleWindowResize);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        refreshDropdownLayout();
+      });
+      if (scrollContentRef.current) {
+        resizeObserver.observe(scrollContentRef.current);
+      }
+      if (dropdownRef.current) {
+        resizeObserver.observe(dropdownRef.current);
+      }
+    }
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', handleWindowResize);
+      resizeObserver?.disconnect();
+    };
+  }, [
+    currentProvider,
+    isOpen,
+    longContextEnabled,
+    models,
+    onAddModel,
+    onLongContextChange,
+    refreshDropdownLayout,
+    shouldShowCodexBaseUrlWarning,
+    showCodexManagementActions,
+    value,
+  ]);
+
   /**
    * Codex 的“添加模型”入口需要先显式区分动作语义。
    * 这里不再直接触发旧的别名弹窗，而是先展示 provider 创建/管理/别名三个独立动作。
@@ -380,6 +526,8 @@ export const ModelSelect = ({
     setShowCodexManagementActions(false);
     setIsOpen(false);
   }, []);
+
+  const shouldRenderFooter = !!onAddModel || (currentProvider === 'claude' && !!onLongContextChange);
 
   return (
     <div style={RELATIVE_INLINE_BLOCK_STYLE}>
@@ -428,8 +576,11 @@ export const ModelSelect = ({
       {isOpen && (
         <div
           ref={dropdownRef}
-          className="selector-dropdown"
-          style={DROPDOWN_STYLE}
+          className="selector-dropdown selector-dropdown--model"
+          style={{
+            ...DROPDOWN_STYLE,
+            maxHeight: `${dropdownMaxHeight}px`,
+          }}
         >
           {shouldShowCodexBaseUrlWarning && (
             <div
@@ -457,105 +608,118 @@ export const ModelSelect = ({
               </div>
             </div>
           )}
-          {!showCodexManagementActions && models.map((model) => (
-            <div
-              key={model.id}
-              className={`selector-option ${isSelectedModel(model.id) ? 'selected' : ''}`}
-              onClick={() => {
-                if (!isRunnableModel(model)) {
-                  return;
-                }
-                handleSelect(model.id);
-              }}
-              aria-disabled={!isRunnableModel(model)}
-              style={!isRunnableModel(model) ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
-            >
-              <ProviderModelIcon
-                providerId={currentProvider}
-                modelId={resolveModelIdForIcon(getRawModelId(model), modelMapping, MODEL_ID_TO_MAPPING_KEY)}
-                size={16}
-                colored
-              />
-              <div style={MODEL_OPTION_INFO_STYLE}>
-                <span>
-                  {getModelLabel(model, false)}
-                  {currentProvider === 'codex' && model.providerLabel && (
-                    <span style={PROVIDER_TAG_STYLE}>{model.providerLabel}</span>
+          <div
+            ref={scrollBodyRef}
+            className={`selector-dropdown-body${isScrollable ? ' selector-dropdown-body--scrollable' : ''}`}
+            data-testid="model-select-scroll-body"
+            onScroll={handleBodyScroll}
+          >
+            <div ref={scrollContentRef} className="selector-dropdown-body-content">
+              {!showCodexManagementActions && models.map((model) => (
+                <div
+                  key={model.id}
+                  className={`selector-option ${isSelectedModel(model.id) ? 'selected' : ''}`}
+                  onClick={() => {
+                    if (!isRunnableModel(model)) {
+                      return;
+                    }
+                    handleSelect(model.id);
+                  }}
+                  aria-disabled={!isRunnableModel(model)}
+                  style={!isRunnableModel(model) ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+                >
+                  <ProviderModelIcon
+                    providerId={currentProvider}
+                    modelId={resolveModelIdForIcon(getRawModelId(model), modelMapping, MODEL_ID_TO_MAPPING_KEY)}
+                    size={16}
+                    colored
+                  />
+                  <div style={MODEL_OPTION_INFO_STYLE}>
+                    <span>
+                      {getModelLabel(model, false)}
+                      {currentProvider === 'codex' && model.providerLabel && (
+                        <span style={PROVIDER_TAG_STYLE}>{model.providerLabel}</span>
+                      )}
+                    </span>
+                    {getModelDescription(model) && (
+                      <span className="model-description">{getModelDescription(model)}</span>
+                    )}
+                    {currentProvider === 'codex' && !isRunnableModel(model) && (
+                      <span className="model-description">
+                        {t('chat.codexModelUnavailable', { defaultValue: 'Unavailable until provider authorization is complete.' })}
+                      </span>
+                    )}
+                    {shouldShowCodexDefaultHint && getRawModelId(model) === normalizedDefaultCodexModel && (
+                      <span className="model-description">
+                        {t('chat.codexCliDefaultModelOption', {
+                          defaultValue: 'CLI default model',
+                        })}
+                      </span>
+                    )}
+                  </div>
+                  {isSelectedModel(model.id) && (
+                    <span className="codicon codicon-check check-mark" />
                   )}
-                </span>
-                {getModelDescription(model) && (
-                  <span className="model-description">{getModelDescription(model)}</span>
-                )}
-                {currentProvider === 'codex' && !isRunnableModel(model) && (
-                  <span className="model-description">
-                    {t('chat.codexModelUnavailable', { defaultValue: 'Unavailable until provider authorization is complete.' })}
-                  </span>
-                )}
-                {shouldShowCodexDefaultHint && getRawModelId(model) === normalizedDefaultCodexModel && (
-                  <span className="model-description">
-                    {t('chat.codexCliDefaultModelOption', {
-                      defaultValue: 'CLI default model',
-                    })}
-                  </span>
-                )}
-              </div>
-              {isSelectedModel(model.id) && (
-                <span className="codicon codicon-check check-mark" />
+                </div>
+              ))}
+              {showCodexManagementActions && currentProvider === 'codex' && (
+                <>
+                  <div
+                    className="selector-option selector-option-add"
+                    onClick={() => runCodexManagementAction(onOpenCodexProviderSettings)}
+                  >
+                    <span className="codicon codicon-cloud-upload selector-add-icon" />
+                    <span>{t('chat.addCodexProviderAction')}</span>
+                  </div>
+                  <div
+                    className="selector-option selector-option-add"
+                    onClick={() => runCodexManagementAction(onOpenCodexProviderModelManagement)}
+                  >
+                    <span className="codicon codicon-settings-gear selector-add-icon" />
+                    <span>{t('chat.manageCurrentCodexProviderModelsAction')}</span>
+                  </div>
+                  <div
+                    className="selector-option selector-option-add"
+                    onClick={() => runCodexManagementAction(onOpenCodexModelAliasSettings)}
+                  >
+                    <span className="codicon codicon-symbol-misc selector-add-icon" />
+                    <span>{t('chat.addCodexModelAliasAction')}</span>
+                  </div>
+                </>
               )}
             </div>
-          ))}
-          {showCodexManagementActions && currentProvider === 'codex' && (
+          </div>
+          {shouldRenderFooter && (
             <>
-              <div
-                className="selector-option selector-option-add"
-                onClick={() => runCodexManagementAction(onOpenCodexProviderSettings)}
-              >
-                <span className="codicon codicon-cloud-upload selector-add-icon" />
-                <span>{t('chat.addCodexProviderAction')}</span>
-              </div>
-              <div
-                className="selector-option selector-option-add"
-                onClick={() => runCodexManagementAction(onOpenCodexProviderModelManagement)}
-              >
-                <span className="codicon codicon-settings-gear selector-add-icon" />
-                <span>{t('chat.manageCurrentCodexProviderModelsAction')}</span>
-              </div>
-              <div
-                className="selector-option selector-option-add"
-                onClick={() => runCodexManagementAction(onOpenCodexModelAliasSettings)}
-              >
-                <span className="codicon codicon-symbol-misc selector-add-icon" />
-                <span>{t('chat.addCodexModelAliasAction')}</span>
-              </div>
-            </>
-          )}
-          {currentProvider === 'claude' && onLongContextChange && (
-            <>
-              <div className="selector-divider" />
-              <div
-                className="selector-option"
-                style={LONG_CONTEXT_OPTION_STYLE}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <span style={LONG_CONTEXT_LABEL_STYLE}>{t('models.longContext.shortLabel')}</span>
-                <Switch
-                  size="small"
-                  checked={modelSupports1MContext(value) ? longContextEnabled : false}
-                  disabled={!modelSupports1MContext(value)}
-                  onChange={onLongContextChange}
-                />
-              </div>
-            </>
-          )}
-          {onAddModel && (
-            <>
-              <div className="selector-divider" />
-              <div
-                className="selector-option selector-option-add"
-                onClick={handleOpenAddModelActions}
-              >
-                <span className="codicon codicon-add selector-add-icon" />
-                <span>{t('models.addModel')}</span>
+              <div className="selector-divider" style={FOOTER_DIVIDER_STYLE} />
+              <div className="selector-dropdown-footer">
+                {currentProvider === 'claude' && onLongContextChange && (
+                  <div
+                    className="selector-option"
+                    style={LONG_CONTEXT_OPTION_STYLE}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span style={LONG_CONTEXT_LABEL_STYLE}>{t('models.longContext.shortLabel')}</span>
+                    <Switch
+                      size="small"
+                      checked={modelSupports1MContext(value) ? longContextEnabled : false}
+                      disabled={!modelSupports1MContext(value)}
+                      onChange={onLongContextChange}
+                    />
+                  </div>
+                )}
+                {currentProvider === 'claude' && onLongContextChange && onAddModel && (
+                  <div className="selector-divider" style={FOOTER_DIVIDER_STYLE} />
+                )}
+                {onAddModel && (
+                  <div
+                    className="selector-option selector-option-add"
+                    onClick={handleOpenAddModelActions}
+                  >
+                    <span className="codicon codicon-add selector-add-icon" />
+                    <span>{t('models.addModel')}</span>
+                  </div>
+                )}
               </div>
             </>
           )}
