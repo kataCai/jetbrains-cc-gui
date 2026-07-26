@@ -420,7 +420,7 @@ public class SessionLifecycleManager {
     /**
      * 执行发送时静默 runtime 切段。
      * 该链路只在真正发送前触发：先基于当前活动分段构建最小 continued 元数据，再把新 session 直接返回给发送链路复用，
-     * 整个过程中不进入前端显式 pending/clearMessages 过渡态。
+     * 整个过程不进入前端显式 toast/clearMessages 空白态，但会静默建立 continued 过渡缓存，确保后续 setSessionId 命中 continued 分支。
      *
      * @param oldSession 当前活动会话
      * @param runtimeIntent 本条消息声明的目标 runtime
@@ -428,6 +428,60 @@ public class SessionLifecycleManager {
      * @param sourceSessionId 续接链路应绑定的稳定 source sessionId
      * @return 已准备好的新会话；失败时以异常结束并回滚到旧会话
      */
+
+    /**
+     * 向前端发送 send-time silent switch 的静默 continued 过渡预热信号。
+     * 该信号只负责让前端缓存旧历史前缀、写入 pending source/logicalConversationId，
+     * 以及把 continuationPending 置为 true，从而让后续 setSessionId 命中 continued 分支。
+     * 它不弹 toast，不清空可见消息列表，也不把 currentSessionId 置空，避免重新暴露显式切段空白态。
+     *
+     * @param sourceSessionId 续接链路绑定的稳定 source sessionId
+     * @param logicalConversationId 所属逻辑会话 id；可为空，前端会按现有逻辑回退
+     * @param switchReason 触发 silent switch 的原因标签，例如 send_time_model
+     */
+    private void primeFrontendSilentContinuedTransition(
+            String sourceSessionId,
+            String logicalConversationId,
+            String switchReason
+    ) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("sourceSessionId", firstNonBlank(sourceSessionId));
+        payload.addProperty("logicalConversationId", firstNonBlank(logicalConversationId));
+        payload.addProperty("switchReason", firstNonBlank(switchReason));
+        host.callJavaScript(
+                "window.beginContinuedSegmentTransition",
+                JsUtils.escapeJs(payload.toString())
+        );
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " primeFrontendSilentContinuedTransition"
+                + ", sourceSessionId=" + firstNonBlank(sourceSessionId)
+                + ", logicalConversationId=" + firstNonBlank(logicalConversationId)
+                + ", switchReason=" + firstNonBlank(switchReason));
+    }
+
+    /**
+     * 在 send-time silent switch 预热后准备失败时，静默通知前端清理 continued transition cache。
+     * 这里只恢复旧 session 锚点并 abort transition，不弹 toast，也不走显式 ready/historyLoadComplete，
+     * 以保持“发送前静默切模型”的无感语义。
+     *
+     * @param previousSession 切段前的旧会话；用于恢复 source anchor
+     */
+    private void abortFrontendSilentContinuedTransition(ClaudeSession previousSession) {
+        String restoredSessionId = previousSession != null
+                ? firstNonBlank(
+                        previousSession.getState() != null
+                                ? previousSession.getState().getActiveSegmentSessionId()
+                                : null,
+                        previousSession.getSessionId()
+                )
+                : "";
+        host.callJavaScript(
+                "window.abortContinuedSegmentTransition",
+                JsUtils.escapeJs(restoredSessionId)
+        );
+        LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " abortFrontendSilentContinuedTransition"
+                + ", restoredSessionId=" + firstNonBlank(restoredSessionId));
+    }
+
     private CompletableFuture<ClaudeSession> createSilentContinuedSessionForSend(
             ClaudeSession oldSession,
             SendRuntimeIntent runtimeIntent,
@@ -448,6 +502,18 @@ public class SessionLifecycleManager {
             streamCoalescer.resetStreamState();
         }
         host.invalidateSessionCallbacks();
+        // 中文注释：send-time silent switch 必须在真正拿到新 sessionId 之前先建立前端 continued 过渡态。
+        // 这里只做静默预热（prefix cache / pending 元数据），不弹 toast，也不清空可见历史。
+        primeFrontendSilentContinuedTransition(
+                sourceSessionId,
+                firstNonBlank(
+                        oldSession != null && oldSession.getState() != null
+                                ? oldSession.getState().getLogicalConversationId()
+                                : null,
+                        request.logicalConversationId
+                ),
+                request.switchReason
+        );
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " sendTimeRuntimeSwitchBegin"
                 + ", switchReason=" + switchReason
                 + ", sourceSessionId=" + sourceSessionId
@@ -600,8 +666,9 @@ public class SessionLifecycleManager {
 
     /**
      * 在 send-time silent switch 失败时回滚到旧会话。
-     * 与显式 continued 失败不同，这里不能向前端发送 abort/historyLoadComplete 等旧过渡回调，
-     * 否则会把本应“用户无感知”的发送前准备暴露成显式切段失败提示。
+     * 与显式 continued 失败不同，这里不能发送 historyLoadComplete/toast 等显式失败提示；
+     * 但若已向前端发出静默预热信号，必须同步 abort 清理 continued transition cache，
+     * 否则下一次发送可能继续命中陈旧 pending/prefix 状态。
      *
      * @param previousSession 切段前的旧会话
      * @param failedSession 已挂到 host 上、但后续准备失败的新会话
@@ -625,6 +692,9 @@ public class SessionLifecycleManager {
             syncHandlerRuntimeState(previousSession);
             host.setupSessionCallbacks();
         }
+        // 中文注释：若前端已收到静默预热信号，这里必须同步 abort 清理 transition cache，
+        // 否则下一次发送可能继续命中陈旧的 pending/source/prefix 状态。
+        abortFrontendSilentContinuedTransition(previousSession);
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " rollbackFailedPreparedSessionForSend"
                 + ", restoredPreviousSession=" + shouldRestorePreviousSession
                 + ", previousSessionId=" + firstNonBlank(previousSession != null ? previousSession.getSessionId() : null)
@@ -1496,12 +1566,23 @@ public class SessionLifecycleManager {
             session.getState().setCodexSessionBinding(buildCodexBindingFromProvider(targetCodexProviderId, targetModel));
         }
         logActiveRuntimeMutated(session, "completeContinuedSegment.applyResolvedRuntime");
-        refreshContinuedLogicalConversationMessages(
-                newSessionId,
-                logicalConversationId,
-                newSessionId,
-                session
-        );
+        // 中文注释：send-time silent switch 在生成中途不应推 destructive authoritative snapshot，
+        // 否则前端会在一轮发送中经历多次 clear/replace。最终稳定快照改由 stream_end/send_complete
+        // 收口后的 refreshActiveContinuedLogicalConversationMessagesIfNeeded 补推。
+        if (!state.isSendTimeRuntimeSwitchPending()) {
+            refreshContinuedLogicalConversationMessages(
+                    newSessionId,
+                    logicalConversationId,
+                    newSessionId,
+                    session
+            );
+        } else {
+            LOG.info(CODEX_RUNTIME_TRACE_PREFIX
+                    + " completeContinuedSegment skip mid-generation authoritative refresh for silent switch"
+                    + ", newSessionId=" + firstNonBlank(newSessionId)
+                    + ", logicalConversationId=" + firstNonBlank(logicalConversationId)
+                    + ", snapshotStage=" + CONTINUED_SNAPSHOT_STAGE_TRANSITIONAL);
+        }
         LOG.info(CODEX_RUNTIME_TRACE_PREFIX + " completeContinuedSegment applied logicalConversationId="
                 + firstNonBlank(state.getLogicalConversationId())
                 + ", activeSegmentSessionId=" + firstNonBlank(state.getActiveSegmentSessionId())

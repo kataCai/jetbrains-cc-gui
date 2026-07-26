@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -191,6 +192,13 @@ public class SessionLifecycleManagerSendTimeRuntimeSwitchTest {
             manager.onSessionIdAssigned("session-new");
 
             assertTrue("静默切段成功后仍应同步 continued 完成元数据给前端", host.hasJavaScriptCall("window.completeContinuedSegmentTransition"));
+            String completionPayload = host.findFirstJavaScriptArgument("window.completeContinuedSegmentTransition");
+            assertTrue("completion payload 必须包含 logicalConversationId，避免前端逻辑会话锚点丢失",
+                    completionPayload != null && completionPayload.contains("logical-001"));
+            assertTrue("completion payload 必须包含 sourceSessionId，避免 source anchor 丢失",
+                    completionPayload != null && completionPayload.contains("session-source"));
+            assertTrue("completion payload 必须包含新 sessionId",
+                    completionPayload != null && completionPayload.contains("session-new"));
             assertFalse("静默切段不应再走旧的 historyLoadComplete ready guard 释放链路", host.hasJavaScriptCall("historyLoadComplete"));
             assertFalse("静默切段不应再触发旧的 continued ready toast", host.hasJavaScriptCall("updateStatus"));
             assertFalse("sessionId 收口完成后必须清空 continuationPending", preparedSession.getState().isContinuationPending());
@@ -205,11 +213,127 @@ public class SessionLifecycleManagerSendTimeRuntimeSwitchTest {
     }
 
     /**
+     * 验证 send-time silent switch 在挂载新 prepared session 后，会先向前端发送静默 continued 预热信号。
+     * 该信号必须早于真实 sessionId 收口到达，用来让前端建立 prefix cache / pending source / logicalConversationId，
+     * 否则 `setSessionId` 仍会走 ordinary session branch。
+     *
+     * @throws Exception 当临时目录或上下文初始化失败时抛出
+     */
+    @Test
+    public void shouldPrimeFrontendContinuedTransitionWhenSendTimeRuntimeSwitchPrepared() throws Exception {
+        Path projectDir = Files.createTempDirectory("session-lifecycle-send-time-prime-test");
+        RecordingHost host = new RecordingHost(createProject(projectDir), projectDir);
+        ClaudeSession currentSession = host.getSession();
+        currentSession.setSessionInfo("session-source", projectDir.toString());
+        currentSession.setProvider("codex");
+        currentSession.setModel("gpt-5.4-mini");
+        currentSession.setReasoningEffort("medium");
+        currentSession.getState().setLogicalConversationId("logical-001");
+        currentSession.getState().setActiveSegmentSessionId("session-source");
+        currentSession.getState().setCodexSessionBinding(new CodexSessionBinding(
+                "BuyCode-Plus",
+                "gpt-5.4-mini",
+                "codex_sdk",
+                "provider",
+                "managed_provider"
+        ));
+
+        TestableSessionLifecycleManager manager = new TestableSessionLifecycleManager(host);
+        SendRuntimeIntent runtimeIntent = new SendRuntimeIntent(
+                "chat",
+                "dynamic_at_execution",
+                "codex",
+                "codex",
+                "gpt-5.4",
+                "high",
+                "BuyCode-Pro",
+                ""
+        );
+
+        ClaudeSession preparedSession = manager.prepareSessionForSend(runtimeIntent).get();
+
+        assertTrue("静默切段成功后应返回新的 prepared session", preparedSession != currentSession);
+        assertTrue("静默切段成功后必须先向前端发送 continued 预热信号",
+                host.hasJavaScriptCall("window.beginContinuedSegmentTransition"));
+        String beginPayload = host.findFirstJavaScriptArgument("window.beginContinuedSegmentTransition");
+        assertTrue("continued 预热信号必须携带 sourceSessionId，供前端绑定稳定 source anchor",
+                beginPayload != null && beginPayload.contains("session-source"));
+        assertTrue("continued 预热信号必须携带 logicalConversationId，供前端回填 continued 逻辑会话锚点",
+                beginPayload != null && beginPayload.contains("logical-001"));
+        assertTrue("continued 预热信号必须携带 send-time switchReason，便于前后端收窄特殊语义",
+                beginPayload != null && beginPayload.contains("send_time_model"));
+    }
+
+    /**
+     * 验证 send-time silent switch 若在前端预热后准备失败，会静默通知前端 abort 并清理 transition cache。
+     * 该回滚必须保持 silent switch 的无感语义：不发 complete，不走显式 ready/toast，但要恢复旧 session 锚点。
+     *
+     * @throws Exception 当临时目录或上下文初始化失败时抛出
+     */
+    @Test
+    public void shouldAbortPrimedFrontendTransitionWhenSendTimeRuntimeSwitchPreparationFails() throws Exception {
+        Path projectDir = Files.createTempDirectory("session-lifecycle-send-time-abort-test");
+        RecordingHost host = new RecordingHost(createProject(projectDir), projectDir);
+        ClaudeSession currentSession = host.getSession();
+        currentSession.setSessionInfo("session-source", projectDir.toString());
+        currentSession.setProvider("codex");
+        currentSession.setModel("gpt-5.4-mini");
+        currentSession.setReasoningEffort("medium");
+        currentSession.getState().setLogicalConversationId("logical-001");
+        currentSession.getState().setActiveSegmentSessionId("session-source");
+        currentSession.getState().setCodexSessionBinding(new CodexSessionBinding(
+                "BuyCode-Plus",
+                "gpt-5.4-mini",
+                "codex_sdk",
+                "provider",
+                "managed_provider"
+        ));
+
+        TestableSessionLifecycleManager manager = new TestableSessionLifecycleManager(host) {
+            /**
+             * 在前端预热信号已经发出后制造失败，约束静默回滚的前后端收口顺序。
+             */
+            @Override
+            public void fetchSlashCommandsOnStartup() {
+                throw new IllegalStateException("boom after frontend prime");
+            }
+        };
+        SendRuntimeIntent runtimeIntent = new SendRuntimeIntent(
+                "chat",
+                "dynamic_at_execution",
+                "codex",
+                "codex",
+                "gpt-5.4",
+                "high",
+                "BuyCode-Pro",
+                ""
+        );
+
+        ExecutionException error = assertThrows(
+                "准备阶段后续失败时应把异常继续抛给发送链路，而不是吞掉错误",
+                ExecutionException.class,
+                () -> manager.prepareSessionForSend(runtimeIntent).get()
+        );
+
+        assertTrue("异常根因必须保留准备阶段的真实失败原因，便于排查 silent switch 回滚链路",
+                error.getCause() instanceof IllegalStateException);
+        assertTrue("前端预热已发生时必须记录 begin 信号",
+                host.hasJavaScriptCall("window.beginContinuedSegmentTransition"));
+        assertTrue("准备失败后必须静默发送 abort 清理 continued transition cache",
+                host.hasJavaScriptCall("window.abortContinuedSegmentTransition"));
+        assertFalse("静默回滚不应误发 continued 完成信号",
+                host.hasJavaScriptCall("window.completeContinuedSegmentTransition"));
+        assertSame("失败回滚后必须恢复旧会话，不能继续挂着失败的新 prepared session", currentSession, host.getSession());
+        assertEquals("静默 abort 应恢复到旧活动分段锚点", "session-source",
+                host.findFirstJavaScriptArgument("window.abortContinuedSegmentTransition"));
+    }
+
+    /**
      * 针对 SessionLifecycleManager 的可控测试子类。
      * 通过覆盖历史读取、Slash Commands 和设置服务入口，隔离真实文件系统和 UI 副作用，
      * 让测试只关注 send-time runtime switch 的会话/回调语义。
      */
-    private static final class TestableSessionLifecycleManager extends SessionLifecycleManager {
+    private static class TestableSessionLifecycleManager extends SessionLifecycleManager {
         private final CodemossSettingsService settingsService = new InMemorySettingsService();
 
         /**
@@ -353,6 +477,7 @@ public class SessionLifecycleManagerSendTimeRuntimeSwitchTest {
         private final Project project;
         private final HandlerContext handlerContext;
         private final List<String> javaScriptFunctions = new ArrayList<>();
+        private final List<String> javaScriptInvocations = new ArrayList<>();
         private ClaudeSession session;
 
         /**
@@ -373,6 +498,7 @@ public class SessionLifecycleManagerSendTimeRuntimeSwitchTest {
                         @Override
                         public void callJavaScript(String functionName, String... args) {
                             javaScriptFunctions.add(functionName);
+                            javaScriptInvocations.add(functionName + "|" + serializeInvocationArgs(args));
                         }
 
                         @Override
@@ -395,6 +521,23 @@ public class SessionLifecycleManagerSendTimeRuntimeSwitchTest {
          */
         private boolean hasJavaScriptCall(String functionName) {
             return javaScriptFunctions.contains(functionName);
+        }
+
+        /**
+         * 返回指定 JS 回调的首个参数，便于断言桥接载荷中的关键字段。
+         *
+         * @param functionName 目标前端函数名
+         * @return 首个参数；若不存在则返回 null
+         */
+        private String findFirstJavaScriptArgument(String functionName) {
+            for (String invocation : javaScriptInvocations) {
+                if (!invocation.startsWith(functionName + "|")) {
+                    continue;
+                }
+                String[] parts = invocation.split("\\|", -1);
+                return parts.length >= 2 ? parts[1] : null;
+            }
+            return null;
         }
 
         /**
@@ -491,6 +634,23 @@ public class SessionLifecycleManagerSendTimeRuntimeSwitchTest {
         @Override
         public void callJavaScript(String functionName, String... args) {
             javaScriptFunctions.add(functionName);
+            javaScriptInvocations.add(functionName + "|" + serializeInvocationArgs(args));
+        }
+
+        /**
+         * 将 JS 调用参数拍平成稳定字符串，供测试断言桥接载荷使用。
+         * 当前测试只关心 ASCII 级别的桥接元数据，不需要引入额外结构化序列化层。
+         *
+         * @param args JS 参数数组
+         * @return 以 `|` 拼接后的参数快照
+         */
+        private static String serializeInvocationArgs(String... args) {
+            if (args == null || args.length == 0) {
+                return "";
+            }
+            return java.util.Arrays.stream(args)
+                    .map(value -> value == null ? "" : value)
+                    .collect(Collectors.joining("|"));
         }
 
         /**

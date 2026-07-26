@@ -359,6 +359,35 @@ export function useSessionManagement({
     sendBridgeEvent('create_new_session');
   }, [beginSessionTransition, currentSessionId, loading, messages.length, traceCodexRuntime]);
 
+
+  /**
+   * 初始化显式/静默 continued 共用的 transition cache。
+   * 只写入 prefix 与 pending 元数据，不执行 setCurrentSessionId(null)、不清空可见消息列表、
+   * 不弹 toast；调用方如需显式切段 UI 过渡，应在本方法之外单独处理。
+   *
+   * @param params.sourceSessionId 稳定 source 锚点
+   * @param params.logicalConversationId 逻辑会话 id
+   * @param params.switchReason 切换原因
+   * @param params.prefixMessages 需要缓存的旧历史前缀
+   * @return 无返回值
+   */
+  const initializeExplicitContinuedTransitionCache = (params: {
+    sourceSessionId: string | null;
+    logicalConversationId: string | null;
+    switchReason?: string | null;
+    prefixMessages: ClaudeMessage[];
+  }) => {
+    window.__continuedSegmentFirstSnapshotSessionId = null;
+    window.__continuedSegmentHistoryPrefixMessages = params.prefixMessages.slice();
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingTailMessages = null;
+    window.__continuedSegmentPendingSourceSessionId = params.sourceSessionId?.trim() || null;
+    window.__continuedSegmentPendingLogicalConversationId = params.logicalConversationId?.trim() || null;
+    window.__continuedSegmentPendingCreatedAt = Date.now();
+    window.__continuedSegmentPendingReason = params.switchReason ?? null;
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+  };
+
   /**
    * 在当前逻辑会话内创建一个新的继续分段。
    * 该入口用于切模型或切供应商时保留当前消息上下文，只切换后端运行段，
@@ -435,26 +464,19 @@ export function useSessionManagement({
       setStreamingActive(false);
     }
     // 中文注释：continued segment 切换必须在 reset 之后写入前缀缓存。
-    // 这样既能清掉 streaming/loading 等瞬时状态，又不会让 reset 的默认清理逻辑覆盖旧历史前缀。
+    // 这里复用与 silent switch 相同的 transition cache 初始化语义：
+    // 只缓存 prefix / pending 元数据，不在 helper 内清空可见列表或置空 currentSessionId。
+    // 显式切段的 setCurrentSessionId(null) / toast 等待等 UI 动作仍由本方法后续步骤单独处理。
     // 2026-07-16 复盘结论：
     // 1. `__continuedSegmentHistoryPrefixMessages` 仍用于保留旧逻辑会话前缀，等待新分段首帧补齐；
     // 2. `__continuedSegmentPendingTailMessages` 仍用于承接“尾部消息先到、真实 sessionId 后到”的显式 continued 竞态；
     // 3. `__continuedSegmentAwaitingFirstSessionId` 仍用于界定首发放行窗口与 pending tail 采集窗口。
-    // send-time silent switch 主链路已经不再写入这些 legacy cache，但显式 `createContinuedSegment(...)`
-    // 兼容路径仍依赖它们，当前阶段只能继续保留并把作用域限制在该旧链路内。
-    window.__continuedSegmentFirstSnapshotSessionId = null;
-    window.__continuedSegmentHistoryPrefixMessages = messages.slice();
-    window.__continuedSegmentHistoryPrefixSessionId = null;
-    window.__continuedSegmentPendingTailMessages = null;
-    // 中文注释：这些 transition 元数据用于跨越 React ref 丢失、guard timeout 和 setSessionId 先到等竞态。
-    // 只要它们存在，后续真实 sessionId 回推就能被识别为 continued 首帧，而不是误走普通会话分支。
-    window.__continuedSegmentPendingSourceSessionId = resolvedSourceSessionId?.trim() || null;
-    window.__continuedSegmentPendingLogicalConversationId = request.logicalConversationId?.trim()
-      || logicalConversationId?.trim()
-      || null;
-    window.__continuedSegmentPendingCreatedAt = Date.now();
-    window.__continuedSegmentPendingReason = request.switchReason;
-    window.__continuedSegmentAwaitingFirstSessionId = true;
+    initializeExplicitContinuedTransitionCache({
+      sourceSessionId: resolvedSourceSessionId?.trim() || null,
+      logicalConversationId: request.logicalConversationId?.trim() || logicalConversationId?.trim() || null,
+      switchReason: request.switchReason,
+      prefixMessages: messages.slice(),
+    });
     emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'createContinuedSegment after transient reset', {
       messageCount: messages.length,
       continuationPending: continuationPendingRef?.current ?? null,

@@ -15,8 +15,12 @@ import { debugError, emitFrontendDiagnosticLog } from '../../../utils/debug';
 import { buildTranscriptDiagnosticMessageDump, FULL_TRANSCRIPT_SNAPSHOT_KIND } from '../../../utils/transcriptDiagnostics';
 import { isHighConfidenceInternalVisibleResidue } from '../../../utils/contentBlockNormalize';
 import {
+  OPTIMISTIC_MESSAGE_TIME_WINDOW,
   appendOptimisticMessageIfMissing,
   ensureStreamingAssistantInList,
+  getMessageIdentityKey,
+  getMessageTimestampMs,
+  getUserMessageComparableContent,
   getRawUuid,
   preserveLastAssistantIdentity,
   preserveRecentlyEndedStreamingTurn,
@@ -727,8 +731,7 @@ export function registerMessageCallbacks(
     if (preservedPrefixSessionId !== currentSessionId) {
       return false;
     }
-    const nextAlreadyContainsPrefix = nextList.length >= preservedPrefix.length
-      && preservedPrefix.every((message, index) => isSameMessageIdentity(message, nextList[index]));
+    const nextAlreadyContainsPrefix = doesContinuedListStartWithPrefix(preservedPrefix, nextList);
     return !nextAlreadyContainsPrefix;
   };
 
@@ -785,6 +788,105 @@ export function registerMessageCallbacks(
         && (left.content || '') === (right.content || '')
       )
     )
+  );
+
+  type ContinuedLogicalMessageMatchKind = 'identity' | 'optimistic_content_window' | 'strict_snapshot' | 'none';
+
+  interface ContinuedLogicalMessageMatchResult {
+    matched: boolean;
+    matchKind: ContinuedLogicalMessageMatchKind;
+  }
+
+  interface ContinuedPrefixMergeDiagnostics {
+    optimisticOverlapMatched: boolean;
+    overlapCount: number;
+    overlapResolvedBy: ContinuedLogicalMessageMatchKind;
+    preferTailOnOverlap: boolean;
+  }
+
+  interface ContinuedPrefixOverlapResult {
+    overlapCount: number;
+    overlapResolvedBy: ContinuedLogicalMessageMatchKind;
+  }
+
+  /**
+   * continued 过渡态专用的逻辑消息等价判断。
+   * 这里只用于 prefix/tail merge，不能替代全局消息合并规则：
+   * 1. 优先使用后端稳定下发的 `messageIdentity.key`；
+   * 2. 仅在双方都是 user 且至少一侧为 optimistic 时，才允许使用“同文本 + 时间窗”兜底；
+   * 3. 其余情况继续保持严格快照判断，避免误吞真实的连续同文案提问。
+   *
+   * @param left 左侧消息
+   * @param right 右侧消息
+   * @return 是否命中 continued 语义等价，以及命中的判定来源
+   */
+  const matchContinuedLogicalMessage = (
+    left: ClaudeMessage,
+    right: ClaudeMessage | undefined,
+  ): ContinuedLogicalMessageMatchResult => {
+    if (!right) {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    if (areStableMessageIdentitiesEqual(left.messageIdentity, right.messageIdentity)) {
+      return { matched: true, matchKind: 'identity' };
+    }
+
+    const leftIdentityKey = getMessageIdentityKey(left);
+    const rightIdentityKey = getMessageIdentityKey(right);
+    if (leftIdentityKey || rightIdentityKey) {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    if (
+      left.type === right.type
+      && left.timestamp === right.timestamp
+      && (left.content || '') === (right.content || '')
+    ) {
+      return { matched: true, matchKind: 'strict_snapshot' };
+    }
+
+    if (left.type !== 'user' || right.type !== 'user') {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    if (left.isOptimistic !== true && right.isOptimistic !== true) {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    const leftComparableContent = getUserMessageComparableContent(left);
+    const rightComparableContent = getUserMessageComparableContent(right);
+    if (!leftComparableContent || leftComparableContent !== rightComparableContent) {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    const leftTimestampMs = getMessageTimestampMs(left) ?? Number.NaN;
+    const rightTimestampMs = getMessageTimestampMs(right) ?? Number.NaN;
+    if (!Number.isFinite(leftTimestampMs) || !Number.isFinite(rightTimestampMs)) {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    if (Math.abs(leftTimestampMs - rightTimestampMs) >= OPTIMISTIC_MESSAGE_TIME_WINDOW) {
+      return { matched: false, matchKind: 'none' };
+    }
+
+    return { matched: true, matchKind: 'optimistic_content_window' };
+  };
+
+  /**
+   * 判断 continued 历史前缀是否已经完整出现在目标列表开头。
+   * 这里必须复用 continued 专用比较规则，否则 optimistic user 与 backend user 时间戳不同的场景会被误判成“前缀未出现”。
+   *
+   * @param preservedPrefix 已缓存的历史前缀
+   * @param targetList 待比较的目标消息列表
+   * @return true 表示目标列表已经以相同逻辑顺序包含整段前缀
+   */
+  const doesContinuedListStartWithPrefix = (
+    preservedPrefix: ClaudeMessage[],
+    targetList: ClaudeMessage[],
+  ): boolean => (
+    targetList.length >= preservedPrefix.length
+    && preservedPrefix.every((message, index) => matchContinuedLogicalMessage(message, targetList[index]).matched)
   );
 
   /**
@@ -929,47 +1031,281 @@ export function registerMessageCallbacks(
   const findContinuedPrefixTailOverlap = (
     preservedPrefix: ClaudeMessage[],
     mergedTail: ClaudeMessage[],
-  ): number => {
+  ): ContinuedPrefixOverlapResult => {
     const maxOverlap = Math.min(preservedPrefix.length, mergedTail.length);
     for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
       const prefixStartIndex = preservedPrefix.length - overlap;
+      let overlapResolvedBy: ContinuedLogicalMessageMatchKind = 'none';
       const overlapMatched = mergedTail
         .slice(0, overlap)
-        .every((message, index) => isSameMessageIdentity(message, preservedPrefix[prefixStartIndex + index]));
+        .every((message, index) => {
+          const matchResult = matchContinuedLogicalMessage(message, preservedPrefix[prefixStartIndex + index]);
+          if (!matchResult.matched) {
+            overlapResolvedBy = 'none';
+            return false;
+          }
+          if (overlapResolvedBy === 'none') {
+            overlapResolvedBy = matchResult.matchKind;
+          } else if (overlapResolvedBy !== matchResult.matchKind) {
+            overlapResolvedBy = 'strict_snapshot';
+          }
+          return true;
+        });
       if (overlapMatched) {
-        return overlap;
+        return {
+          overlapCount: overlap,
+          overlapResolvedBy,
+        };
       }
     }
-    return 0;
+    return {
+      overlapCount: 0,
+      overlapResolvedBy: 'none',
+    };
   };
 
-  const mergeContinuedSegmentPrefixIfNeeded = (nextList: ClaudeMessage[]): ClaudeMessage[] => {
+  /**
+   * 判断当前是否处于 silent switch 特有的 pre-bind 第三态。
+   * 显式 continued 在等待首个真实 sessionId 时会把 currentSessionId 置空，
+   * 但 silent switch 为了避免界面空白，会故意保留旧分段 sessionId。
+   * 因此这里必须单独识别“旧 session 仍在、prefixSessionId 尚未绑定、awaitingFirstSessionId=true”的窗口，
+   * 避免新分段短快照直接把完整 transcript 打短。
+   *
+   * @param currentSessionId 当前 React 侧持有的 sessionId；silent switch 时通常仍是旧分段
+   * @param hasPrefixCache 是否已经缓存了旧历史前缀
+   * @return true 表示当前处于 silent switch pre-bind 第三态
+   */
+  const isSilentSwitchPreBindTransitionState = (
+    currentSessionId: string | null,
+    hasPrefixCache: boolean,
+  ): boolean => {
+    if (!currentSessionId || !hasPrefixCache) {
+      return false;
+    }
+    if ((window.__continuedSegmentHistoryPrefixMessages?.length ?? 0) === 0) {
+      return false;
+    }
+    if (window.__continuedSegmentHistoryPrefixSessionId?.trim()) {
+      return false;
+    }
+    if (window.__continuedSegmentAwaitingFirstSessionId !== true) {
+      return false;
+    }
+    const pendingReason = window.__continuedSegmentPendingReason?.trim() || '';
+    return continuationPendingRef.current
+      || !!window.__continuedSegmentPendingSourceSessionId?.trim()
+      || pendingReason.startsWith('send_time_');
+  };
+
+  /**
+   * 把消息列表压缩成轻量预览，供 continued 过渡诊断日志使用。
+   * 这里只保留前几条 `type:content` 摘要，便于后续从日志直接判断哪一帧把历史打短。
+   *
+   * @param messages 待摘要的消息列表
+   * @return 最多三条的轻量预览
+   */
+  const summarizeDiagnosticMessageListPreview = (messages: ClaudeMessage[]): string[] => (
+    messages.slice(0, 3).map((message) => `${message.type}:${summarizeDiagnosticMessageContent(message.content) ?? '<empty>'}`)
+  );
+
+  /**
+   * 缓存 sessionId 绑定前先到达的 continued tail。
+   * 该逻辑同时服务于显式 continued 与 silent switch：两者都需要先保留 tail，
+   * 只是在 silent switch 第三态下，缓存完成后要继续保留当前可见 transcript，而不是立即替换。
+   *
+   * @param nextList 当前收到的 tail 快照
+   * @return 选中的 tail 与净化统计
+   */
+  const cacheContinuedPendingTail = (nextList: ClaudeMessage[]) => {
+    const selectedPendingTail = selectMoreCompleteContinuedTail(
+      nextList,
+      window.__continuedSegmentPendingTailMessages,
+    );
+    const highConfidenceFilteredPendingTail = filterContinuedPendingTailMessages(selectedPendingTail);
+    const filteredInternalCount = selectedPendingTail.length - highConfidenceFilteredPendingTail.length;
+    const sanitizedPendingTailResult = sanitizeFrontendVisibleMessages(highConfidenceFilteredPendingTail);
+    window.__continuedSegmentPendingTailMessages = sanitizedPendingTailResult.messages.length > 0
+      ? cloneContinuedTailMessages(sanitizedPendingTailResult.messages)
+      : null;
+    return {
+      selectedPendingTail,
+      filteredInternalCount,
+      sanitizedPendingTailResult,
+    };
+  };
+
+  /**
+   * 使用 prefix cache 与 tail 构造逻辑会话级 transcript。
+   * 与“新 sessionId 已绑定”的正式 merge 不同，这里不会消费 prefix cache，
+   * 只用于 pre-bind 窗口下的可见性保护。
+   *
+   * @param preservedPrefix 续接前缓存的旧历史前缀
+   * @param mergedTail 当前可用的 tail
+   * @return 合并后的逻辑 transcript
+   */
+  const mergeContinuedPrefixWithTail = (
+    preservedPrefix: ClaudeMessage[],
+    mergedTail: ClaudeMessage[],
+  ): { mergedList: ClaudeMessage[]; diagnostics: ContinuedPrefixMergeDiagnostics } => {
+    const nextAlreadyContainsPrefix = doesContinuedListStartWithPrefix(preservedPrefix, mergedTail);
+    if (nextAlreadyContainsPrefix) {
+      return {
+        mergedList: mergedTail,
+        diagnostics: {
+          optimisticOverlapMatched: false,
+          overlapCount: preservedPrefix.length,
+          overlapResolvedBy: 'identity',
+          preferTailOnOverlap: true,
+        },
+      };
+    }
+    const overlapResult = findContinuedPrefixTailOverlap(preservedPrefix, mergedTail);
+    const overlapCount = overlapResult.overlapCount;
+    return {
+      mergedList: overlapCount > 0
+        ? [...preservedPrefix.slice(0, preservedPrefix.length - overlapCount), ...mergedTail]
+        : [...preservedPrefix, ...mergedTail],
+      diagnostics: {
+        optimisticOverlapMatched: overlapResult.overlapResolvedBy === 'optimistic_content_window',
+        overlapCount,
+        overlapResolvedBy: overlapResult.overlapResolvedBy,
+        preferTailOnOverlap: overlapCount > 0,
+      },
+    };
+  };
+
+  /**
+   * 判断 pre-bind merge 是否已经比当前可见 transcript 更完整。
+   * 如果 merge 结果与 prevList 等价，说明这只是“当前追问短快照”，此时应继续保留 prevList；
+   * 只有当 merge 结果引入了真实新内容时，才提前展示 prefix + tail。
+   *
+   * @param prevList 当前已显示的 transcript
+   * @param mergedList 尝试拼出的过渡列表
+   * @return true 表示可以直接展示 mergedList
+   */
+  const shouldApplyPreBindMergedList = (
+    prevList: ClaudeMessage[],
+    mergedList: ClaudeMessage[],
+  ): boolean => {
+    if (mergedList.length !== prevList.length) {
+      return true;
+    }
+    return mergedList.some((message, index) => {
+      const previousMessage = prevList[index];
+      return !previousMessage
+        || !isSameMessageIdentity(message, previousMessage)
+        || message.content !== previousMessage.content;
+    });
+  };
+
+  /**
+   * 判断 silent switch pre-bind 阶段是否只收到了“一条新的同文案真实 user tail”。
+   * 这个窗口里后端尚未回推新的 sessionId，前端必须先把 tail 缓存在 continued cache 中，
+   * 不能把第二次真实同文案追问提前拼进可见 transcript，否则 authoritative restore 前会短暂出现两条相同追问。
+   *
+   * @param prevList 当前界面已经展示的 transcript
+   * @param pendingTail 已经过滤并缓存的 pre-bind tail
+   * @return `suppressed=true` 表示当前只能缓存该 tail；`comparableContent` 仅用于诊断日志快速定位被抑制的追问文案
+   */
+  const getPreBindRepeatedUserOnlyTailSuppression = (
+    prevList: ClaudeMessage[],
+    pendingTail: ClaudeMessage[],
+  ): { suppressed: boolean; comparableContent: string | null } => {
+    if (pendingTail.length !== 1) {
+      return { suppressed: false, comparableContent: null };
+    }
+
+    const pendingTailMessage = pendingTail[0];
+    if (pendingTailMessage?.type !== 'user' || pendingTailMessage.isOptimistic === true) {
+      return { suppressed: false, comparableContent: null };
+    }
+
+    const pendingComparableContent = getUserMessageComparableContent(pendingTailMessage).trim();
+    if (!pendingComparableContent) {
+      return { suppressed: false, comparableContent: null };
+    }
+
+    for (let index = prevList.length - 1; index >= 0; index -= 1) {
+      const previousMessage = prevList[index];
+      if (previousMessage.type !== 'user') {
+        continue;
+      }
+
+      if (previousMessage.isOptimistic === true) {
+        return { suppressed: false, comparableContent: null };
+      }
+
+      // 中文注释：只有“最近一条真实 user 已经被后续消息推进过去”的场景，
+      // 才说明当前这条单独 tail 是第二次同文案追问，应该继续只缓存不展示。
+      if (index >= prevList.length - 1) {
+        return { suppressed: false, comparableContent: null };
+      }
+
+      const previousComparableContent = getUserMessageComparableContent(previousMessage).trim();
+      if (!previousComparableContent || previousComparableContent !== pendingComparableContent) {
+        return { suppressed: false, comparableContent: null };
+      }
+
+      return {
+        suppressed: true,
+        comparableContent: pendingComparableContent,
+      };
+    }
+
+    return { suppressed: false, comparableContent: null };
+  };
+
+  const mergeContinuedSegmentPrefixIfNeeded = (
+    nextList: ClaudeMessage[],
+  ): { mergedList: ClaudeMessage[]; diagnostics: ContinuedPrefixMergeDiagnostics } => {
     const currentSessionId = currentSessionIdRef.current?.trim() || null;
     const preservedPrefix = window.__continuedSegmentHistoryPrefixMessages;
     const preservedPrefixSessionId = window.__continuedSegmentHistoryPrefixSessionId?.trim() || null;
     if (!currentSessionId || !Array.isArray(preservedPrefix) || preservedPrefixSessionId !== currentSessionId) {
-      return nextList;
+      return {
+        mergedList: nextList,
+        diagnostics: {
+          optimisticOverlapMatched: false,
+          overlapCount: 0,
+          overlapResolvedBy: 'none',
+          preferTailOnOverlap: false,
+        },
+      };
     }
     if (preservedPrefix.length === 0) {
-      return nextList;
+      return {
+        mergedList: nextList,
+        diagnostics: {
+          optimisticOverlapMatched: false,
+          overlapCount: 0,
+          overlapResolvedBy: 'none',
+          preferTailOnOverlap: false,
+        },
+      };
     }
     const mergedTail = selectMoreCompleteContinuedTail(nextList, window.__continuedSegmentPendingTailMessages);
     // 中文注释：一旦真实 sessionId 已经绑定，说明“早到尾部缓存”已经有了稳定锚点，
     // 后续继续保留只会让旧缓存误参与下一轮比较，因此这里在正式合并前先消费掉。
     window.__continuedSegmentPendingTailMessages = null;
 
-    const nextAlreadyContainsPrefix = mergedTail.length >= preservedPrefix.length
-      && preservedPrefix.every((message, index) => isSameMessageIdentity(message, mergedTail[index]));
+    const nextAlreadyContainsPrefix = doesContinuedListStartWithPrefix(preservedPrefix, mergedTail);
     if (nextAlreadyContainsPrefix) {
       // 中文注释：若后续某条快照已经升级成“整条逻辑会话完整快照”，说明前缀缓存已不再需要，
       // 否则继续强拼接会把旧历史重复叠加两遍。
       window.__continuedSegmentHistoryPrefixMessages = null;
       clearContinuedSegmentTransitionCache('prefix_cache_consumed_by_complete_snapshot');
-      return mergedTail;
+      return {
+        mergedList: mergedTail,
+        diagnostics: {
+          optimisticOverlapMatched: false,
+          overlapCount: preservedPrefix.length,
+          overlapResolvedBy: 'identity',
+          preferTailOnOverlap: true,
+        },
+      };
     }
 
-    const overlapCount = findContinuedPrefixTailOverlap(preservedPrefix, mergedTail);
-    return [...preservedPrefix, ...mergedTail.slice(overlapCount)];
+    return mergeContinuedPrefixWithTail(preservedPrefix, mergedTail);
   };
 
   /**
@@ -991,6 +1327,89 @@ export function registerMessageCallbacks(
     }
     const currentSessionId = currentSessionIdRef.current?.trim() || null;
     const hasPrefixCache = Array.isArray(window.__continuedSegmentHistoryPrefixMessages);
+    const prefixSessionId = window.__continuedSegmentHistoryPrefixSessionId?.trim() || null;
+    const awaitingFirstSessionId = window.__continuedSegmentAwaitingFirstSessionId === true;
+    const silentSwitchThirdState = isSilentSwitchPreBindTransitionState(currentSessionId, hasPrefixCache);
+    if (silentSwitchThirdState) {
+      let preserveDecision: 'keep_prev' | 'cache_pending_tail' | 'merge_prefix' = 'keep_prev';
+      let nextVisibleMessages = prevList;
+      let repeatedUserOnlyTailSuppression = {
+        suppressed: false,
+        comparableContent: null as string | null,
+      };
+      if (nextList.length > 0) {
+        const {
+          selectedPendingTail,
+          filteredInternalCount,
+          sanitizedPendingTailResult,
+        } = cacheContinuedPendingTail(nextList);
+        const cachedTail = Array.isArray(window.__continuedSegmentPendingTailMessages)
+          ? window.__continuedSegmentPendingTailMessages
+          : [];
+        const preBindMergeResult = Array.isArray(window.__continuedSegmentHistoryPrefixMessages)
+          ? mergeContinuedPrefixWithTail(window.__continuedSegmentHistoryPrefixMessages, cachedTail)
+          : {
+              mergedList: prevList,
+              diagnostics: {
+                optimisticOverlapMatched: false,
+                overlapCount: 0,
+                overlapResolvedBy: 'none' as const,
+                preferTailOnOverlap: false,
+              },
+            };
+        repeatedUserOnlyTailSuppression = getPreBindRepeatedUserOnlyTailSuppression(prevList, cachedTail);
+        const shouldShowPreBindMergedList = !repeatedUserOnlyTailSuppression.suppressed
+          && shouldApplyPreBindMergedList(prevList, preBindMergeResult.mergedList);
+        preserveDecision = shouldShowPreBindMergedList ? 'merge_prefix' : 'cache_pending_tail';
+        nextVisibleMessages = shouldShowPreBindMergedList ? preBindMergeResult.mergedList : prevList;
+        emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued pending tail cached', {
+          snapshotStage: 'transitional',
+          pendingTailCount: window.__continuedSegmentPendingTailMessages?.length ?? null,
+          nextMessageCount: nextList.length,
+          filteredInternalCount,
+          sanitizedTailCount: sanitizedPendingTailResult.changedCount,
+          sanitizedToEmptyCount: sanitizedPendingTailResult.sanitizedToEmptyCount,
+          firstMessageType: selectedPendingTail[0]?.type ?? null,
+          firstMessagePreview: summarizeDiagnosticMessageContent(selectedPendingTail[0]?.content),
+          firstSanitizedPreview: summarizeDiagnosticMessageContent(
+            window.__continuedSegmentPendingTailMessages?.[0]?.content,
+          ),
+          pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
+          pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
+          awaitingFirstSessionId,
+          silentSwitchThirdState,
+          preserveDecision,
+          repeatedUserOnlyTailSuppressed: repeatedUserOnlyTailSuppression.suppressed,
+          repeatedUserOnlyTailComparableContent: repeatedUserOnlyTailSuppression.comparableContent,
+          optimisticOverlapMatched: preBindMergeResult.diagnostics.optimisticOverlapMatched,
+          overlapCount: preBindMergeResult.diagnostics.overlapCount,
+          overlapResolvedBy: preBindMergeResult.diagnostics.overlapResolvedBy,
+          preferTailOnOverlap: preBindMergeResult.diagnostics.preferTailOnOverlap,
+        });
+      }
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued prefix merge skipped', {
+        snapshotStage: 'transitional',
+        skipReason: 'prefix_session_id_mismatch',
+        currentSessionId,
+        prefixSessionId: prefixSessionId ?? null,
+        prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
+        pendingTailCount: window.__continuedSegmentPendingTailMessages?.length ?? null,
+        firstSnapshotSessionId: window.__continuedSegmentFirstSnapshotSessionId ?? null,
+        pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
+        pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
+        awaitingFirstSessionId,
+        continuationPending: continuationPendingRef.current,
+        previousMessageCount: prevList.length,
+        nextMessageCount: nextList.length,
+        preserveDecision,
+        repeatedUserOnlyTailSuppressed: repeatedUserOnlyTailSuppression?.suppressed ?? false,
+        repeatedUserOnlyTailComparableContent: repeatedUserOnlyTailSuppression?.comparableContent ?? null,
+        silentSwitchThirdState,
+        prevPreview: summarizeDiagnosticMessageListPreview(prevList),
+        nextPreview: summarizeDiagnosticMessageListPreview(nextList),
+      });
+      return nextVisibleMessages;
+    }
     const shouldMergeContinuedSegment = !!currentSessionId
       && window.__continuedSegmentHistoryPrefixSessionId?.trim() === currentSessionId
       && hasPrefixCache;
@@ -1003,7 +1422,8 @@ export function registerMessageCallbacks(
         firstSnapshotSessionId: window.__continuedSegmentFirstSnapshotSessionId ?? null,
         awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
       });
-      const mergedList = mergeContinuedSegmentPrefixIfNeeded(nextList);
+      const continuedMergeResult = mergeContinuedSegmentPrefixIfNeeded(nextList);
+      const mergedList = continuedMergeResult.mergedList;
       if (window.__continuedSegmentFirstSnapshotSessionId === currentSessionId) {
         emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'continued segment first snapshot applied', {
           snapshotStage: 'transitional',
@@ -1017,6 +1437,10 @@ export function registerMessageCallbacks(
           pendingSourceSessionId: window.__continuedSegmentPendingSourceSessionId ?? null,
           pendingLogicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
           awaitingFirstSessionId: window.__continuedSegmentAwaitingFirstSessionId ?? false,
+          optimisticOverlapMatched: continuedMergeResult.diagnostics.optimisticOverlapMatched,
+          overlapCount: continuedMergeResult.diagnostics.overlapCount,
+          overlapResolvedBy: continuedMergeResult.diagnostics.overlapResolvedBy,
+          preferTailOnOverlap: continuedMergeResult.diagnostics.preferTailOnOverlap,
         });
         // 中文注释：这里只清理“首帧已消费”标记。
         // continued 生命周期是否完成，已经在 setSessionId 时显式收口，不能再依赖首帧快照时序。
@@ -1637,8 +2061,22 @@ export function registerMessageCallbacks(
 
   window.clearMessages = () => {
     const preservePreparedHistoryRestore = hasPreparedHistoryRestoreSnapshot();
+    const preparedRestoreKind = window.__preparedHistoryRestoreKind;
     const preserveContinuedPrefixForAuthoritativeRestore = preservePreparedHistoryRestore
-      && isAuthoritativeRestoreKind(window.__preparedHistoryRestoreKind);
+      && isAuthoritativeRestoreKind(preparedRestoreKind);
+    // 中文注释：这是 silent switch / continued authoritative 接管特例，不能泛化成所有 authoritative restore 都不 clear。
+    // send-time silent switch 的 authoritative replace 是“接管当前可见 transcript”，不是切到新空会话；
+    // 因此 restore 前只清理 transient 状态，保留真实 messages 列表直到 updateMessages replace 落地。
+    // 判定优先：runtime_continue_authoritative；若 pendingReason 标记 send_time_* 则同样适用。
+    const pendingReason = window.__continuedSegmentPendingReason?.trim() || '';
+    const isSilentSwitchContinuedContext = pendingReason.startsWith('send_time_')
+      || window.__continuedSegmentAwaitingFirstSessionId === true
+      || !!window.__continuedSegmentPendingSourceSessionId
+      || Array.isArray(window.__continuedSegmentHistoryPrefixMessages);
+    const skipVisibleMessageClear = preservePreparedHistoryRestore
+      && preparedRestoreKind === 'runtime_continue_authoritative'
+      && isSilentSwitchContinuedContext;
+
     if (pendingUpdateRaf !== null) {
       cancelAnimationFrame(pendingUpdateRaf);
       pendingUpdateRaf = null;
@@ -1654,7 +2092,10 @@ export function registerMessageCallbacks(
         restoreRequestKey: window.__preparedHistoryRestoreKey,
         restoreKey: window.__preparedHistoryRestoreKey,
         snapshotSignature: window.__preparedHistoryRestoreSignature,
-        restoreKind: window.__preparedHistoryRestoreKind,
+        restoreKind: preparedRestoreKind,
+        skipVisibleMessageClear,
+        silentSwitchContinuedContext: isSilentSwitchContinuedContext,
+        pendingReason: pendingReason || null,
       });
     } else {
       clearPreparedHistoryRestoreSnapshot();
@@ -1667,7 +2108,9 @@ export function registerMessageCallbacks(
       preserveContinuedPrefix: preserveContinuedPrefixForAuthoritativeRestore,
     });
     closeContextUsageDialog();
-    setMessages([]);
+    if (!skipVisibleMessageClear) {
+      setMessages([]);
+    }
   };
 
   window.addErrorMessage = (message) => {

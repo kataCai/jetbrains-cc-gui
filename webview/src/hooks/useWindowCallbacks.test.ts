@@ -588,6 +588,501 @@ describe('useWindowCallbacks integration', () => {
     expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-002');
   });
 
+  it('beginContinuedSegmentTransition primes silent-switch cache without clearing the visible session anchor', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'segment-visible-001' },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: null },
+      activeSegmentSessionIdRef: { current: 'segment-visible-001' },
+      messagesRef: {
+        current: [
+          { type: 'user', content: 'old question', timestamp: '2026-07-23T11:00:00.000Z' },
+          { type: 'assistant', content: 'old answer', timestamp: '2026-07-23T11:00:01.000Z' },
+        ],
+      },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-visible-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }));
+    });
+
+    expect(window.__sessionTransitioning).toBe(false);
+    expect(opts.setCurrentSessionId).not.toHaveBeenCalledWith(null);
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(true);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith('segment-visible-001');
+    expect(opts.currentSessionIdRef.current).toBe('segment-visible-001');
+    expect(window.__continuedSegmentHistoryPrefixMessages).toEqual(opts.messagesRef.current);
+    expect(window.__continuedSegmentPendingSourceSessionId).toBe('segment-visible-001');
+    expect(window.__continuedSegmentPendingLogicalConversationId).toBe('logical-001');
+    expect(window.__continuedSegmentPendingReason).toBe('send_time_model');
+    expect(window.__continuedSegmentAwaitingFirstSessionId).toBe(true);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'window.beginContinuedSegmentTransition applied',
+      expect.objectContaining({
+        sourceSessionId: 'segment-visible-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }),
+    );
+  });
+
+  it('consumes pending beginContinuedSegmentTransition signal registered before callbacks mount', () => {
+    (window as any).__pendingBeginContinuedSegmentTransitionPayload = JSON.stringify({
+      sourceSessionId: 'segment-early-001',
+      logicalConversationId: 'logical-early-001',
+      switchReason: 'send_time_model',
+    });
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'segment-early-001' },
+      continuationPendingRef: { current: false },
+      logicalConversationIdRef: { current: null },
+      messagesRef: {
+        current: [
+          { type: 'assistant', content: 'existing context', timestamp: '2026-07-23T11:00:00.000Z' },
+        ],
+      },
+    });
+
+    renderHook(() => useWindowCallbacks(opts));
+
+    expect((window as any).__pendingBeginContinuedSegmentTransitionPayload).toBeUndefined();
+    expect(opts.setContinuationPending).toHaveBeenCalledWith(true);
+    expect(opts.setContinuationSourceSessionId).toHaveBeenCalledWith('segment-early-001');
+    expect(window.__continuedSegmentPendingLogicalConversationId).toBe('logical-early-001');
+    expect(window.__continuedSegmentHistoryPrefixMessages).toEqual(opts.messagesRef.current);
+  });
+
+  it('pre-bind short snapshot after silent switch keeps visible history until the new session id is bound', () => {
+    /**
+     * 中文注释：
+     * 该用例精确复现方案文档里的 silent switch 第三态：
+     * 1. beginContinuedSegmentTransition 之后，currentSessionId 仍指向旧分段；
+     * 2. prefix cache 已建立，但 prefixSessionId 尚未绑定到新 session；
+     * 3. 此时先收到仅包含当前追问的短快照，前端必须保留旧历史，不能让可见列表只剩最新提问。
+     */
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'segment-old-001' },
+      continuationPendingRef: { current: false },
+      activeSegmentSessionIdRef: { current: 'segment-old-001' },
+      messagesRef: {
+        current: [
+          { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+          { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+          { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+        ],
+      },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-old-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }));
+      window.updateMessages?.(JSON.stringify([
+        { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+      ]));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(updater).toBeTypeOf('function');
+
+    const previousVisibleMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+    ] satisfies ClaudeMessage[];
+    const nextVisibleMessages = updater!(previousVisibleMessages);
+
+    expect(nextVisibleMessages).toEqual(previousVisibleMessages);
+    expect(window.__continuedSegmentPendingTailMessages).toEqual([
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+    ]);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued prefix merge skipped',
+      expect.objectContaining({
+        skipReason: 'prefix_session_id_mismatch',
+        currentSessionId: 'segment-old-001',
+        prefixSessionId: null,
+        awaitingFirstSessionId: true,
+      }),
+    );
+  });
+
+  it('pre-bind fuller snapshot after silent switch shows merged prefix and tail before the new session id is bound', () => {
+    /**
+     * 中文注释：
+     * 该用例补足 silent switch pre-bind 的另一条关键分支：
+     * 1. 旧分段仍保持可见，prefix cache 也还没有绑定到新 sessionId；
+     * 2. 但如果首个 tail 已经比当前可见列表更完整，例如已经带上了新 assistant 回复；
+     * 3. 前端就应该立即把旧 prefix 与新 tail 合成后展示出来，而不是继续只保留旧列表等待 setSessionId。
+     * 这样可以验证 preserveDecision=merge_prefix 的真实可见结果，而不只是 pending tail 缓存行为。
+     */
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'segment-old-001' },
+      continuationPendingRef: { current: false },
+      activeSegmentSessionIdRef: { current: 'segment-old-001' },
+      messagesRef: {
+        current: [
+          { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+          { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+          { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+        ],
+      },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-old-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }));
+      window.updateMessages?.(JSON.stringify([
+        { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+        { type: 'assistant', content: '3', timestamp: '2026-07-24T14:18:09.000Z' },
+      ]));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(updater).toBeTypeOf('function');
+
+    const previousVisibleMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+    ] satisfies ClaudeMessage[];
+    const nextVisibleMessages = updater!(previousVisibleMessages);
+
+    expect(nextVisibleMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=?',
+      'assistant:2',
+      'user:再+1=?',
+      'assistant:3',
+    ]);
+    expect(window.__continuedSegmentPendingTailMessages).toHaveLength(2);
+    expect(window.__continuedSegmentPendingTailMessages?.[0]).toMatchObject({
+      type: 'user',
+      content: '再+1=?',
+      timestamp: '2026-07-24T14:17:45.000Z',
+    });
+    expect(window.__continuedSegmentPendingTailMessages?.[1]).toMatchObject({
+      type: 'assistant',
+      content: '3',
+    });
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued pending tail cached',
+      expect.objectContaining({
+        preserveDecision: 'merge_prefix',
+        pendingTailCount: 2,
+        awaitingFirstSessionId: true,
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued prefix merge skipped',
+      expect.objectContaining({
+        skipReason: 'prefix_session_id_mismatch',
+        preserveDecision: 'merge_prefix',
+        currentSessionId: 'segment-old-001',
+        prefixSessionId: null,
+        awaitingFirstSessionId: true,
+      }),
+    );
+  });
+
+  it('silent switch continued merge deduplicates optimistic user messages when the backend timestamp differs', () => {
+    /**
+     * 中文注释：
+     * 该用例直接覆盖线上复现的重复显示场景：
+     * 1. 旧可见 transcript 的尾部是前端刚插入的 optimistic user；
+     * 2. silent switch pre-bind 阶段收到的新 tail 里，后端 confirmed user 与 optimistic user 文本相同、时间戳不同；
+     * 3. continued merge 必须把两者视为同一条逻辑消息，并优先保留 tail 版本，避免思考过程中短暂出现两条“再+1=?”；
+     * 4. setSessionId 后的首帧 snapshot 与最终 authoritative restore 也必须维持同样的单条 user 结果。
+     */
+    const optimisticFollowUpMessage: ClaudeMessage = {
+      type: 'user',
+      content: '再+1=?',
+      timestamp: '2026-07-24T14:17:45.000Z',
+      isOptimistic: true,
+      raw: {
+        message: {
+          content: [{ type: 'text', text: '再+1=?' }],
+        },
+      } as any,
+    };
+    const confirmedFollowUpMessage: ClaudeMessage = {
+      type: 'user',
+      content: '再+1=?',
+      timestamp: '2026-07-24T14:17:47.000Z',
+      raw: {
+        timestamp: '2026-07-24T14:17:47.000Z',
+        message: {
+          content: [{ type: 'text', text: '再+1=?' }],
+        },
+      } as any,
+    };
+    const firstSegmentAssistantMessage: ClaudeMessage = {
+      type: 'assistant',
+      content: '3',
+      timestamp: '2026-07-24T14:18:09.000Z',
+    };
+    const previousVisibleMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+      optimisticFollowUpMessage,
+    ] satisfies ClaudeMessage[];
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-old-001' },
+      continuationPendingRef: { current: false },
+      activeSegmentSessionIdRef: { current: 'segment-old-001' },
+      messagesRef: {
+        current: previousVisibleMessages,
+      },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-old-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }));
+      window.updateMessages?.(JSON.stringify([
+        confirmedFollowUpMessage,
+        firstSegmentAssistantMessage,
+      ]));
+    });
+
+    const preBindUpdater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(preBindUpdater).toBeTypeOf('function');
+
+    const preBindVisibleMessages = preBindUpdater!(previousVisibleMessages);
+
+    expect(preBindVisibleMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=?',
+      'assistant:2',
+      'user:再+1=?',
+      'assistant:3',
+    ]);
+    expect(preBindVisibleMessages.filter((message) => message.type === 'user' && message.content === '再+1=?')).toHaveLength(1);
+    expect(preBindVisibleMessages[2]).toMatchObject({
+      type: 'user',
+      content: '再+1=?',
+      timestamp: '2026-07-24T14:17:47.000Z',
+    });
+    expect(preBindVisibleMessages[2].isOptimistic).not.toBe(true);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued pending tail cached',
+      expect.objectContaining({
+        preserveDecision: 'merge_prefix',
+        optimisticOverlapMatched: true,
+        overlapCount: 1,
+        overlapResolvedBy: 'optimistic_content_window',
+        preferTailOnOverlap: true,
+      }),
+    );
+
+    act(() => {
+      window.setSessionId?.('segment-new-001');
+    });
+
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-new-001');
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-new-001');
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.updateMessages?.(JSON.stringify([
+        confirmedFollowUpMessage,
+        firstSegmentAssistantMessage,
+      ]));
+    });
+
+    const postBindUpdater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(postBindUpdater).toBeTypeOf('function');
+
+    const postBindVisibleMessages = postBindUpdater!(previousVisibleMessages);
+
+    expect(postBindVisibleMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=?',
+      'assistant:2',
+      'user:再+1=?',
+      'assistant:3',
+    ]);
+    expect(postBindVisibleMessages.filter((message) => message.type === 'user' && message.content === '再+1=?')).toHaveLength(1);
+    expect(postBindVisibleMessages[2]).toMatchObject({
+      type: 'user',
+      content: '再+1=?',
+      timestamp: '2026-07-24T14:17:47.000Z',
+    });
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBeNull();
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued segment first snapshot applied',
+      expect.objectContaining({
+        optimisticOverlapMatched: true,
+        overlapCount: 1,
+        overlapResolvedBy: 'optimistic_content_window',
+        preferTailOnOverlap: true,
+      }),
+    );
+
+    const authoritativeMessages: ClaudeMessage[] = [
+      {
+        type: 'user',
+        content: '1+1=?',
+        timestamp: '2026-07-24T14:17:05.000Z',
+        messageIdentity: { key: 'user|round=1|prompt' },
+      },
+      {
+        type: 'assistant',
+        content: '2',
+        timestamp: '2026-07-24T14:17:15.000Z',
+        messageIdentity: { key: 'assistant|round=1|answer' },
+      },
+      {
+        ...confirmedFollowUpMessage,
+        messageIdentity: { key: 'user|round=2|prompt' },
+      },
+      {
+        ...firstSegmentAssistantMessage,
+        messageIdentity: { key: 'assistant|round=2|answer' },
+      },
+    ];
+
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|transition-optimistic-overlap',
+        'snapshot-signature-optimistic-overlap',
+        'runtime_continue_authoritative',
+      );
+      window.clearMessages?.();
+      window.updateMessages?.(JSON.stringify(authoritativeMessages));
+    });
+
+    const authoritativeUpdater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(authoritativeUpdater).toBeTypeOf('function');
+
+    const authoritativeVisibleMessages = authoritativeUpdater!(postBindVisibleMessages);
+
+    expect(authoritativeVisibleMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=?',
+      'assistant:2',
+      'user:再+1=?',
+      'assistant:3',
+    ]);
+    expect(authoritativeVisibleMessages.filter((message) => message.type === 'user' && message.content === '再+1=?')).toHaveLength(1);
+    expect(authoritativeVisibleMessages[2]).toMatchObject({
+      type: 'user',
+      content: '再+1=?',
+      timestamp: '2026-07-24T14:17:47.000Z',
+      messageIdentity: { key: 'user|round=2|prompt' },
+    });
+  });
+
+  it('silent switch pre-bind tail is consumed after setSessionId and first snapshot restores the full transcript', () => {
+    /**
+     * 中文注释：
+     * 该用例覆盖完整 silent switch 时序：
+     * 1. 旧分段仍保持可见；
+     * 2. 新分段首个短 tail 先到，前端缓存 pending tail 且不打短历史；
+     * 3. setSessionId(new) 绑定后，首帧 snapshot 必须消费 pending tail，恢复完整 transcript。
+     */
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-old-001' },
+      continuationPendingRef: { current: false },
+      activeSegmentSessionIdRef: { current: 'segment-old-001' },
+      messagesRef: {
+        current: [
+          { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+          { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+          { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+        ],
+      },
+    });
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-old-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }));
+      window.updateMessages?.(JSON.stringify([
+        { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+      ]));
+    });
+
+    const preBindUpdater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(preBindUpdater).toBeTypeOf('function');
+    preBindUpdater!([
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+    ]);
+
+    expect(window.__continuedSegmentPendingTailMessages).toEqual([
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+    ]);
+
+    act(() => {
+      window.setSessionId?.('segment-new-001');
+    });
+
+    expect(window.__continuedSegmentHistoryPrefixSessionId).toBe('segment-new-001');
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBe('segment-new-001');
+    expect(opts.currentSessionIdRef.current).toBe('segment-new-001');
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      window.updateMessages?.(JSON.stringify([
+        { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+        { type: 'assistant', content: '3', timestamp: '2026-07-24T14:18:09.000Z' },
+      ]));
+    });
+
+    const updater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(updater).toBeTypeOf('function');
+
+    const nextVisibleMessages = updater!([
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-24T14:17:05.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-24T14:17:15.000Z' },
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-24T14:17:45.000Z' },
+    ]);
+
+    expect(nextVisibleMessages.map((message) => `${message.type}:${message.content}`)).toEqual([
+      'user:1+1=?',
+      'assistant:2',
+      'user:再+1=?',
+      'assistant:3',
+    ]);
+    expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+    expect(window.__continuedSegmentFirstSnapshotSessionId).toBeNull();
+  });
+
   it('completeContinuedSegmentTransition explicitly closes the continued runtime state', () => {
     const opts = createOptions({
       continuationPendingRef: { current: true },
@@ -1079,6 +1574,91 @@ describe('useWindowCallbacks integration', () => {
       'assistant:4',
     ]);
     expect(window.__continuedSegmentPendingTailMessages).toBeNull();
+  });
+
+  it('silent switch pre-bind keeps the second same-text follow-up cached until the new segment binds', () => {
+    /**
+     * 中文注释：
+     * 该用例直接对应 2026-07-26 的真实日志链路。
+     * 1. 旧前缀里已经有一轮真实的“再+1=？”；
+     * 2. 第二次 silent switch 的 pre-bind 阶段又先收到一条新的真实“再+1=？”，但此时还没有新的 sessionId；
+     * 3. 前端必须先缓存这条新 tail，而不是把两条同文案真实追问一起提前展示到可见列表；
+     * 4. authoritative snapshot 最终仍应保留这两条真实 user turn，本用例只约束 pre-bind 显示策略。
+     */
+    const opts = createOptions({
+      currentProviderRef: { current: 'codex' },
+      currentSessionIdRef: { current: 'segment-first-001' },
+      continuationPendingRef: { current: true },
+      logicalConversationIdRef: { current: 'logical-001' },
+      activeSegmentSessionIdRef: { current: 'segment-first-001' },
+      messagesRef: {
+        current: [
+          { type: 'user', content: '1+1=?', timestamp: '2026-07-26T11:58:00.888Z' },
+          { type: 'assistant', content: '2', timestamp: '2026-07-26T11:58:10.000Z' },
+          { type: 'system', content: '已切换到 BuyCode-Pro-Codex / gpt-5.4-mini', timestamp: '2026-07-26T11:58:12.000Z' },
+          { type: 'user', content: '再+1=？', timestamp: '2026-07-26T11:58:18.614Z' },
+          { type: 'assistant', content: '3', timestamp: '2026-07-26T11:58:34.000Z' },
+          { type: 'system', content: '已切换到 Codex CLI Login / gpt-5.4-mini', timestamp: '2026-07-26T11:58:40.000Z' },
+        ],
+      },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-first-001',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_codex_provider',
+      }));
+      window.updateMessages?.(JSON.stringify([
+        { type: 'user', content: '再+1=？', timestamp: '2026-07-26T11:58:58.971Z' },
+      ]));
+    });
+
+    const preBindUpdater = (opts.setMessages as any).mock.calls.at(-1)?.[0] as ((messages: ClaudeMessage[]) => ClaudeMessage[]) | undefined;
+    expect(preBindUpdater).toBeTypeOf('function');
+
+    const previousVisibleMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-26T11:58:00.888Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-26T11:58:10.000Z' },
+      { type: 'system', content: '已切换到 BuyCode-Pro-Codex / gpt-5.4-mini', timestamp: '2026-07-26T11:58:12.000Z' },
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-26T11:58:18.614Z' },
+      { type: 'assistant', content: '3', timestamp: '2026-07-26T11:58:34.000Z' },
+      { type: 'system', content: '已切换到 Codex CLI Login / gpt-5.4-mini', timestamp: '2026-07-26T11:58:40.000Z' },
+    ] satisfies ClaudeMessage[];
+
+    const preBindVisibleMessages = preBindUpdater!(previousVisibleMessages);
+
+    expect(preBindVisibleMessages).toEqual(previousVisibleMessages);
+    expect(preBindVisibleMessages.filter((message) => message.type === 'user' && message.content === '再+1=？')).toHaveLength(1);
+    expect(window.__continuedSegmentPendingTailMessages).toEqual([
+      { type: 'user', content: '再+1=？', timestamp: '2026-07-26T11:58:58.971Z' },
+    ]);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued pending tail cached',
+      expect.objectContaining({
+        preserveDecision: 'cache_pending_tail',
+        pendingTailCount: 1,
+        firstMessagePreview: '再+1=？',
+        repeatedUserOnlyTailSuppressed: true,
+        repeatedUserOnlyTailComparableContent: '再+1=？',
+      }),
+    );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'CodexRuntime.Frontend',
+      'continued prefix merge skipped',
+      expect.objectContaining({
+        skipReason: 'prefix_session_id_mismatch',
+        preserveDecision: 'cache_pending_tail',
+        awaitingFirstSessionId: true,
+        pendingTailCount: 1,
+        repeatedUserOnlyTailSuppressed: true,
+        repeatedUserOnlyTailComparableContent: '再+1=？',
+      }),
+    );
   });
 
   it('ignores duplicate history snapshot when restore key and snapshot signature are unchanged', () => {
@@ -1933,6 +2513,129 @@ describe('useWindowCallbacks integration', () => {
     expect(opts.setStatus).not.toHaveBeenCalled();
   });
 
+
+
+  /**
+   * 中文注释：
+   * Task 4/5：runtime_continue_authoritative + send-time silent switch 上下文下，
+   * clearMessages 可记录 clear 事件，但不能把可见 messages 列表置空。
+   */
+  it('runtime_continue_authoritative clear keeps visible messages when silent-switch continued context is active', () => {
+    const opts = createOptions();
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    window.__continuedSegmentPendingReason = 'send_time_model';
+    window.__continuedSegmentPendingSourceSessionId = 'segment-source';
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-23T10:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-23T10:00:01.000Z' },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.(
+        'logical-001|runtime_continue|null',
+        'snapshot-signature-skip-clear',
+        'runtime_continue_authoritative',
+      );
+      window.clearMessages?.();
+    });
+
+    expect(opts.setMessages).not.toHaveBeenCalledWith([]);
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      'HistoryRestore.Frontend',
+      'clearMessagesBeforeRestore',
+      expect.objectContaining({
+        restoreKind: 'runtime_continue_authoritative',
+        skipVisibleMessageClear: true,
+      }),
+    );
+  });
+
+  /**
+   * 中文注释：
+   * Task 5：一次发送中即使发生多次 authoritative restore，也不应先把可见列表清成空数组。
+   * 最终仍由 updateMessages replace 接管 transcript。
+   */
+  it('repeated runtime_continue_authoritative restores do not blank the visible transcript', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+    (opts.setMessages as any).mockClear();
+
+    window.__continuedSegmentPendingReason = 'send_time_model';
+    window.__continuedSegmentPendingSourceSessionId = 'segment-source';
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-23T10:00:00.000Z' },
+    ];
+
+    const midSnapshot: ClaudeMessage[] = [
+      { type: 'user', content: '1+1=?', timestamp: '2026-07-23T10:00:00.000Z' },
+      { type: 'assistant', content: '2', timestamp: '2026-07-23T10:00:01.000Z' },
+      { type: 'user', content: '再+1=?', timestamp: '2026-07-23T10:01:00.000Z' },
+    ];
+    const finalSnapshot: ClaudeMessage[] = [
+      ...midSnapshot,
+      { type: 'assistant', content: '3', timestamp: '2026-07-23T10:01:05.000Z' },
+    ];
+
+    act(() => {
+      window.prepareHistoryRestoreSnapshot?.('k1|runtime_continue|t1', 'sig-1', 'runtime_continue_authoritative');
+      window.clearMessages?.();
+      window.updateMessages?.(JSON.stringify(midSnapshot));
+      window.prepareHistoryRestoreSnapshot?.('k1|runtime_continue|t2', 'sig-2', 'runtime_continue_authoritative');
+      window.clearMessages?.();
+      window.updateMessages?.(JSON.stringify(finalSnapshot));
+    });
+
+    const emptyClears = (opts.setMessages as any).mock.calls.filter((call: unknown[]) => {
+      return Array.isArray(call[0]) && call[0].length === 0;
+    });
+    expect(emptyClears).toHaveLength(0);
+
+    const lastUpdater = (opts.setMessages as any).mock.calls.at(-1)[0] as (messages: ClaudeMessage[]) => ClaudeMessage[];
+    expect(lastUpdater([{ type: 'user', content: 'stale', timestamp: 'x' }])).toEqual(finalSnapshot);
+  });
+
+  /**
+   * 中文注释：
+   * Task 2：silent switch 预热后 completeContinuedSegmentTransition 不应再出现 missing prefix cache。
+   */
+  it('completeContinuedSegmentTransition does not report missing prefix cache after silent begin', () => {
+    const opts = createOptions({
+      currentSessionIdRef: { current: 'segment-source' },
+      messagesRef: {
+        current: [
+          { type: 'user', content: '1+1=?', timestamp: '2026-07-23T10:00:00.000Z' },
+        ],
+      },
+    });
+    const diagnosticSpy = vi.spyOn(debugModule, 'emitFrontendDiagnosticLog').mockImplementation(() => {});
+    renderHook(() => useWindowCallbacks(opts));
+
+    act(() => {
+      (window as any).beginContinuedSegmentTransition?.(JSON.stringify({
+        sourceSessionId: 'segment-source',
+        logicalConversationId: 'logical-001',
+        switchReason: 'send_time_model',
+      }));
+      window.setSessionId?.('segment-new');
+      window.completeContinuedSegmentTransition?.(JSON.stringify({
+        sessionId: 'segment-new',
+        logicalConversationId: 'logical-001',
+        activeSegmentSessionId: 'segment-new',
+        sourceSessionId: 'segment-source',
+        parentSegmentSessionId: 'segment-source',
+      }));
+    });
+
+    const missingPrefixLogs = diagnosticSpy.mock.calls.filter((call) => (
+      call[1] === 'window.completeContinuedSegmentTransition missing prefix cache'
+    ));
+    expect(missingPrefixLogs).toHaveLength(0);
+    expect(window.__continuedSegmentHistoryPrefixMessages).toHaveLength(1);
+  });
+
   // ===== clearMessages resets all transient UI state =====
 
   it('clearMessages resets streaming refs, loading, thinking, and status', () => {
@@ -2045,6 +2748,12 @@ describe('useWindowCallbacks integration', () => {
     (opts.setMessages as any).mockClear();
 
     const restoreRequestKey = 'logical-restore-002|runtime_continue|transition-009';
+    // 中文注释：构造 silent-switch-continued 上下文，使 clearMessages 仅清理 transient 而不清空可见列表。
+    window.__continuedSegmentPendingReason = 'send_time_model';
+    window.__continuedSegmentPendingSourceSessionId = 'segment-001';
+    window.__continuedSegmentHistoryPrefixMessages = [
+      { type: 'user', content: 'old visible history', timestamp: '2026-07-16T10:58:00.000Z' },
+    ];
     const authoritativeMessages: ClaudeMessage[] = [
       {
         type: 'user',
@@ -2101,8 +2810,11 @@ describe('useWindowCallbacks integration', () => {
       'clearMessagesBeforeRestore',
       expect.objectContaining({
         restoreRequestKey,
+        skipVisibleMessageClear: true,
       }),
     );
+    // 中文注释：允许记录 clear 事件，但不能把可见消息列表置空；最终由 updateMessages replace 接管。
+    expect(opts.setMessages).not.toHaveBeenCalledWith([]);
     expect(diagnosticSpy).toHaveBeenCalledWith(
       'HistoryRestore.Frontend',
       'applyHistoryRestoreSnapshot',

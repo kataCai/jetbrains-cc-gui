@@ -193,7 +193,15 @@ export const appendOptimisticMessageIfMissing = (
  * Extract comparable text content from a user message for deduplication matching.
  * Handles both direct content string and raw.message.content array format.
  */
-const getUserMessageComparableContent = (message: ClaudeMessage): string => {
+/**
+ * 提取用户消息的可比较文本内容。
+ * 该 helper 统一处理 `message.content` 与 `raw.message.content` 两种来源，
+ * 供 optimistic 去重、continued 过渡态对齐等场景复用，避免不同调用点各自实现文本抽取逻辑。
+ *
+ * @param message 待提取文本的消息
+ * @return 适合做用户消息语义比较的纯文本内容；无法提取时返回空字符串
+ */
+export const getUserMessageComparableContent = (message: ClaudeMessage): string => {
   if (message.type !== 'user') return message.content || '';
   const rawContent = (message.raw as any)?.message?.content ?? (message.raw as any)?.content;
   if (!Array.isArray(rawContent)) {
@@ -211,7 +219,15 @@ const getUserMessageComparableContent = (message: ClaudeMessage): string => {
  * 该字段由后端在历史恢复/聚合快照中下发；当 optimistic user 也带上同一 identity 时，
  * 前端应优先按 identity 对齐，而不是继续依赖时间窗和文本匹配。
  */
-const getMessageIdentityKey = (message: ClaudeMessage | undefined): string => {
+/**
+ * 提取消息的稳定语义 identity key。
+ * 该字段由后端在 authoritative snapshot 等场景下提供，
+ * 前端可优先据此判断两条消息是否属于同一条逻辑消息。
+ *
+ * @param message 待读取 identity 的消息
+ * @return 去除空白后的稳定 identity key；不存在时返回空字符串
+ */
+export const getMessageIdentityKey = (message: ClaudeMessage | undefined): string => {
   const key = message?.messageIdentity?.key;
   return typeof key === 'string' && key.trim().length > 0 ? key : '';
 };

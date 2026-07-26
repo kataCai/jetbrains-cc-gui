@@ -245,6 +245,137 @@ export function registerSessionAndSdkCallbacks(
    *
    * @param sessionId 若已知真实 sessionId，则同步刷新当前 session 与活动分段锚点
    */
+
+  /**
+   * 解析 silent continued 预热载荷。
+   * 后端 send-time silent switch 会传入 JSON；这里把空白字符串归一化为 null，
+   * 保证后续写入 transition cache 时不把空串当成有效 source/logical id。
+   *
+   * @param payload 后端 bridge 传入的预热参数
+   * @return 归一化后的 sourceSessionId / logicalConversationId / switchReason
+   */
+  const parseBeginContinuedSegmentPayload = (payload?: string): {
+    sourceSessionId: string | null;
+    logicalConversationId: string | null;
+    switchReason: string | null;
+  } => {
+    const normalize = (value: unknown): string | null => (
+      typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+    );
+    if (typeof payload !== 'string' || payload.trim().length === 0) {
+      return { sourceSessionId: null, logicalConversationId: null, switchReason: null };
+    }
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object') {
+        return { sourceSessionId: normalize(payload), logicalConversationId: null, switchReason: null };
+      }
+      return {
+        sourceSessionId: normalize(parsed.sourceSessionId),
+        logicalConversationId: normalize(parsed.logicalConversationId),
+        switchReason: normalize(parsed.switchReason),
+      };
+    } catch {
+      return { sourceSessionId: normalize(payload), logicalConversationId: null, switchReason: null };
+    }
+  };
+
+  /**
+   * 初始化 continued transition cache（prefix / pending 元数据）。
+   * 该 helper 同时服务于显式 createContinuedSegment 与 send-time silent switch 预热：
+   * 只复用缓存初始化，不执行 setCurrentSessionId(null)、可见列表清空、toast/ready 等显式 UI 过渡动作，
+   * 避免 silent switch 重新暴露空白态。
+   *
+   * @param params.sourceSessionId 稳定 source 锚点
+   * @param params.logicalConversationId 逻辑会话 id；可为空
+   * @param params.switchReason 切换原因标签；silent switch 通常为 send_time_*
+   * @param params.mode 调用来源，用于诊断日志区分显式/静默路径
+   * @return 无返回值
+   */
+  const initializeContinuedTransitionCache = (params: {
+    sourceSessionId: string | null;
+    logicalConversationId?: string | null;
+    switchReason?: string | null;
+    mode: 'explicit' | 'silent_switch';
+  }) => {
+    const sourceSessionId = params.sourceSessionId?.trim() || null;
+    const logicalConversationId = params.logicalConversationId?.trim()
+      || options.logicalConversationIdRef.current?.trim()
+      || null;
+    const switchReason = params.switchReason?.trim() || null;
+    const prefixMessages = Array.isArray(options.messagesRef.current)
+      ? options.messagesRef.current.slice()
+      : [];
+
+    // 中文注释：只写 continued 过渡缓存，不清理可见消息，也不把 currentSessionId 置空。
+    // silent switch 场景下用户仍应看到旧历史；显式路径的清空/置空由 createContinuedSegment 自己处理。
+    window.__continuedSegmentFirstSnapshotSessionId = null;
+    window.__continuedSegmentHistoryPrefixMessages = prefixMessages;
+    window.__continuedSegmentHistoryPrefixSessionId = null;
+    window.__continuedSegmentPendingTailMessages = null;
+    window.__continuedSegmentPendingSourceSessionId = sourceSessionId;
+    window.__continuedSegmentPendingLogicalConversationId = logicalConversationId;
+    window.__continuedSegmentPendingCreatedAt = Date.now();
+    window.__continuedSegmentPendingReason = switchReason;
+    window.__continuedSegmentAwaitingFirstSessionId = true;
+
+    applyContinuationPending(true);
+    if (sourceSessionId) {
+      setContinuationSourceSessionId(sourceSessionId);
+    }
+
+    emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'initializeContinuedTransitionCache applied', {
+      mode: params.mode,
+      sourceSessionId,
+      logicalConversationId,
+      switchReason,
+      prefixCacheCount: prefixMessages.length,
+      currentSessionId: currentSessionIdRef.current,
+      continuationPending: true,
+    });
+  };
+
+  /**
+   * send-time silent switch 的前端静默预热入口。
+   * 后端在真正创建新 session 前调用本方法：只建立 continued 过渡态与 prefix cache，
+   * 不弹 toast、不清空可见历史、不把 currentSessionId 置空，从而保证后续 setSessionId
+   * 命中 continued 分支而不是 ordinary session branch。
+   *
+   * @param payload JSON 字符串，至少包含 sourceSessionId / logicalConversationId / switchReason
+   * @return 无返回值
+   */
+  const beginContinuedSegmentTransition = (payload?: string) => {
+    const begin = parseBeginContinuedSegmentPayload(payload);
+    const sourceSessionId = begin.sourceSessionId
+      || currentSessionIdRef.current?.trim()
+      || options.activeSegmentSessionIdRef.current?.trim()
+      || null;
+    if (!sourceSessionId) {
+      emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.beginContinuedSegmentTransition aborted missing source anchor', {
+        payload: typeof payload === 'string' ? payload.slice(0, 200) : null,
+        currentSessionId: currentSessionIdRef.current,
+      });
+      return;
+    }
+
+    // 中文注释：这是静默切模型续聊，不弹提示，但必须共享 continued 过渡态。
+    initializeContinuedTransitionCache({
+      sourceSessionId,
+      logicalConversationId: begin.logicalConversationId,
+      switchReason: begin.switchReason,
+      mode: 'silent_switch',
+    });
+
+    emitFrontendDiagnosticLog('CodexRuntime.Frontend', 'window.beginContinuedSegmentTransition applied', {
+      sourceSessionId,
+      logicalConversationId: window.__continuedSegmentPendingLogicalConversationId ?? null,
+      switchReason: window.__continuedSegmentPendingReason ?? null,
+      prefixCacheCount: window.__continuedSegmentHistoryPrefixMessages?.length ?? null,
+      currentSessionId: currentSessionIdRef.current,
+      sessionTransitioning: window.__sessionTransitioning === true,
+    });
+  };
+
   const completeContinuedSegmentTransition = (payload?: string) => {
     const completion = parseContinuedCompletionPayload(payload);
     const normalizedSessionId = completion.sessionId;
@@ -475,6 +606,10 @@ export function registerSessionAndSdkCallbacks(
     }
   };
 
+  window.beginContinuedSegmentTransition = (payload?: string) => {
+    beginContinuedSegmentTransition(payload);
+  };
+
   window.completeContinuedSegmentTransition = (payload?: string) => {
     completeContinuedSegmentTransition(payload);
   };
@@ -482,6 +617,12 @@ export function registerSessionAndSdkCallbacks(
   window.abortContinuedSegmentTransition = (sessionId?: string) => {
     abortContinuedSegmentTransition(sessionId);
   };
+
+  const pendingBeginContinuedTransitionPayload = window.__pendingBeginContinuedSegmentTransitionPayload;
+  if (typeof pendingBeginContinuedTransitionPayload === 'string') {
+    delete window.__pendingBeginContinuedSegmentTransitionPayload;
+    window.beginContinuedSegmentTransition(pendingBeginContinuedTransitionPayload || undefined);
+  }
 
   const pendingContinuedTransitionPayload = window.__pendingCompleteContinuedSegmentTransitionPayload
     ?? window.__pendingCompleteContinuedSegmentTransitionSessionId;

@@ -539,6 +539,15 @@ if (typeof window !== 'undefined' && !window.setSessionId) {
   };
 }
 
+
+if (typeof window !== 'undefined' && !window.beginContinuedSegmentTransition) {
+  debugLog('[Main] Pre-registering beginContinuedSegmentTransition placeholder');
+  window.beginContinuedSegmentTransition = (payload?: string) => {
+    debugLog('[Main] Storing pending continued transition begin:', payload ?? '');
+    window.__pendingBeginContinuedSegmentTransitionPayload = payload ?? '';
+  };
+}
+
 if (typeof window !== 'undefined' && !window.completeContinuedSegmentTransition) {
   debugLog('[Main] Pre-registering completeContinuedSegmentTransition placeholder');
   window.completeContinuedSegmentTransition = (payload?: string) => {

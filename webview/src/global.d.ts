@@ -124,6 +124,7 @@ interface Window {
   /**
    * continued segment 元数据收口完成后，由后端显式通知前端结束 continued 过渡态。
    */
+  beginContinuedSegmentTransition?: (payload?: string) => void;
   completeContinuedSegmentTransition?: (sessionId?: string) => void;
   /**
    * continued segment 创建失败后，显式回滚前端到旧 session 并清理过渡缓存。
@@ -511,6 +512,7 @@ interface Window {
   /**
    * Pending continued transition abort signal before React callbacks mount.
    */
+  __pendingBeginContinuedSegmentTransitionPayload?: string;
   __pendingAbortContinuedSegmentTransitionSessionId?: string;
 
   /**
