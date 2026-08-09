@@ -64,6 +64,7 @@ interface CodexProviderSectionProps {
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onFetchCodexProviderModels: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
+  onDuplicateCodexProvider?: (provider: CodexProviderConfig) => void;
   onAuthorizeCodexLocalConfig?: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   showHeader?: boolean;
@@ -127,6 +128,7 @@ const CodexProviderSection = ({
   onDeleteCodexProvider,
   onFetchCodexProviderModels,
   onTestCodexProvider,
+  onDuplicateCodexProvider,
   onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
   showHeader = true,
@@ -415,6 +417,15 @@ const CodexProviderSection = ({
                             ? 'codicon codicon-loading codicon-modifier-spin'
                             : 'codicon codicon-plug'} />
                         </button>
+                        {onDuplicateCodexProvider && (
+                          <button
+                            className={sharedStyles.iconBtn}
+                            onClick={() => onDuplicateCodexProvider(provider)}
+                            title={t('settings.codexProvider.copyProvider')}
+                          >
+                            <span className="codicon codicon-copy" />
+                          </button>
+                        )}
                         <button
                           className={sharedStyles.iconBtn}
                           onClick={() => onEditCodexProvider(provider)}

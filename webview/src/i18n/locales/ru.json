@@ -569,6 +569,7 @@
         "customModelsHint": "Добавьте дополнительные модели для этого провайдера. Пользовательские модели будут отображаться вверху списка выбора",
         "noCustomModels": "Нет пользовательских моделей",
         "addModel": "Добавить модель",
+        "fetchModelsMissingConfigTooltip": "Настройте Base URL и API Key перед получением списка моделей.",
         "modelIdPlaceholder": "ID модели (обязательно, например, gpt-4o)",
         "modelLabelPlaceholder": "Отображаемое имя (необязательно)",
         "modelDescPlaceholder": "Описание модели (необязательно)",
@@ -625,9 +626,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "Fetch Model List",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "Fetch Model List",
       "fetchModelsLoading": "Fetching Model List",
-      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet."
+      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet.",
+      "copyProvider": "Копировать конфигурацию провайдера",
+      "fetchModelsResult": {
+        "added": "{{providerName}}: добавлено {{addedCount}} моделей. Пропущено {{duplicateCount}} дубликатов и {{invalidCount}} некорректных записей.",
+        "noNewModels": "{{providerName}}: новых моделей не найдено. Пропущено {{duplicateCount}} дубликатов и {{invalidCount}} некорректных записей.",
+        "draftFetched": "{{providerName}}: для текущего черновика получено {{fetchedCount}} моделей. Пропущено {{duplicateCount}} дубликатов и {{invalidCount}} некорректных записей.",
+        "localRemoteDiscovered": "Локальная конфигурация Codex: синхронизировано {{totalCount}} моделей с {{baseUrl}} ({{addedCount}} новых). Пропущено {{duplicateCount}} дубликатов и {{invalidCount}} некорректных записей.",
+        "localFallbackRefreshed": "Локальная конфигурация Codex: резервный каталог моделей обновлён. Используются встроенные модели и текущая локальная модель, потому что безопасный путь удалённого обнаружения недоступен.",
+        "removedStaleSuffix": " Из предыдущего кэша удалено {{removedCount}} устаревших моделей."
+      }
 
     },
     "agent": {

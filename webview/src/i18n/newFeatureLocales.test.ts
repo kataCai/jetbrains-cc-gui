@@ -1,6 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import en from './locales/en.json';
+import es from './locales/es.json';
+import fr from './locales/fr.json';
+import hi from './locales/hi.json';
+import ja from './locales/ja.json';
+import ko from './locales/ko.json';
+import ptBR from './locales/pt-BR.json';
+import ru from './locales/ru.json';
 import zh from './locales/zh.json';
+import zhTW from './locales/zh-TW.json';
+
+const ALL_LOCALES = {
+  en,
+  es,
+  fr,
+  hi,
+  ja,
+  ko,
+  'pt-BR': ptBR,
+  ru,
+  zh,
+  'zh-TW': zhTW,
+} as const;
 
 const REQUIRED_NEW_FEATURE_KEYS = [
   'settings.basic.taskReminder.label',
@@ -138,6 +159,17 @@ const REQUIRED_NEW_FEATURE_KEYS = [
   'settings.codexProvider.deleteModelConfirmMessageReadonly',
 ] as const;
 
+const REQUIRED_ALL_LOCALE_CODEX_FETCH_KEYS = [
+  'settings.codexProvider.dialog.fetchModelsMissingConfigTooltip',
+  'settings.codexProvider.copyProvider',
+  'settings.codexProvider.fetchModelsResult.draftFetched',
+  'settings.codexProvider.fetchModelsResult.added',
+  'settings.codexProvider.fetchModelsResult.noNewModels',
+  'settings.codexProvider.fetchModelsResult.localRemoteDiscovered',
+  'settings.codexProvider.fetchModelsResult.localFallbackRefreshed',
+  'settings.codexProvider.fetchModelsResult.removedStaleSuffix',
+] as const;
+
 function getValue(locale: Record<string, unknown>, keyPath: string): unknown {
   return keyPath
     .split('.')
@@ -153,6 +185,20 @@ describe('new feature locale coverage', () => {
     expect(getValue(en as Record<string, unknown>, keyPath)).toEqual(expect.any(String));
     expect(getValue(zh as Record<string, unknown>, keyPath)).toEqual(expect.any(String));
   });
+
+  /**
+   * 验证 Codex provider 拉模相关文案在所有已支持语言中都完整存在。
+   * 该断言专门防止“英文/简中补了新键，但其它 locale 静默回退英文”的回归，
+   * 同时覆盖这次修复中被误删的 `fetchModelsResult.*` 旧键。
+   */
+  it.each(Object.entries(ALL_LOCALES))(
+    'defines Codex draft-model-fetch locale keys in %s',
+    (_localeName, locale) => {
+      for (const keyPath of REQUIRED_ALL_LOCALE_CODEX_FETCH_KEYS) {
+        expect(getValue(locale as Record<string, unknown>, keyPath)).toEqual(expect.any(String));
+      }
+    },
+  );
 
   it('keeps remote collaboration Chinese copy readable', () => {
     const remoteCollab = getValue(zh as Record<string, unknown>, 'settings.remoteCollab') as Record<string, unknown>;

@@ -41,6 +41,8 @@ vi.mock('react-i18next', () => ({
         'settings.codexProvider.dialog.models': '模型列表',
         'settings.codexProvider.dialog.modelAliasHelp': '模型列表决定该 provider 在聊天区可选的模型项。',
         'settings.codexProvider.dialog.addModelRow': '添加模型',
+        'settings.codexProvider.fetchModels': '获取模型列表',
+        'settings.codexProvider.fetchModelsLoading': '正在获取模型列表',
         'settings.codexProvider.dialog.modelIdPlaceholder': '模型 ID',
         'settings.codexProvider.dialog.modelLabelPlaceholder': '显示名称',
         'settings.codexProvider.dialog.modelDescriptionPlaceholder': '模型描述',
@@ -262,6 +264,192 @@ describe('CodexProviderDialog', () => {
   });
 
   /**
+   * 验证复制入口属于供应商卡片，而不是编辑弹窗内的模型行。
+   * 弹窗只保留添加、删除和高级 JSON 编辑能力，避免把“复制整个供应商配置”误解成复制单个模型。
+   */
+  it('不应在编辑弹窗模型行中显示复制模型入口', () => {
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={{
+          id: 'provider-with-model',
+          name: 'Managed Gateway',
+          authMode: 'api_key',
+          requestMode: 'codex_sdk',
+          baseUrl: 'https://gateway.example.com/v1',
+          apiKey: 'sk-test-12345678',
+          models: [
+            {
+              id: 'gateway-chat',
+              label: 'Gateway Chat',
+              description: 'Gateway model',
+              reasoningEffort: 'high',
+            },
+          ],
+        }}
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: '复制模型' })).toBeNull();
+  });
+
+  /**
+   * 验证模型列表允许为空时仍可正常保存。
+   * 该场景用于覆盖“当前 provider 先保存空配置，再通过同步模型补齐”的工作流，
+   * 因此前端不能再用 `modelsRequired` 阻断提交。
+   */
+  it('应允许保存空模型列表并提交空 models 数组', () => {
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={{
+          id: 'provider-empty-models',
+          name: 'Empty Models Provider',
+          authMode: 'api_key',
+          requestMode: 'codex_sdk',
+          baseUrl: 'https://gateway.example.com/v1',
+          apiKey: 'sk-test-12345678',
+          models: [],
+        }}
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      models: [],
+    }));
+    expect(addToast).not.toHaveBeenCalledWith('请至少配置一个模型', 'error');
+  });
+
+  /**
+   * 验证新增/复制草稿也能直接触发“获取模型列表”。
+   * 当前业务确认该能力不能只限于已保存 provider：用户需要在新增或复制后、保存前，
+   * 直接基于当前草稿里的 Base URL 与凭据发现远端模型。
+   * 断言意图：
+   * 1. `provider === null` 时按钮仍然存在；
+   * 2. 点击后会把当前草稿字段交给上层回调，而不是要求先保存。
+   */
+  it('应允许在新增或复制草稿中直接获取模型列表', () => {
+    const onFetchModels = vi.fn();
+
+    render(
+      <CodexProviderDialog
+        isOpen
+        provider={null}
+        initialProviderData={{
+          name: 'Copied Draft Provider',
+          authMode: 'api_key',
+          requestMode: 'codex_sdk',
+          baseUrl: 'https://copied.example.com/v1',
+          apiKey: 'sk-copied',
+          models: [],
+        }}
+        draftRequestId="draft-copy-1"
+        onClose={onClose}
+        onSave={onSave}
+        onFetchModels={onFetchModels}
+        addToast={addToast}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'Edited Draft Provider' } });
+    fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }));
+
+    expect(onFetchModels).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Edited Draft Provider',
+      authMode: 'api_key',
+      requestMode: 'codex_sdk',
+      baseUrl: 'https://copied.example.com/v1',
+      apiKey: 'sk-copied',
+    }));
+  });
+
+  /**
+   * 验证“获取模型列表”入口只回填当前草稿里的 models 子树。
+   * 用户在同步前对 providerName / remark 做出的未保存编辑必须保留，
+   * 否则后端刷新 provider 列表后会把正在编辑的草稿整表覆盖掉。
+   */
+  it('应基于当前草稿获取模型并只追加缺失模型', () => {
+    const onFetchModels = vi.fn();
+    const baseProvider = {
+      id: 'provider-sync-models',
+      name: 'Sync Target Provider',
+      authMode: 'api_key' as const,
+      requestMode: 'codex_sdk' as const,
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test-12345678',
+      models: [
+        {
+          id: 'legacy-model',
+          label: 'Legacy Model',
+          description: 'legacy description',
+        },
+      ],
+    };
+
+    const { rerender } = render(
+      <CodexProviderDialog
+        isOpen
+        provider={baseProvider}
+        draftRequestId="draft-edit-1"
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+        onFetchModels={onFetchModels}
+        fetchedDraftModels={null}
+        fetchedDraftModelsRevision={0}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'Edited Provider Name' } });
+    fireEvent.change(screen.getByLabelText('备注'), { target: { value: 'Edited Remark' } });
+    fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }));
+
+    expect(onFetchModels).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'draft-edit-1',
+      name: 'Edited Provider Name',
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test-12345678',
+    }));
+
+    rerender(
+      <CodexProviderDialog
+        isOpen
+        provider={baseProvider}
+        draftRequestId="draft-edit-1"
+        onClose={onClose}
+        onSave={onSave}
+        addToast={addToast}
+        onFetchModels={onFetchModels}
+        fetchedDraftModels={{
+          providerId: 'provider-sync-models',
+          modelIds: ['legacy-model', 'synced-model'],
+          duplicateCount: 0,
+          skippedCount: 0,
+        }}
+        fetchedDraftModelsRevision={1}
+      />,
+    );
+
+    expect((screen.getByLabelText('供应商名称') as HTMLInputElement).value).toBe('Edited Provider Name');
+    expect((screen.getByLabelText('备注') as HTMLInputElement).value).toBe('Edited Remark');
+    expect(screen.getByDisplayValue('legacy-model')).toBeTruthy();
+    expect(screen.getByDisplayValue('Legacy Model')).toBeTruthy();
+    expect(screen.getAllByDisplayValue('synced-model')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: '高级 JSON 编辑' }));
+    expect((screen.getByLabelText('模型 JSON') as HTMLTextAreaElement).value).toContain('"id": "legacy-model"');
+    expect((screen.getByLabelText('模型 JSON') as HTMLTextAreaElement).value).toContain('"id": "synced-model"');
+  });
+
+  /**
    * 验证当前只有 codex_sdk 可以作为新建 provider 的可选请求模式。
    * 未落地模式仍保留在下拉列表中用于传达规划方向，但必须以 disabled 形式呈现，
    * 防止用户继续创建“看起来能配、实际上跑不起来”的假配置。
@@ -440,6 +628,34 @@ describe('CodexProviderDialog mode validation helpers', () => {
         adapterExtras: {},
       },
     })).toBe('settings.codexProvider.dialog.adapterIdRequired');
+  });
+
+  /**
+   * 验证空模型列表不再被视为校验错误。
+   * 这样用户可以先保存 provider 骨架，再通过“同步模型”入口把远端模型列表补齐回来。
+   */
+  it('allows an empty model list during draft validation', () => {
+    expect(validateCodexProviderDraft({
+      providerName: 'Empty Models Provider',
+      authMode: 'api_key',
+      requestMode: 'codex_sdk',
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test',
+      apiKeyEnv: '',
+      normalizedModels: [],
+      ccSwitchProxy: {
+        proxyEndpoint: '',
+        providerRoute: '',
+        requestPath: '',
+        requestHeaders: {},
+      },
+      customAdapter: {
+        adapterId: '',
+        adapterEndpoint: '',
+        adapterHeaders: {},
+        adapterExtras: {},
+      },
+    })).toBeNull();
   });
 
   it('exposes a distinct mode description key for each request mode', () => {

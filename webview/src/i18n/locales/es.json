@@ -557,6 +557,7 @@
         "customModelsHint": "Add extra models supported by this provider. Custom models will appear at the top of the model selection list",
         "noCustomModels": "No custom models",
         "addModel": "Add Model",
+        "fetchModelsMissingConfigTooltip": "Configura Base URL y la API Key antes de obtener la lista de modelos.",
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
@@ -613,9 +614,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "Fetch Model List",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "Fetch Model List",
       "fetchModelsLoading": "Fetching Model List",
-      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet."
+      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet.",
+      "copyProvider": "Copiar configuración del proveedor",
+      "fetchModelsResult": {
+        "added": "{{providerName}}: se agregaron {{addedCount}} modelos. Se omitieron {{duplicateCount}} duplicados y {{invalidCount}} entradas no válidas.",
+        "noNewModels": "{{providerName}}: no se encontraron modelos nuevos. Se omitieron {{duplicateCount}} duplicados y {{invalidCount}} entradas no válidas.",
+        "draftFetched": "{{providerName}}: se obtuvieron {{fetchedCount}} modelos para el borrador actual. Se omitieron {{duplicateCount}} duplicados y {{invalidCount}} entradas no válidas.",
+        "localRemoteDiscovered": "Configuración local de Codex: se sincronizaron {{totalCount}} modelos desde {{baseUrl}} ({{addedCount}} nuevos). Se omitieron {{duplicateCount}} duplicados y {{invalidCount}} entradas no válidas.",
+        "localFallbackRefreshed": "Configuración local de Codex: se actualizó el catálogo de respaldo. Se usan los modelos integrados más el modelo local actual porque no hay una ruta remota segura disponible.",
+        "removedStaleSuffix": " Se eliminaron {{removedCount}} modelos obsoletos del caché anterior."
+      }
 
     },
     "agent": {

@@ -273,4 +273,240 @@ describe('useCodexProviderManagement', () => {
       'add_codex_provider:{"id":"provider-adapter-1","name":"Adapter Provider","authMode":"api_key","requestMode":"custom_adapter","apiKey":"sk-adapter","models":[{"id":"adapter-model","label":"Adapter Model"}],"customAdapter":{"adapterId":"minimax-adapter","adapterEndpoint":"http://127.0.0.1:8080/adapter/codex","adapterHeaders":{"Authorization":"Bearer adapter"},"adapterExtras":{"provider":"minimax","mode":"responses"}}}'
     );
   });
+
+  /**
+   * 验证空模型列表在保存时仍会显式透传为 `models: []`。
+   * 只有这样后端更新现有 provider 时，才能真正清空旧模型而不是因为字段缺失继续保留历史配置。
+   */
+  it('preserves an explicit empty models array when saving a Codex provider', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleAddCodexProvider();
+    });
+
+    act(() => {
+      result.current.handleSaveCodexProvider({
+        id: 'provider-empty-models',
+        name: 'Provider Empty Models',
+        authMode: 'api_key',
+        requestMode: 'codex_sdk',
+        baseUrl: 'https://gateway.example.com/v1',
+        apiKey: 'sk-empty',
+        models: [],
+      });
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'add_codex_provider:{"id":"provider-empty-models","name":"Provider Empty Models","authMode":"api_key","requestMode":"codex_sdk","baseUrl":"https://gateway.example.com/v1","apiKey":"sk-empty","models":[]}'
+    );
+  });
+
+  /**
+   * 验证供应商卡片复制只生成新增态草稿，不复用原 provider 的 id、运行状态或诊断字段。
+   * 该断言覆盖复制链路最容易出错的边界：编辑弹窗必须按新增模式打开，保存时由现有逻辑生成新 ID。
+   */
+  it('opens a duplicate provider as a sanitized add-dialog draft', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+    const sourceProvider = {
+      id: 'provider-source',
+      name: 'Provider Source',
+      remark: 'source remark',
+      providerType: 'custom_gateway',
+      presetId: 'custom_gateway',
+      authMode: 'api_key' as const,
+      requestMode: 'codex_sdk' as const,
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-source',
+      apiKeyEnv: 'SOURCE_API_KEY',
+      models: [{ id: 'source-model', label: 'Source Model' }],
+      messageEnvVars: [{ key: 'MESSAGE_ENV', value: 'source' }],
+      mcpEnvVars: [{ key: 'MCP_ENV', value: 'source' }],
+      isActive: true,
+      createdAt: 123,
+      apiKeyMasked: 'sk-s******urce',
+      effectiveConfigSource: 'managed_provider',
+    };
+
+    act(() => {
+      result.current.handleDuplicateCodexProvider(sourceProvider);
+    });
+
+    expect(result.current.codexProviderDialog.isOpen).toBe(true);
+    expect(result.current.codexProviderDialog.provider).toBeNull();
+    expect(result.current.codexProviderDialog.initialProviderData).toEqual({
+      name: 'Provider Source 副本',
+      remark: 'source remark',
+      providerType: 'custom_gateway',
+      presetId: 'custom_gateway',
+      authMode: 'api_key',
+      requestMode: 'codex_sdk',
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-source',
+      apiKeyEnv: 'SOURCE_API_KEY',
+      models: [{ id: 'source-model', label: 'Source Model' }],
+      messageEnvVars: [{ key: 'MESSAGE_ENV', value: 'source' }],
+      mcpEnvVars: [{ key: 'MCP_ENV', value: 'source' }],
+    });
+  });
+
+  /**
+   * 验证编辑弹窗的拉模动作传递当前草稿字段，而不是只传已保存 provider id。
+   * 这样用户刚修改的 Base URL、API Key 或环境变量才能真正参与后端模型发现。
+   */
+  it('sends the current provider draft through the dedicated draft-model bridge', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleFetchCodexProviderModelsFromDraft({
+        id: 'provider-draft',
+        name: 'Draft Provider',
+        authMode: 'api_key',
+        requestMode: 'codex_sdk',
+        baseUrl: 'https://new-gateway.example.com/v1',
+        apiKey: 'sk-new',
+        apiKeyEnv: 'NEW_API_KEY',
+        models: [{ id: 'existing-model', label: 'Existing Model' }],
+      });
+    });
+
+    expect(window.sendToJava).toHaveBeenCalledWith(
+      'fetch_codex_provider_models_from_draft:{"providerId":"provider-draft","name":"Draft Provider","authMode":"api_key","requestMode":"codex_sdk","baseUrl":"https://new-gateway.example.com/v1","apiKey":"sk-new","apiKeyEnv":"NEW_API_KEY","models":[{"id":"existing-model","label":"Existing Model"}],"messageEnvVars":[],"mcpEnvVars":[]}'
+    );
+    expect(result.current.syncingCodexProviderDraftId).toBe('provider-draft');
+  });
+
+  /**
+   * 验证草稿级拉模结果只进入弹窗专属状态，不刷新 provider 列表，也不把远端结果直接写入持久化配置。
+   * 弹窗组件后续会依据 modelIds 做“只补缺失项”的本地合并。
+   */
+  it('stores draft model fetch results without changing the provider list', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+
+    act(() => {
+      result.current.handleEditCodexProvider({
+        id: 'provider-draft-result',
+        name: 'Draft Result Provider',
+        authMode: 'api_key',
+        requestMode: 'codex_sdk',
+        baseUrl: 'https://gateway.example.com/v1',
+        apiKey: 'sk-test',
+        models: [{ id: 'legacy-model', label: 'Legacy Model' }],
+      });
+    });
+    const draftRequestId = (result.current.codexProviderDialog as any).draftRequestId
+      ?? result.current.codexProviderDialog.provider?.id;
+
+    act(() => {
+      result.current.handleFetchCodexProviderModelsFromDraft({
+        id: draftRequestId,
+        name: 'Draft Result Provider',
+        authMode: 'api_key',
+        requestMode: 'codex_sdk',
+        baseUrl: 'https://gateway.example.com/v1',
+        apiKey: 'sk-test',
+      });
+    });
+
+    act(() => {
+      result.current.updateCodexProviderDraftModels({
+        providerId: draftRequestId,
+        modelIds: ['legacy-model', 'synced-model'],
+        duplicateCount: 1,
+        skippedCount: 0,
+      });
+    });
+
+    expect(result.current.codexProviders).toEqual([]);
+    expect(result.current.codexProviderDialog.provider?.models).toEqual([
+      { id: 'legacy-model', label: 'Legacy Model' },
+    ]);
+    expect(result.current.codexProviderDialog.draftModelsResult).toEqual({
+      providerId: draftRequestId,
+      modelIds: ['legacy-model', 'synced-model'],
+      duplicateCount: 1,
+      skippedCount: 0,
+    });
+    expect(result.current.codexProviderDialog.draftModelsRevision).toBe(1);
+    expect(result.current.syncingCodexProviderDraftId).toBe('');
+  });
+
+  /**
+   * 验证关闭后重新打开同一 provider 时，旧草稿拉模回包不会污染新的编辑会话。
+   * 该场景覆盖真实竞态：
+   * 1. 用户对同一 provider 发起第一次拉模；
+   * 2. 在回包到达前关闭并重新打开弹窗，再次发起第二次拉模；
+   * 3. 第一次旧回包必须被忽略，且不能清掉第二次请求的 loading。
+   */
+  it('ignores stale draft model fetch results after reopening the same provider', () => {
+    const { result } = renderHook(() => useCodexProviderManagement());
+    const provider = {
+      id: 'provider-race',
+      name: 'Race Provider',
+      authMode: 'api_key' as const,
+      requestMode: 'codex_sdk' as const,
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-race',
+      models: [{ id: 'legacy-model', label: 'Legacy Model' }],
+    };
+
+    act(() => {
+      result.current.handleEditCodexProvider(provider);
+    });
+    const firstDraftRequestId = (result.current.codexProviderDialog as any).draftRequestId
+      ?? result.current.codexProviderDialog.provider?.id;
+
+    act(() => {
+      result.current.handleFetchCodexProviderModelsFromDraft({
+        ...provider,
+        id: firstDraftRequestId,
+      });
+    });
+
+    act(() => {
+      result.current.handleCloseCodexProviderDialog();
+      result.current.handleEditCodexProvider(provider);
+    });
+    const secondDraftRequestId = (result.current.codexProviderDialog as any).draftRequestId
+      ?? result.current.codexProviderDialog.provider?.id;
+
+    act(() => {
+      result.current.handleFetchCodexProviderModelsFromDraft({
+        ...provider,
+        id: secondDraftRequestId,
+      });
+    });
+
+    act(() => {
+      result.current.updateCodexProviderDraftModels({
+        providerId: firstDraftRequestId,
+        modelIds: ['stale-model'],
+        duplicateCount: 0,
+        skippedCount: 0,
+      });
+    });
+
+    expect(secondDraftRequestId).not.toBe(firstDraftRequestId);
+    expect(result.current.codexProviderDialog.draftModelsResult).toBeNull();
+    expect(result.current.codexProviderDialog.draftModelsRevision).toBe(0);
+    expect(result.current.syncingCodexProviderDraftId).toBe(secondDraftRequestId);
+
+    act(() => {
+      result.current.updateCodexProviderDraftModels({
+        providerId: secondDraftRequestId,
+        modelIds: ['fresh-model'],
+        duplicateCount: 0,
+        skippedCount: 0,
+      });
+    });
+
+    expect(result.current.codexProviderDialog.draftModelsResult).toEqual({
+      providerId: secondDraftRequestId,
+      modelIds: ['fresh-model'],
+      duplicateCount: 0,
+      skippedCount: 0,
+    });
+    expect(result.current.codexProviderDialog.draftModelsRevision).toBe(1);
+    expect(result.current.syncingCodexProviderDraftId).toBe('');
+  });
 });

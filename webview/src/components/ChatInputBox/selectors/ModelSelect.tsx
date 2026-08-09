@@ -288,6 +288,12 @@ export const ModelSelect = ({
       }
     }
 
+    if (currentProvider === 'codex') {
+      // 中文注释：Codex 的模型标签必须以配置/目录返回值为准，避免 locale 把原始大小写改写后再影响用户选择与请求。
+      const codexLabel = (model.label || rawModelId).trim();
+      return append1MContextSuffix(codexLabel, rawModelId, show1MContext);
+    }
+
     const defaultModel = DEFAULT_MODEL_MAP[rawModelId];
     const labelKey = MODEL_LABEL_KEYS[rawModelId];
     const hasCustomLabel = defaultModel && model.label && model.label !== defaultModel.label;

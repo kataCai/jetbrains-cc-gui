@@ -782,6 +782,7 @@
         "noCustomModels": "No custom models",
         "addModel": "Add Model",
         "addModelRow": "Add Model",
+        "fetchModelsMissingConfigTooltip": "Configure Base URL and API Key before fetching models.",
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-5.4)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescriptionPlaceholder": "Model description (optional)",
@@ -867,9 +868,11 @@
       "fetchModels": "Fetch Model List",
       "fetchModelsLoading": "Fetching Model List",
       "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet.",
+      "copyProvider": "Copy Provider Configuration",
       "fetchModelsResult": {
         "added": "{{providerName}}: Added {{addedCount}} models. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
         "noNewModels": "{{providerName}}: No new models found. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
+        "draftFetched": "{{providerName}}: Fetched {{fetchedCount}} models for the current draft. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
         "localRemoteDiscovered": "Local Codex Config: Synced {{totalCount}} models from {{baseUrl}} ({{addedCount}} new). Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.",
         "localFallbackRefreshed": "Local Codex Config: Refreshed fallback model catalog. Using builtin models plus the current local model because no safe remote discovery path is available.",
         "removedStaleSuffix": " Removed {{removedCount}} stale models from the previous cache."
@@ -1744,10 +1747,6 @@
       "gpt53codex": {
         "label": "GPT-5.3-Codex",
         "description": "Latest frontier agentic coding model with enhanced capabilities."
-      },
-      "gpt55": {
-        "label": "GPT-5.5",
-        "description": "Latest frontier model with stronger capabilities."
       },
       "gpt54": {
         "label": "gpt-5.4",

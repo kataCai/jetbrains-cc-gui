@@ -6,6 +6,7 @@ import {
   resolveCodexRuntimeSource,
   type ProviderConfig,
   type CodexProviderConfig,
+  type CodexProviderDraftModelsFetchResult,
   type CodexProviderTestResult,
 } from '../../../types/provider';
 import type { AgentConfig } from '../../../types/agent';
@@ -126,6 +127,7 @@ export interface SettingsWindowCallbacksDeps {
   setCodexConfigLoading: (loading: boolean) => void;
   setCodexModelCatalogLoading: (loading: boolean) => void;
   setSyncingCodexProviderId: (providerId: string) => void;
+  setSyncingCodexProviderDraftId: (providerId: string) => void;
   setTestingCodexProviderId: (providerId: string) => void;
   setCommitGenerationEnabled?: (enabled: boolean) => void;
   setAiTitleGenerationEnabled?: (enabled: boolean) => void;
@@ -154,6 +156,7 @@ export interface SettingsWindowCallbacksDeps {
     result: { success: boolean; imported: number; updated: number; skipped: number; error?: string }
   ) => void;
   updateCodexProviders: (providers: CodexProviderConfig[]) => void;
+  updateCodexProviderDraftModels: (result: CodexProviderDraftModelsFetchResult) => void;
   updateActiveCodexProvider: (provider: CodexProviderConfig) => void;
   updateCurrentCodexConfig: (config: unknown) => void;
   updateCodexModelCatalog: (catalog: import('../../../types/provider').CodexModelCatalogItem[]) => void;
@@ -225,6 +228,16 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     });
 
+    window.onCodexProviderDraftModelsFetched = (jsonStr: string) => {
+      try {
+        const result = JSON.parse(jsonStr) as CodexProviderDraftModelsFetchResult;
+        d().updateCodexProviderDraftModels(result);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse Codex draft model fetch result:', error);
+        d().setSyncingCodexProviderDraftId('');
+      }
+    };
+
     const unsubscribeActiveCodexProvider = subscribeActiveCodexProvider((jsonStr: string) => {
       try {
         const activeProvider: CodexProviderConfig = JSON.parse(jsonStr);
@@ -249,6 +262,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     window.showError = (message: string) => {
       d().showAlert('error', translate('toast.operationFailed'), message);
       d().setSyncingCodexProviderId('');
+      d().setSyncingCodexProviderDraftId('');
       d().setLoading(false);
       // 删除/同步统一目录失败时也必须退出 loading，避免 Models 面板卡在“加载中”。
       d().setCodexModelCatalogLoading(false);
@@ -340,6 +354,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       const resolvedMessage = resolveShowSuccessMessage(message, translate);
       d().showAlert('success', translate('toast.operationSuccess'), resolvedMessage);
       d().setSyncingCodexProviderId('');
+      d().setSyncingCodexProviderDraftId('');
       d().setSavingNodePath(false);
       d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
@@ -693,6 +708,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.onCodexHistoryImageCacheDirBrowsed = undefined;
       window.showSuccess = undefined;
       window.showSuccessI18n = undefined;
+      window.onCodexProviderDraftModelsFetched = undefined;
       window.onEditorFontConfigReceived = undefined;
       window.onUiFontConfigReceived = undefined;
       window.onIdeThemeReceived = previousOnIdeThemeReceived;

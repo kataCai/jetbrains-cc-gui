@@ -639,6 +639,7 @@
         "noCustomModels": "暫無自訂模型",
         "addModel": "新增模型",
         "addModelRow": "新增模型",
+        "fetchModelsMissingConfigTooltip": "請先設定 Base URL 與 API Key，再取得模型列表。",
         "modelIdPlaceholder": "模型 ID（必填，如 gpt-5.4）",
         "modelLabelPlaceholder": "顯示名稱（選填）",
         "modelDescriptionPlaceholder": "模型描述（選填）",
@@ -716,9 +717,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "??????",
-      "fetchModelsLoading": "????????",
-      "fetchModelsUnsupportedTooltip": "??????????????????????"
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "取得模型列表",
+      "fetchModelsLoading": "正在取得模型列表",
+      "fetchModelsUnsupportedTooltip": "目前供應商鑑權方式或請求模式尚不支援模型發現。",
+      "copyProvider": "複製供應商設定",
+      "fetchModelsResult": {
+        "added": "{{providerName}}：已新增 {{addedCount}} 個模型。已略過 {{duplicateCount}} 個重複項與 {{invalidCount}} 個無效項。",
+        "noNewModels": "{{providerName}}：未發現新模型。已略過 {{duplicateCount}} 個重複項與 {{invalidCount}} 個無效項。",
+        "draftFetched": "{{providerName}}：已為目前草稿取得 {{fetchedCount}} 個模型。已略過 {{duplicateCount}} 個重複項與 {{invalidCount}} 個無效項。",
+        "localRemoteDiscovered": "本地 Codex 配置：已從 {{baseUrl}} 同步 {{totalCount}} 個模型（新增 {{addedCount}} 個）。已略過 {{duplicateCount}} 個重複項與 {{invalidCount}} 個無效項。",
+        "localFallbackRefreshed": "本地 Codex 配置：已刷新兜底模型目錄。由於沒有可用的安全遠端發現路徑，當前使用內建模型加上本地目前模型。",
+        "removedStaleSuffix": " 已從舊快取移除 {{removedCount}} 個過期模型。"
+      }
 
     },
     "agent": {
@@ -1371,10 +1382,6 @@
       "gpt53codex": {
         "label": "GPT-5.3-Codex",
         "description": "最新前沿智慧編程模型，能力全面增強"
-      },
-      "gpt55": {
-        "label": "GPT-5.5",
-        "description": "最新前沿模型，能力進一步增強"
       },
       "gpt54": {
         "label": "gpt-5.4",

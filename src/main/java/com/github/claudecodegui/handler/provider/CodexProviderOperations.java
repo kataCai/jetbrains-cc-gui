@@ -646,6 +646,58 @@ public class CodexProviderOperations {
     }
 
     /**
+     * 基于前端编辑弹窗传入的当前 provider 草稿发现模型。
+     * 该流程不按 provider id 回读旧配置，不调用持久化 merge，也不刷新 provider 列表或统一模型目录；
+     * 成功后只通过专用 JS 回调返回模型 ID 和发现统计，供弹窗本地追加缺失模型。
+     *
+     * @param content 当前编辑弹窗草稿 JSON，必须包含 providerId、authMode、requestMode 及连接凭据
+     */
+    public void handleFetchCodexProviderModelsFromDraft(String content) {
+        try {
+            JsonObject request = content == null || content.isBlank()
+                    ? new JsonObject()
+                    : GSON.fromJson(content, JsonObject.class);
+            String providerId = readString(request, "providerId");
+            if (providerId.isBlank()) {
+                throw new IllegalArgumentException("Missing provider id for draft model discovery");
+            }
+
+            JsonObject draftProvider = request.deepCopy();
+            draftProvider.remove("providerId");
+            CodexProviderModelDiscoveryService.DiscoveryResult discoveryResult =
+                    codexProviderModelDiscoveryService.discoverModels(draftProvider);
+
+            JsonObject resultPayload = new JsonObject();
+            resultPayload.addProperty("providerId", providerId);
+            resultPayload.add("modelIds", GSON.toJsonTree(discoveryResult.getModelIds()));
+            resultPayload.addProperty("duplicateCount", discoveryResult.getDuplicateCount());
+            resultPayload.addProperty("skippedCount", discoveryResult.getSkippedCount());
+
+            JsonObject successParams = new JsonObject();
+            successParams.addProperty("providerName", firstNonBlank(readString(draftProvider, "name"), providerId));
+            successParams.addProperty("fetchedCount", discoveryResult.getModelIds().size());
+            successParams.addProperty("duplicateCount", discoveryResult.getDuplicateCount());
+            successParams.addProperty("invalidCount", discoveryResult.getSkippedCount());
+            String successMessage = buildI18nSuccessPayload(
+                    "settings.codexProvider.fetchModelsResult.draftFetched",
+                    successParams
+            );
+
+            invokeLaterOrRun(() -> {
+                context.callJavaScript(
+                        "window.onCodexProviderDraftModelsFetched",
+                        context.escapeJs(resultPayload.toString())
+                );
+                context.callJavaScript("window.showSuccess", context.escapeJs(successMessage));
+            });
+        } catch (Exception exception) {
+            LOG.warn("[ProviderHandler] Failed to fetch Codex models from draft: " + exception.getMessage(), exception);
+            invokeLaterOrRun(() ->
+                    context.callJavaScript("window.showError", context.escapeJs(exception.getMessage())));
+        }
+    }
+
+    /**
      * 同步本地 Codex 配置卡片的模型目录。
      * 该链路不会走 managed provider 的 merge，而是把同步结果写入 CLI/Login discovered models 缓存，
      * 供统一目录后续优先复用。

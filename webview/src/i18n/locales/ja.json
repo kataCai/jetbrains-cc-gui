@@ -562,6 +562,7 @@
         "customModelsHint": "Add extra models supported by this provider. Custom models will appear at the top of the model selection list",
         "noCustomModels": "No custom models",
         "addModel": "Add Model",
+        "fetchModelsMissingConfigTooltip": "モデル一覧を取得する前に Base URL と API Key を設定してください。",
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
@@ -618,9 +619,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "????????",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "モデル一覧を取得",
       "fetchModelsLoading": "?????????",
-      "fetchModelsUnsupportedTooltip": "???????????????????????????????????"
+      "fetchModelsUnsupportedTooltip": "???????????????????????????????????",
+      "copyProvider": "プロバイダー設定をコピー",
+      "fetchModelsResult": {
+        "added": "{{providerName}}: {{addedCount}} 件のモデルを追加しました。{{duplicateCount}} 件の重複項目と {{invalidCount}} 件の無効項目をスキップしました。",
+        "noNewModels": "{{providerName}}: 新しいモデルは見つかりませんでした。{{duplicateCount}} 件の重複項目と {{invalidCount}} 件の無効項目をスキップしました。",
+        "draftFetched": "{{providerName}}: 現在の下書き用に {{fetchedCount}} 件のモデルを取得しました。{{duplicateCount}} 件の重複項目と {{invalidCount}} 件の無効項目をスキップしました。",
+        "localRemoteDiscovered": "ローカル Codex 設定: {{baseUrl}} から {{totalCount}} 件のモデルを同期しました（新規 {{addedCount}} 件）。{{duplicateCount}} 件の重複項目と {{invalidCount}} 件の無効項目をスキップしました。",
+        "localFallbackRefreshed": "ローカル Codex 設定: フォールバック用モデルカタログを更新しました。安全なリモート検出経路がないため、現在は組み込みモデルと現在のローカルモデルを使用しています。",
+        "removedStaleSuffix": " 以前のキャッシュから {{removedCount}} 件の古いモデルを削除しました。"
+      }
 
     },
     "agent": {

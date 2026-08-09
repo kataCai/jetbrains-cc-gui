@@ -786,6 +786,7 @@
         "noCustomModels": "暂无自定义模型",
         "addModel": "添加模型",
         "addModelRow": "添加模型",
+        "fetchModelsMissingConfigTooltip": "请先配置 Base URL 和 API Key，再获取模型列表。",
         "modelIdPlaceholder": "模型 ID（必填，如 gpt-5.4）",
         "modelLabelPlaceholder": "显示名称（可选）",
         "modelDescriptionPlaceholder": "模型描述（可选）",
@@ -871,9 +872,11 @@
       "fetchModels": "获取模型列表",
       "fetchModelsLoading": "正在获取模型列表",
       "fetchModelsUnsupportedTooltip": "当前供应商鉴权方式或请求模式暂不支持模型发现。",
+      "copyProvider": "复制供应商配置",
       "fetchModelsResult": {
         "added": "{{providerName}}：已新增 {{addedCount}} 个模型。已跳过 {{duplicateCount}} 个重复项和 {{invalidCount}} 个无效项。",
         "noNewModels": "{{providerName}}：未发现新模型。已跳过 {{duplicateCount}} 个重复项和 {{invalidCount}} 个无效项。",
+        "draftFetched": "{{providerName}}：已为当前草稿获取 {{fetchedCount}} 个模型。已跳过 {{duplicateCount}} 个重复项和 {{invalidCount}} 个无效项。",
         "localRemoteDiscovered": "本地 Codex 配置：已从 {{baseUrl}} 同步到 {{totalCount}} 个模型（新增 {{addedCount}} 个）。已跳过 {{duplicateCount}} 个重复项和 {{invalidCount}} 个无效项。",
         "localFallbackRefreshed": "本地 Codex 配置：已刷新兜底模型目录。由于没有可用的安全远端发现路径，当前使用内置模型加上本地当前模型。",
         "removedStaleSuffix": " 已从旧缓存移除 {{removedCount}} 个过期模型。"
@@ -1749,10 +1752,6 @@
       "gpt53codex": {
         "label": "GPT-5.3-Codex",
         "description": "最新前沿智能编程模型，能力全面增强"
-      },
-      "gpt55": {
-        "label": "GPT-5.5",
-        "description": "最新前沿模型，能力进一步增强"
       },
       "gpt54": {
         "label": "gpt-5.4",

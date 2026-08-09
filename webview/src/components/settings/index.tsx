@@ -315,11 +315,14 @@ const SettingsView = ({
     updateCodexModelCatalog,
     handleAddCodexProvider,
     handleAddCodexProviderWithDraft,
+    handleDuplicateCodexProvider,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
     handleFetchCodexProviderModels,
+    handleFetchCodexProviderModelsFromDraft,
+    updateCodexProviderDraftModels,
     handleDeleteCodexModelCatalogItem,
     confirmDeleteCodexModelCatalogItem,
     cancelDeleteCodexModelCatalogItem,
@@ -329,10 +332,12 @@ const SettingsView = ({
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
     syncingCodexProviderId,
+    syncingCodexProviderDraftId,
     testingCodexProviderId,
     setCodexLoading,
     setCodexConfigLoading,
     setSyncingCodexProviderId,
+    setSyncingCodexProviderDraftId,
     setTestingCodexProviderId,
     saveCodexModelVisibility,
     setCodexModelCatalogLoading,
@@ -405,6 +410,7 @@ const SettingsView = ({
     setCodexConfigLoading,
     setCodexModelCatalogLoading,
     setSyncingCodexProviderId,
+    setSyncingCodexProviderDraftId,
     setTestingCodexProviderId,
     updateProviders,
     updateActiveProvider,
@@ -418,6 +424,7 @@ const SettingsView = ({
     handleAgentImportResult,
     // Note: Prompt-related callbacks are now handled in PromptSection component
     updateCodexProviders,
+    updateCodexProviderDraftModels,
     updateActiveCodexProvider,
     updateCurrentCodexConfig,
     updateCodexModelCatalog,
@@ -695,6 +702,7 @@ const SettingsView = ({
               onDeleteCodexProvider={handleDeleteCodexProvider}
               onFetchCodexProviderModels={handleFetchCodexProviderModels}
               onTestCodexProvider={handleTestCodexProvider}
+              onDuplicateCodexProvider={handleDuplicateCodexProvider}
               onAuthorizeCodexLocalConfig={handleAuthorizeCodexLocalConfig}
               onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
               onRefreshCodexModelCatalog={loadCodexModelCatalog}
@@ -837,10 +845,14 @@ const SettingsView = ({
         deleteCodexModelCatalogConfirm={deleteCodexModelCatalogConfirm}
         onCloseCodexProviderDialog={handleCloseCodexProviderDialog}
         onSaveCodexProvider={handleSaveCodexProviderFromDialog}
+        onFetchCodexProviderDraftModels={handleFetchCodexProviderModelsFromDraft}
+        draftModelsResult={codexProviderDialog.draftModelsResult}
+        draftModelsRevision={codexProviderDialog.draftModelsRevision}
         onConfirmDeleteCodexProvider={confirmDeleteCodexProvider}
         onCancelDeleteCodexProvider={cancelDeleteCodexProvider}
         onConfirmDeleteCodexModelCatalogItem={confirmDeleteCodexModelCatalogItem}
         onCancelDeleteCodexModelCatalogItem={cancelDeleteCodexModelCatalogItem}
+        syncingCodexProviderDraftId={syncingCodexProviderDraftId}
         agentDialog={agentDialog}
         deleteAgentConfirm={deleteAgentConfirm}
         onCloseAgentDialog={handleCloseAgentDialog}

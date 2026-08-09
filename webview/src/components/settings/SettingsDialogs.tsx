@@ -1,6 +1,10 @@
 // SettingsDialogs.tsx
 import { useTranslation } from 'react-i18next';
-import type { ProviderConfig, CodexProviderConfig } from '../../types/provider';
+import type {
+  ProviderConfig,
+  CodexProviderConfig,
+  CodexProviderDraftModelsFetchResult,
+} from '../../types/provider';
 import type { AgentConfig } from '../../types/agent';
 import AlertDialog from '../AlertDialog';
 import type { AlertType } from '../AlertDialog';
@@ -36,10 +40,14 @@ interface SettingsDialogsProps {
   deleteCodexModelCatalogConfirm: DeleteCodexModelCatalogConfirmState;
   onCloseCodexProviderDialog: () => void;
   onSaveCodexProvider: (data: CodexProviderConfig) => void;
+  onFetchCodexProviderDraftModels: (data: CodexProviderConfig) => void;
+  draftModelsResult: CodexProviderDraftModelsFetchResult | null;
+  draftModelsRevision: number;
   onConfirmDeleteCodexProvider: () => void;
   onCancelDeleteCodexProvider: () => void;
   onConfirmDeleteCodexModelCatalogItem: () => void;
   onCancelDeleteCodexModelCatalogItem: () => void;
+  syncingCodexProviderDraftId: string;
 
   // Agent dialog
   agentDialog: AgentDialogState;
@@ -78,10 +86,14 @@ const SettingsDialogs = ({
   deleteCodexModelCatalogConfirm,
   onCloseCodexProviderDialog,
   onSaveCodexProvider,
+  onFetchCodexProviderDraftModels,
+  draftModelsResult,
+  draftModelsRevision,
   onConfirmDeleteCodexProvider,
   onCancelDeleteCodexProvider,
   onConfirmDeleteCodexModelCatalogItem,
   onCancelDeleteCodexModelCatalogItem,
+  syncingCodexProviderDraftId,
   agentDialog,
   deleteAgentConfirm,
   onCloseAgentDialog,
@@ -160,6 +172,11 @@ const SettingsDialogs = ({
         initialProviderData={codexProviderDialog.initialProviderData}
         onClose={onCloseCodexProviderDialog}
         onSave={onSaveCodexProvider}
+        onFetchModels={onFetchCodexProviderDraftModels}
+        draftRequestId={codexProviderDialog.draftRequestId}
+        fetchingModels={codexProviderDialog.draftRequestId === syncingCodexProviderDraftId}
+        fetchedDraftModels={draftModelsResult}
+        fetchedDraftModelsRevision={draftModelsRevision}
         addToast={addToast}
       />
 

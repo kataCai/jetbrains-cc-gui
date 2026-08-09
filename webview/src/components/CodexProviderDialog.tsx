@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   CodexAuthMode,
@@ -7,10 +7,12 @@ import type {
   CodexCustomModel,
   EnvVarEntry,
   CodexProviderConfig,
+  CodexProviderDraftModelsFetchResult,
   CodexRequestMode,
 } from '../types/provider';
 import {
   ENV_VAR_VALUE_MAX_LENGTH,
+  isCodexProviderModelFetchSupported,
   isCodexRequestModeImplemented,
   validateCodexCustomModels,
   validateEnvVarEntries,
@@ -148,6 +150,45 @@ function isEmptyModelRow(model: CodexCustomModel): boolean {
   return !model.id?.trim() && !model.label?.trim() && !model.description?.trim();
 }
 
+/**
+ * 将远端发现的模型 ID 追加到当前弹窗草稿。
+ * 已存在的模型行保持原有 label、description 和 reasoningEffort；
+ * 纯空白占位行会在确实有新结果时移除，避免保存后把无效占位项写入 provider。
+ *
+ * @param currentModels 当前弹窗中的模型行
+ * @param fetchedModelIds 后端发现并去重后的模型 ID
+ * @return 合并后的模型行列表，至少保留一个可编辑占位行
+ */
+function mergeFetchedModelIds(
+  currentModels: CodexCustomModel[],
+  fetchedModelIds: string[] | undefined,
+): CodexCustomModel[] {
+  const normalizedIds = Array.from(new Set(
+    (fetchedModelIds || [])
+      .map((modelId) => modelId.trim())
+      .filter((modelId) => modelId.length > 0),
+  ));
+  if (normalizedIds.length === 0) {
+    return currentModels;
+  }
+
+  const preservedModels = currentModels.filter((model) => !isEmptyModelRow(model));
+  const existingIds = new Set(
+    preservedModels
+      .map((model) => model.id.trim())
+      .filter((modelId) => modelId.length > 0),
+  );
+  const appendedModels = normalizedIds
+    .filter((modelId) => !existingIds.has(modelId))
+    .map((modelId) => ({
+      id: modelId,
+      label: modelId,
+      description: '',
+    }));
+  const mergedModels = [...preservedModels, ...appendedModels];
+  return mergedModels.length > 0 ? mergedModels : [createEmptyModelRow()];
+}
+
 function maskApiKey(value?: string): string {
   const trimmedValue = value?.trim() || '';
   if (trimmedValue.length <= 8) {
@@ -251,9 +292,6 @@ export function validateCodexProviderDraft(draft: CodexProviderDraftValidationIn
     && !draft.apiKeyEnv.trim()) {
     return 'settings.codexProvider.dialog.apiKeyOrEnvRequired';
   }
-  if (draft.normalizedModels.length === 0 && draft.authMode !== 'codex_cli_login') {
-    return 'settings.codexProvider.dialog.modelsRequired';
-  }
   if (draft.requestMode === 'codex_sdk' && !draft.baseUrl.trim()) {
     return 'settings.codexProvider.dialog.baseUrlRequired';
   }
@@ -294,8 +332,17 @@ interface CodexProviderDialogProps {
   isOpen: boolean;
   provider?: CodexProviderConfig | null;
   initialProviderData?: Partial<CodexProviderConfig> | null;
+  /**
+   * 当前弹窗草稿对应的异步请求关联 id。
+   * 新增、复制和重新打开编辑弹窗时都应由上层重新生成，用于隔离旧请求回包。
+   */
+  draftRequestId?: string;
   onClose: () => void;
   onSave: (provider: CodexProviderConfig) => void;
+  onFetchModels?: (provider: CodexProviderConfig) => void;
+  fetchingModels?: boolean;
+  fetchedDraftModels?: CodexProviderDraftModelsFetchResult | null;
+  fetchedDraftModelsRevision?: number;
   addToast: (message: string, type: 'success' | 'error' | 'info') => void;
 }
 
@@ -330,8 +377,13 @@ export default function CodexProviderDialog({
   isOpen,
   provider,
   initialProviderData,
+  draftRequestId,
   onClose,
   onSave,
+  onFetchModels,
+  fetchingModels = false,
+  fetchedDraftModels = null,
+  fetchedDraftModelsRevision = 0,
   addToast,
 }: CodexProviderDialogProps) {
   const { t } = useTranslation();
@@ -357,6 +409,7 @@ export default function CodexProviderDialog({
   const [adapterExtrasJsonText, setAdapterExtrasJsonText] = useState('{}');
   const [messageEnvVars, setMessageEnvVars] = useState<EnvVarEntry[]>([]);
   const [mcpEnvVars, setMcpEnvVars] = useState<EnvVarEntry[]>([]);
+  const lastAppliedDraftModelsRevisionRef = useRef(0);
 
   const selectedPreset = useMemo(
     () => CODEX_PROVIDER_PRESETS.find((preset) => preset.id === providerPreset),
@@ -367,6 +420,8 @@ export default function CodexProviderDialog({
   const isCodexSdkMode = requestMode === 'codex_sdk';
   const isCcSwitchProxyMode = requestMode === 'cc_switch_proxy';
   const isCustomAdapterMode = requestMode === 'custom_adapter';
+  const draftModelFetchSupported = isCodexProviderModelFetchSupported({ authMode, requestMode });
+  const draftModelFetchConfigured = Boolean(baseUrl.trim() && (apiKey.trim() || apiKeyEnv.trim()));
 
   /**
    * 将 provider 数据投影到结构化表单。
@@ -376,6 +431,8 @@ export default function CodexProviderDialog({
     if (!isOpen) {
       return;
     }
+    // 切换弹窗上下文时重置已应用的结果版本，避免旧请求回包误回填到新的编辑草稿。
+    lastAppliedDraftModelsRevisionRef.current = fetchedDraftModelsRevision ?? 0;
     if (provider) {
       setProviderPreset(provider.presetId || provider.providerType || 'custom_gateway');
       setProviderName(provider.name || '');
@@ -422,7 +479,7 @@ export default function CodexProviderDialog({
     );
     setShowApiKey(false);
     setShowAdvancedJsonEditor(false);
-  }, [initialProviderData, isOpen, provider]);
+  }, [draftRequestId, initialProviderData, isOpen, provider]);
 
   useEffect(() => {
     setModelsJsonText(serializeModelsJson(models));
@@ -439,6 +496,15 @@ export default function CodexProviderDialog({
   useEffect(() => {
     setAdapterExtrasJsonText(stringifyJsonObject(customAdapter.adapterExtras as Record<string, unknown> | undefined));
   }, [customAdapter.adapterExtras]);
+
+  useEffect(() => {
+    if (!isOpen || fetchedDraftModelsRevision <= lastAppliedDraftModelsRevisionRef.current) {
+      return;
+    }
+    // 草稿级拉模结果只追加缺失项，显式保留当前弹窗里的其它未保存字段。
+    setModels((currentModels) => mergeFetchedModelIds(currentModels, fetchedDraftModels?.modelIds));
+    lastAppliedDraftModelsRevisionRef.current = fetchedDraftModelsRevision;
+  }, [fetchedDraftModels, fetchedDraftModelsRevision, isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -587,9 +653,44 @@ export default function CodexProviderDialog({
   );
 
   /**
-   * 执行保存并可选激活。
+   * 基于当前弹窗草稿获取远端模型列表。
+   * 发送前重新组装当前表单字段，确保用户尚未保存的 endpoint、凭据和请求模式都参与发现。
+   * 这里始终使用上层分配的 `draftRequestId` 作为异步关联 id，
+   * 这样新增/复制草稿在尚未保存时也能直接拉模，并且旧回包不会误命中新的弹窗会话。
    *
-   * @param autoActivate 是否在保存后立即切换为当前 provider
+   * @return void
+   */
+  const handleFetchModels = () => {
+    if (!draftRequestId || !onFetchModels) {
+      return;
+    }
+    onFetchModels({
+      id: draftRequestId,
+      name: providerName.trim(),
+      providerType: selectedPreset?.providerType || providerPreset,
+      presetId: providerPreset,
+      remark: remark.trim() || undefined,
+      websiteUrl: websiteUrl.trim() || undefined,
+      apiKeyApplyUrl: apiKeyApplyUrl.trim() || undefined,
+      createdAt: provider?.createdAt,
+      authMode,
+      requestMode,
+      baseUrl: baseUrl.trim() || undefined,
+      apiKey: apiKey.trim() || undefined,
+      apiKeyEnv: apiKeyEnv.trim() || undefined,
+      models: normalizedModels,
+      messageEnvVars,
+      mcpEnvVars,
+      ccSwitchProxy,
+      customAdapter,
+    });
+  };
+
+  /**
+   * 执行当前弹窗的保存。
+   * 保存时会统一完成模式级校验、环境变量校验与结构化 payload 组装，然后把结果交给上层 hook 处理。
+   *
+   * @return void
    */
   const handleSave = () => {
     if (requestModeUnavailable) {
@@ -1043,7 +1144,38 @@ export default function CodexProviderDialog({
 
             <div className="form-group">
               <div style={MODEL_HEADER_STYLE}>
-                <label>{t('settings.codexProvider.dialog.modelList')}</label>
+                <div style={INLINE_ACTION_STYLE}>
+                  <label>{t('settings.codexProvider.dialog.modelList')}</label>
+                  {onFetchModels && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleFetchModels}
+                      disabled={
+                        fetchingModels
+                        || !draftRequestId
+                        || !draftModelFetchSupported
+                        || !draftModelFetchConfigured
+                      }
+                      title={fetchingModels
+                        ? t('settings.codexProvider.fetchModelsLoading')
+                        : !draftModelFetchSupported
+                          ? t('settings.codexProvider.fetchModelsUnsupportedTooltip')
+                          : !draftModelFetchConfigured
+                            ? t('settings.codexProvider.dialog.fetchModelsMissingConfigTooltip', {
+                              defaultValue: 'Configure Base URL and API Key before fetching models.',
+                            })
+                            : t('settings.codexProvider.fetchModels')}
+                    >
+                      <span className={fetchingModels
+                        ? 'codicon codicon-loading codicon-modifier-spin'
+                        : 'codicon codicon-refresh'} />
+                      {fetchingModels
+                        ? t('settings.codexProvider.fetchModelsLoading')
+                        : t('settings.codexProvider.fetchModels')}
+                    </button>
+                  )}
+                </div>
                 <small className="form-hint">{t('settings.codexProvider.dialog.modelAliasHelp')}</small>
                 {models.map((model, index) => (
                   <div key={`${index}-${model.id}`} style={MODEL_ROW_STYLE}>

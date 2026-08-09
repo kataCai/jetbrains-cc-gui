@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   CodexModelCatalogItem,
   CodexModelVisibilityConfig,
   CodexProviderConfig,
+  CodexProviderDraftModelsFetchResult,
 } from '../../../types/provider';
 
 const sendToJava = (message: string) => {
@@ -17,6 +18,20 @@ export interface CodexProviderDialogState {
   isOpen: boolean;
   provider: CodexProviderConfig | null;
   initialProviderData?: Partial<CodexProviderConfig> | null;
+  /**
+   * 当前弹窗草稿的异步请求关联 id。
+   * 该值不等于持久化 provider id；新增、复制以及重新打开同一 provider 时都必须生成新值，
+   * 用于隔离旧请求回包，避免把过期结果写回当前草稿。
+   */
+  draftRequestId: string;
+  /**
+   * 草稿级模型发现结果只服务于当前弹窗，不参与 provider 列表刷新或持久化。
+   */
+  draftModelsResult: CodexProviderDraftModelsFetchResult | null;
+  /**
+   * 每次草稿级模型发现成功后递增，通知弹窗仅回填 models 子树。
+   */
+  draftModelsRevision: number;
 }
 
 export interface DeleteCodexConfirmState {
@@ -25,8 +40,8 @@ export interface DeleteCodexConfirmState {
 }
 
 /**
- * 统一模型目录删除确认态。
- * 与 provider 删除确认类似，删除前先弹出确认框，避免误触直接改写 managed provider models 或 exclusion 表。
+ * 统一模型目录删除确认弹窗状态。
+ * 删除目录项前必须显式二次确认，避免误删 managed provider 模型或只读来源模型。
  */
 export interface DeleteCodexModelCatalogConfirmState {
   isOpen: boolean;
@@ -38,6 +53,26 @@ export interface UseCodexProviderManagementOptions {
   onSuccess?: (message: string) => void;
 }
 
+/**
+ * 为当前编辑弹窗生成一次性的草稿请求关联 id。
+ * 优先复用浏览器原生 UUID，回退场景再拼接时间戳和随机串，避免新增模块级可变计数器。
+ *
+ * @return 当前弹窗可安全复用到异步桥接回包匹配的唯一标识
+ */
+function createCodexProviderDraftRequestId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `codex-draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/**
+ * 构建发送到后端桥接层的 provider payload。
+ * 这里会统一裁剪字符串字段，并保留显式的空模型数组，避免“允许空模型保存”的改造在桥接层再次丢失。
+ *
+ * @param providerData 弹窗提交的结构化 provider 数据
+ * @return 可直接序列化后发送给后端的最小 payload
+ */
 function buildCodexProviderPayload(providerData: CodexProviderConfig) {
   const trimmedApiKey = providerData.apiKey?.trim() || '';
   const payload: Partial<CodexProviderConfig> & { id: string; name: string } = {
@@ -53,7 +88,7 @@ function buildCodexProviderPayload(providerData: CodexProviderConfig) {
     presetId: providerData.presetId?.trim() || undefined,
     websiteUrl: providerData.websiteUrl?.trim() || undefined,
     apiKeyApplyUrl: providerData.apiKeyApplyUrl?.trim() || undefined,
-    models: providerData.models && providerData.models.length > 0 ? providerData.models : undefined,
+    models: providerData.models ? providerData.models : undefined,
     ccSwitchProxy: providerData.ccSwitchProxy || undefined,
     customAdapter: providerData.customAdapter || undefined,
   };
@@ -66,121 +101,176 @@ function buildCodexProviderPayload(providerData: CodexProviderConfig) {
   return payload;
 }
 
+/**
+ * 生成供应商复制草稿名称。
+ * 对已带“副本”后缀的名称先去掉旧后缀，避免连续复制时出现重复后缀；
+ * 该名称仍只是新增弹窗默认值，用户可以在保存前继续修改。
+ *
+ * @param sourceName 原供应商名称
+ * @return 适合作为复制草稿默认名称的文本
+ */
+function buildCodexProviderDuplicateName(sourceName: string): string {
+  const normalizedName = sourceName.trim() || 'Codex Provider';
+  return `${normalizedName.replace(/\s+副本(?:\s+\d+)?$/u, '').trim()} 副本`;
+}
+
+/**
+ * 从已保存 provider 提取可编辑配置，生成新增态复制草稿。
+ * 运行状态、持久化 ID、创建时间、掩码凭据和诊断字段均被显式剥离，
+ * 防止复制操作把只读运行时信息误当成新的 provider 配置写回后端。
+ *
+ * @param provider 被复制的已保存 provider
+ * @return 可直接交给新增弹窗的 provider 草稿
+ */
+function buildCodexProviderDuplicateDraft(provider: CodexProviderConfig): Partial<CodexProviderConfig> {
+  return {
+    name: buildCodexProviderDuplicateName(provider.name),
+    remark: provider.remark,
+    providerType: provider.providerType,
+    presetId: provider.presetId,
+    websiteUrl: provider.websiteUrl,
+    apiKeyApplyUrl: provider.apiKeyApplyUrl,
+    authMode: provider.authMode,
+    requestMode: provider.requestMode,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    apiKeyEnv: provider.apiKeyEnv,
+    models: provider.models?.map((model) => ({ ...model })),
+    messageEnvVars: provider.messageEnvVars?.map((entry) => ({ ...entry })),
+    mcpEnvVars: provider.mcpEnvVars?.map((entry) => ({ ...entry })),
+    ccSwitchProxy: provider.ccSwitchProxy
+      ? {
+        ...provider.ccSwitchProxy,
+        requestHeaders: provider.ccSwitchProxy.requestHeaders
+          ? { ...provider.ccSwitchProxy.requestHeaders }
+          : undefined,
+      }
+      : undefined,
+    customAdapter: provider.customAdapter
+      ? {
+        ...provider.customAdapter,
+        adapterHeaders: provider.customAdapter.adapterHeaders
+          ? { ...provider.customAdapter.adapterHeaders }
+          : undefined,
+        adapterExtras: provider.customAdapter.adapterExtras
+          ? { ...provider.customAdapter.adapterExtras }
+          : undefined,
+      }
+      : undefined,
+  };
+}
+
+/**
+ * 统一创建 Codex provider 弹窗状态。
+ * 通过集中收口默认值，避免在打开、关闭、保存和草稿拉模回填时遗漏相关字段。
+ *
+ * @param overrides 当前场景需要覆盖的状态字段
+ * @return 完整的弹窗状态对象
+ */
+function createCodexProviderDialogState(
+  overrides: Partial<CodexProviderDialogState> = {},
+): CodexProviderDialogState {
+  return {
+    isOpen: false,
+    provider: null,
+    initialProviderData: null,
+    draftRequestId: createCodexProviderDraftRequestId(),
+    draftModelsResult: null,
+    draftModelsRevision: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * 管理 Codex provider 列表、弹窗、模型目录以及桥接消息发送。
+ * 该 hook 同时负责把“同步模型”结果以独立草稿通道回填到弹窗态，确保只更新 models 字段，不覆盖其它未保存编辑。
+ *
+ * @param options 页面级成功/失败回调
+ * @return Codex 设置页所需的状态、操作方法与少量 setter
+ */
 export function useCodexProviderManagement(options: UseCodexProviderManagementOptions = {}) {
   const { t } = useTranslation();
   const { onSuccess } = options;
 
-  // Codex provider list state
   const [codexProviders, setCodexProviders] = useState<CodexProviderConfig[]>([]);
-  // 设置页挂载后会立即请求 provider 列表，初始值保持 loading 可避免入口意图在列表回传前被误消费。
   const [codexLoading, setCodexLoading] = useState(true);
 
-  // Codex configuration (reserved for future display)
   const [_codexConfig, setCodexConfig] = useState<any>(null);
   const [_codexConfigLoading, setCodexConfigLoading] = useState(false);
-  // 统一模型目录状态，供设置页 Models 面板直接消费。
-  // 当前聊天区后续也会复用这份目录，避免继续从 active provider 临时拼接模型列表。
   const [codexModelCatalog, setCodexModelCatalog] = useState<CodexModelCatalogItem[]>([]);
   const [codexModelCatalogLoading, setCodexModelCatalogLoading] = useState(true);
 
-  // Codex provider dialog state
-  const [codexProviderDialog, setCodexProviderDialog] = useState<CodexProviderDialogState>({
-    isOpen: false,
-    provider: null,
-    initialProviderData: null,
-  });
-
-  // Codex provider delete confirmation state
+  const [codexProviderDialog, setCodexProviderDialog] = useState<CodexProviderDialogState>(
+    createCodexProviderDialogState(),
+  );
   const [deleteCodexConfirm, setDeleteCodexConfirm] = useState<DeleteCodexConfirmState>({
     isOpen: false,
     provider: null,
   });
-  // 统一目录删除确认态：先弹窗，确认后再发桥接删除请求。
-  const [deleteCodexModelCatalogConfirm, setDeleteCodexModelCatalogConfirm] = useState<DeleteCodexModelCatalogConfirmState>({
-    isOpen: false,
-    catalogItem: null,
-  });
-  // 当前正在执行“测试连接”的 provider id。
-  // 该状态只服务于设置页按钮级反馈，避免用户误判“点击后没有反应”。
+  const [deleteCodexModelCatalogConfirm, setDeleteCodexModelCatalogConfirm] =
+    useState<DeleteCodexModelCatalogConfirmState>({
+      isOpen: false,
+      catalogItem: null,
+    });
   const [testingCodexProviderId, setTestingCodexProviderId] = useState('');
+  const [syncingCodexProviderId, setSyncingCodexProviderId] = useState('');
+  const [syncingCodexProviderDraftId, setSyncingCodexProviderDraftId] = useState('');
 
-  // Load Codex provider list
   const loadCodexProviders = useCallback(() => {
     setCodexLoading(true);
     sendToJava('get_codex_providers:');
   }, []);
 
-  // 当前正在执行“拉取供应商模型列表”的 provider id。
-  // 该状态独立于测试连接状态，避免两个异步动作共用一个 loading 标记后相互覆盖。
-  const [syncingCodexProviderId, setSyncingCodexProviderId] = useState('');
-
-  // Update Codex provider list (used by window callback)
   const updateCodexProviders = useCallback((providersList: CodexProviderConfig[]) => {
     setCodexProviders(providersList);
-    // provider 列表一旦回推，说明本次模型同步链路已经完成，可安全清理按钮级 loading。
-    setSyncingCodexProviderId('');
     setCodexLoading(false);
   }, []);
 
-  // Update active Codex provider (used by window callback)
   const updateActiveCodexProvider = useCallback((activeProvider: CodexProviderConfig) => {
-    if (activeProvider) {
-      setCodexProviders((prev) =>
-        prev.map((p) => (p.id === activeProvider.id
-          ? { ...p, ...activeProvider, isActive: true }
-          : { ...p, isActive: false }))
-      );
-      // Custom models are now plugin-level, managed by PluginCustomModels in ProviderTabSection.
-      // No longer sync provider-level customModels to localStorage.
+    if (!activeProvider) {
+      return;
     }
+    setCodexProviders((prev) =>
+      prev.map((provider) => (provider.id === activeProvider.id
+        ? { ...provider, ...activeProvider, isActive: true }
+        : { ...provider, isActive: false })),
+    );
   }, []);
 
-  // Update Codex configuration (used by window callback)
   const updateCurrentCodexConfig = useCallback((config: any) => {
     setCodexConfig(config);
     setCodexConfigLoading(false);
   }, []);
 
   /**
-   * 主动拉取统一的 Codex 模型目录。
-   * 该目录由后端聚合 CLI Login、managed provider 等多个来源，设置页只消费聚合结果。
+   * 主动加载统一的 Codex 模型目录。
+   * 该目录聚合 CLI Login、managed provider 等多种来源，设置页直接消费聚合结果。
+   *
+   * @return void
    */
   const loadCodexModelCatalog = useCallback(() => {
     setCodexModelCatalogLoading(true);
     sendToJava('get_codex_model_catalog:');
   }, []);
 
-  /**
-   * 用后端返回的统一模型目录刷新本地状态。
-   * @param catalog 后端返回的完整目录数组
-   */
   const updateCodexModelCatalog = useCallback((catalog: CodexModelCatalogItem[]) => {
     setCodexModelCatalog(catalog);
     setCodexModelCatalogLoading(false);
   }, []);
 
-  /**
-   * 保存模型显示开关配置。
-   * @param visibilityConfig 以 composite key 为主键的可见性配置
-   */
   const saveCodexModelVisibility = useCallback((visibilityConfig: CodexModelVisibilityConfig) => {
     sendToJava(`set_codex_model_visibility:${JSON.stringify(visibilityConfig)}`);
   }, []);
 
-  /**
-   * 打开统一模型目录删除确认框。
-   * 不在这里直接发桥接请求，避免误点击立刻触发 managed 硬删除或 exclusion 写入。
-   *
-   * @param catalogItem 当前被用户点击删除的模型目录项
-   */
   const handleDeleteCodexModelCatalogItem = useCallback((catalogItem: CodexModelCatalogItem) => {
     setDeleteCodexModelCatalogConfirm({ isOpen: true, catalogItem });
   }, []);
 
   /**
    * 确认删除统一模型目录中的单个目录项。
-   * 该操作与“仅保存 visible=false”的展示开关不同，后端需要根据来源执行真正的删除或逻辑排除，
-   * 因此前端必须透传完整目录标识并主动进入目录刷新 loading 状态。
+   * 目录项的真实删除策略由后端根据来源判断，前端只负责透传关键标识并进入刷新态。
+   *
+   * @return void
    */
   const confirmDeleteCodexModelCatalogItem = useCallback(() => {
     const catalogItem = deleteCodexModelCatalogConfirm.catalogItem;
@@ -198,44 +288,67 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     setDeleteCodexModelCatalogConfirm({ isOpen: false, catalogItem: null });
   }, [deleteCodexModelCatalogConfirm.catalogItem]);
 
-  /**
-   * 取消统一模型目录删除确认。
-   */
   const cancelDeleteCodexModelCatalogItem = useCallback(() => {
     setDeleteCodexModelCatalogConfirm({ isOpen: false, catalogItem: null });
   }, []);
 
-  // Open add Codex provider dialog
   const handleAddCodexProvider = useCallback(() => {
-    setCodexProviderDialog({ isOpen: true, provider: null, initialProviderData: null });
+    setSyncingCodexProviderDraftId('');
+    setCodexProviderDialog(createCodexProviderDialogState({
+      isOpen: true,
+      provider: null,
+      initialProviderData: null,
+    }));
   }, []);
 
   /**
-   * 使用模型别名预填一个新的 Codex provider 草稿。
-   * 该入口用于把历史“模型别名”升级为真正可运行的 provider 配置，
-   * 但仍然要求用户补齐 Base URL、鉴权等关键字段，避免做错误的自动迁移。
+   * 以预填草稿的方式打开新增 provider 弹窗。
+   * 该入口通常用于把历史模型别名升级为结构化 provider，但仍允许用户继续修改并补齐字段。
    *
    * @param providerDraft 仅用于初始化表单的 provider 草稿
+   * @return void
    */
   const handleAddCodexProviderWithDraft = useCallback((providerDraft: Partial<CodexProviderConfig>) => {
-    setCodexProviderDialog({
+    setSyncingCodexProviderDraftId('');
+    setCodexProviderDialog(createCodexProviderDialogState({
       isOpen: true,
       provider: null,
       initialProviderData: providerDraft,
-    });
+    }));
   }, []);
 
-  // Open edit Codex provider dialog
+  /**
+   * 从现有托管 provider 生成新增态复制草稿并打开编辑弹窗。
+   * 复制操作只复用可编辑配置，绝不把原 provider 的 ID、运行状态和诊断字段带入新增请求。
+   *
+   * @param provider 被复制的已保存 provider
+   * @return void
+   */
+  const handleDuplicateCodexProvider = useCallback((provider: CodexProviderConfig) => {
+    handleAddCodexProviderWithDraft(buildCodexProviderDuplicateDraft(provider));
+  }, [handleAddCodexProviderWithDraft]);
+
   const handleEditCodexProvider = useCallback((provider: CodexProviderConfig) => {
-    setCodexProviderDialog({ isOpen: true, provider, initialProviderData: null });
+    setSyncingCodexProviderDraftId('');
+    setCodexProviderDialog(createCodexProviderDialogState({
+      isOpen: true,
+      provider,
+      initialProviderData: null,
+    }));
   }, []);
 
-  // Close Codex provider dialog
   const handleCloseCodexProviderDialog = useCallback(() => {
-    setCodexProviderDialog({ isOpen: false, provider: null, initialProviderData: null });
+    setSyncingCodexProviderDraftId('');
+    setCodexProviderDialog(createCodexProviderDialogState());
   }, []);
 
-  // Save Codex provider
+  /**
+   * 保存当前弹窗内的 Codex provider。
+   * 新增与编辑都复用同一套 payload 构建逻辑，保存完成后统一关闭弹窗并进入列表刷新态。
+   *
+   * @param providerData 弹窗提交的完整 provider 数据
+   * @return void
+   */
   const handleSaveCodexProvider = useCallback(
     (providerData: CodexProviderConfig) => {
       const isAdding = !codexProviderDialog.provider;
@@ -244,27 +357,20 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
         sendToJava(`add_codex_provider:${JSON.stringify(payload)}`);
         onSuccess?.(t('toast.providerAdded'));
       } else {
-        const updateData = {
+        sendToJava(`update_codex_provider:${JSON.stringify({
           id: providerData.id,
           updates: payload,
-        };
-        sendToJava(`update_codex_provider:${JSON.stringify(updateData)}`);
+        })}`);
         onSuccess?.(t('toast.providerUpdated'));
       }
 
-      // Custom models are now plugin-level, managed by PluginCustomModels in ProviderTabSection.
-      // No longer sync provider-level customModels to localStorage.
-
-      setCodexProviderDialog({ isOpen: false, provider: null, initialProviderData: null });
+      setSyncingCodexProviderDraftId('');
+      setCodexProviderDialog(createCodexProviderDialogState());
       setCodexLoading(true);
     },
-    [codexProviderDialog.provider, onSuccess, t]
+    [codexProviderDialog.provider, onSuccess, t],
   );
 
-  /**
-   * 仅授权读取本地 Codex 配置，不直接切换当前运行时 provider。
-   * 当前前端先按计划约定的事件名发出请求，等待后端补齐独立授权桥接。
-   */
   const handleAuthorizeCodexLocalConfig = useCallback(() => {
     sendToJava('authorize_codex_local_config:');
     setCodexLoading(true);
@@ -273,10 +379,9 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   }, []);
 
   const handleRevokeCodexLocalConfigAuthorization = useCallback((fallbackProviderId?: string) => {
-    const data = {
+    sendToJava(`revoke_codex_local_config_authorization:${JSON.stringify({
       fallbackProviderId: fallbackProviderId ?? '',
-    };
-    sendToJava(`revoke_codex_local_config_authorization:${JSON.stringify(data)}`);
+    })}`);
     setCodexLoading(true);
     setCodexConfigLoading(true);
     setCodexModelCatalogLoading(true);
@@ -288,51 +393,96 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
   }, []);
 
   /**
-   * 触发当前 provider 的远端模型列表拉取。
-   * 该方法只负责维护前端按钮级 loading 状态并发送桥接消息；真正的 URL 归一化、
-   * 鉴权解析、去重合并和成功提示均交由后端处理。
+   * 触发指定 provider 的远端模型列表拉取。
+   * 这里只负责维护按钮级 loading 状态并发送桥接消息，真正的拉取与合并逻辑由后端处理。
    *
-   * @param provider 用户在设置页卡片上点击“获取模型列表”的目标 provider
+   * @param provider 需要同步模型列表的目标 provider
+   * @return void
    */
   const handleFetchCodexProviderModels = useCallback((provider: CodexProviderConfig) => {
     setSyncingCodexProviderId(provider.id);
     sendToJava(`fetch_codex_provider_models:${JSON.stringify({ id: provider.id })}`);
   }, []);
 
-  // Delete Codex provider
+  /**
+   * 基于编辑弹窗当前草稿发起模型发现。
+   * 该桥接消息携带当前表单里的 endpoint、凭据和模式字段，后端不会按 provider id 回读旧配置。
+   * `provider.id` 在这条链路里仅作为弹窗级异步关联 id，不要求等于真实持久化 provider id。
+   *
+   * @param provider 当前弹窗构造出的草稿 provider
+   * @return void
+   */
+  const handleFetchCodexProviderModelsFromDraft = useCallback((provider: CodexProviderConfig) => {
+    const payload = {
+      providerId: provider.id,
+      name: provider.name,
+      authMode: provider.authMode,
+      requestMode: provider.requestMode,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      apiKeyEnv: provider.apiKeyEnv,
+      models: provider.models || [],
+      messageEnvVars: provider.messageEnvVars || [],
+      mcpEnvVars: provider.mcpEnvVars || [],
+      ccSwitchProxy: provider.ccSwitchProxy,
+      customAdapter: provider.customAdapter,
+    };
+    setSyncingCodexProviderDraftId(provider.id);
+    sendToJava(`fetch_codex_provider_models_from_draft:${JSON.stringify(payload)}`);
+  }, []);
+
+  /**
+   * 接收草稿级模型发现结果，并仅写入当前弹窗的临时结果通道。
+   * 结果必须匹配当前仍在编辑的 provider，避免用户切换弹窗后旧请求回包污染新草稿。
+   *
+   * @param result 后端返回的模型 ID 与发现统计
+   * @return void
+   */
+  const updateCodexProviderDraftModels = useCallback((result: CodexProviderDraftModelsFetchResult) => {
+    setCodexProviderDialog((prev) => {
+      if (!prev.isOpen || prev.draftRequestId !== result.providerId) {
+        return prev;
+      }
+      return {
+        ...prev,
+        draftModelsResult: result,
+        draftModelsRevision: prev.draftModelsRevision + 1,
+      };
+    });
+    setSyncingCodexProviderDraftId((currentId) => currentId === result.providerId ? '' : currentId);
+  }, []);
+
   const handleDeleteCodexProvider = useCallback((provider: CodexProviderConfig) => {
     setDeleteCodexConfirm({ isOpen: true, provider });
   }, []);
 
-  // Confirm Codex provider deletion
   const confirmDeleteCodexProvider = useCallback(() => {
     const provider = deleteCodexConfirm.provider;
-    if (!provider) return;
+    if (!provider) {
+      return;
+    }
 
-    const data = { id: provider.id };
-    sendToJava(`delete_codex_provider:${JSON.stringify(data)}`);
+    sendToJava(`delete_codex_provider:${JSON.stringify({ id: provider.id })}`);
     onSuccess?.(t('toast.providerDeleted'));
     setCodexLoading(true);
     setDeleteCodexConfirm({ isOpen: false, provider: null });
-  }, [deleteCodexConfirm.provider, onSuccess]);
+  }, [deleteCodexConfirm.provider, onSuccess, t]);
 
-  // Cancel Codex provider deletion
   const cancelDeleteCodexProvider = useCallback(() => {
     setDeleteCodexConfirm({ isOpen: false, provider: null });
   }, []);
 
   return {
-    // State
     codexProviders,
     codexLoading,
     codexProviderDialog,
     deleteCodexConfirm,
     deleteCodexModelCatalogConfirm,
     syncingCodexProviderId,
+    syncingCodexProviderDraftId,
     testingCodexProviderId,
     codexModelCatalog,
     codexModelCatalogLoading,
-    // Methods
     loadCodexProviders,
     loadCodexModelCatalog,
     updateCodexProviders,
@@ -341,11 +491,14 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     updateCodexModelCatalog,
     handleAddCodexProvider,
     handleAddCodexProviderWithDraft,
+    handleDuplicateCodexProvider,
     handleEditCodexProvider,
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleAuthorizeCodexLocalConfig,
     handleFetchCodexProviderModels,
+    handleFetchCodexProviderModelsFromDraft,
+    updateCodexProviderDraftModels,
     handleDeleteCodexModelCatalogItem,
     confirmDeleteCodexModelCatalogItem,
     cancelDeleteCodexModelCatalogItem,
@@ -355,10 +508,10 @@ export function useCodexProviderManagement(options: UseCodexProviderManagementOp
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
     saveCodexModelVisibility,
-    // Setter
     setCodexLoading,
     setCodexConfigLoading,
     setSyncingCodexProviderId,
+    setSyncingCodexProviderDraftId,
     setTestingCodexProviderId,
     setCodexModelCatalogLoading,
   };

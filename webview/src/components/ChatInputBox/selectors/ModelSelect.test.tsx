@@ -258,10 +258,10 @@ describe('ModelSelect', () => {
   });
 
   /**
-   * 验证 Codex 内置模型标签仍走翻译 key，
-   * 避免并轨后直接把原始 ID 渲染成最终标签。
+   * 验证 Codex 聊天区按钮优先保留配置里的原始模型标签大小写，
+   * 避免 locale 把配置中本来就是小写的 `gpt-5.5` 覆盖成其他展示值。
    */
-  it('应渲染 gpt-5.5 的翻译标签', () => {
+  it('应保留 gpt-5.5 配置里的原始小写标签', () => {
     const model: ModelInfo = {
       id: 'gpt-5.5',
       label: 'gpt-5.5',
@@ -277,14 +277,42 @@ describe('ModelSelect', () => {
       />,
     );
 
-    expect(screen.getByRole('button').textContent).toContain('models.codex.gpt55.label');
+    expect(screen.getByRole('button').textContent).toContain('gpt-5.5');
+    expect(screen.getByRole('button').textContent).not.toContain('models.codex.gpt55.label');
   });
 
   /**
-   * 验证新增的 gpt-5.4-mini 仍走翻译标签，
-   * 避免扩充模型表后部分新模型缺失翻译映射。
+   * 验证 Codex catalog 自定义 label 也必须原样展示，
+   * 避免 provider 已经返回可用标签时又被前端翻译层二次改写。
    */
-  it('应渲染 gpt-5.4-mini 的翻译标签', () => {
+  it('应保留 Codex catalog 返回的自定义标签', () => {
+    const model: ModelInfo & { rawModelId: string; providerLabel: string } = {
+      id: 'managed-openai::gpt-5.5',
+      rawModelId: 'gpt-5.5',
+      label: 'my-gpt-5.5-lowercase',
+      providerLabel: 'Managed OpenAI',
+      description: 'Frontier model for complex coding, research, and real-world work.',
+    };
+
+    render(
+      <ModelSelect
+        value={model.id}
+        selectedCodexSelectionKey={model.id}
+        onChange={vi.fn()}
+        models={[model]}
+        currentProvider="codex"
+      />,
+    );
+
+    expect(screen.getByRole('button').textContent).toContain('my-gpt-5.5-lowercase');
+    expect(screen.getByRole('button').textContent).not.toContain('models.codex.gpt55.label');
+  });
+
+  /**
+   * 验证其他 Codex 内置模型同样优先展示配置中的原始标签，
+   * 避免只有 `gpt-5.5` 修复，而其余小写模型仍继续走翻译键覆盖。
+   */
+  it('应保留 gpt-5.4-mini 配置里的原始标签', () => {
     const model: ModelInfo = {
       id: 'gpt-5.4-mini',
       label: 'gpt-5.4-mini',
@@ -300,7 +328,8 @@ describe('ModelSelect', () => {
       />,
     );
 
-    expect(screen.getByRole('button').textContent).toContain('models.codex.gpt54mini.label');
+    expect(screen.getByRole('button').textContent).toContain('gpt-5.4-mini');
+    expect(screen.getByRole('button').textContent).not.toContain('models.codex.gpt54mini.label');
   });
 
   /**

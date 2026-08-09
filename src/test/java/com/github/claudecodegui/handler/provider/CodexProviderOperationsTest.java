@@ -439,6 +439,73 @@ public class CodexProviderOperationsTest {
         assertFalse(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
     }
 
+    /**
+     * 验证编辑弹窗的草稿级拉模直接消费前端传入的最新配置。
+     * 成功后只回传结构化模型结果，不调用 provider merge、provider 列表刷新或统一模型目录刷新，
+     * 从而保证用户尚未保存的草稿字段不会被持久化配置覆盖。
+     */
+    @Test
+    public void shouldReturnDraftModelsWithoutPersistingProviderConfiguration() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService =
+                new TrackingFetchSettingsService(createManagedProvider(), new JsonObject());
+        RecordingDiscoveryService discoveryService = new RecordingDiscoveryService(
+                settingsService,
+                new CodexProviderModelDiscoveryService.DiscoveryResult(
+                        List.of("gpt-5.5", "gpt-5.4"),
+                        1,
+                        2
+                )
+        );
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                discoveryService
+        );
+
+        operations.handleFetchCodexProviderModelsFromDraft(
+                "{\"providerId\":\"draft-provider\",\"name\":\"Unsaved Provider\","
+                        + "\"authMode\":\"api_key\",\"requestMode\":\"codex_sdk\","
+                        + "\"baseUrl\":\"https://unsaved.example.com/v1\",\"apiKey\":\"sk-unsaved\"}"
+        );
+
+        assertEquals("https://unsaved.example.com/v1", discoveryService.lastProvider.get("baseUrl").getAsString());
+        assertEquals("sk-unsaved", discoveryService.lastProvider.get("apiKey").getAsString());
+        assertEquals("", settingsService.lastMergedProviderId);
+        assertTrue(jsCallback.hasFunctionCall("window.onCodexProviderDraftModelsFetched"));
+        assertTrue(jsCallback.hasFunctionCall("window.showSuccess"));
+        assertFalse(jsCallback.hasFunctionCall("window.updateCodexProviders"));
+        assertFalse(jsCallback.hasFunctionCall("window.updateCodexModelCatalog"));
+        assertTrue(jsCallback.containsArgFragment("\"providerId\":\"draft-provider\""));
+        assertTrue(jsCallback.containsArgFragment("\"modelIds\":[\"gpt-5.5\",\"gpt-5.4\"]"));
+        assertTrue(jsCallback.containsArgFragment("\"duplicateCount\":1"));
+        assertTrue(jsCallback.containsArgFragment("\"skippedCount\":2"));
+    }
+
+    /**
+     * 验证草稿级拉模失败时只返回错误，不产生草稿结果回调，也不触发任何持久化或列表刷新副作用。
+     */
+    @Test
+    public void shouldShowErrorAndSkipDraftModelResultWhenDraftDiscoveryFails() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        TrackingFetchSettingsService settingsService =
+                new TrackingFetchSettingsService(createManagedProvider(), new JsonObject());
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                new RecordingDiscoveryService(settingsService, new IOException("draft discovery failed"))
+        );
+
+        operations.handleFetchCodexProviderModelsFromDraft(
+                "{\"providerId\":\"draft-provider\",\"name\":\"Unsaved Provider\","
+                        + "\"authMode\":\"api_key\",\"requestMode\":\"codex_sdk\","
+                        + "\"baseUrl\":\"https://unsaved.example.com/v1\",\"apiKey\":\"sk-unsaved\"}"
+        );
+
+        assertEquals("window.showError", jsCallback.lastFunctionName);
+        assertFalse(jsCallback.hasFunctionCall("window.onCodexProviderDraftModelsFetched"));
+        assertFalse(jsCallback.hasFunctionCall("window.updateCodexProviders"));
+        assertEquals("", settingsService.lastMergedProviderId);
+    }
+
     private static HandlerContext createContext(
             CodemossSettingsService settingsService,
             CodexSDKBridge codexSDKBridge,
@@ -634,6 +701,7 @@ public class CodexProviderOperationsTest {
     private static class RecordingDiscoveryService extends CodexProviderModelDiscoveryService {
         private final DiscoveryResult result;
         private final IOException failure;
+        private JsonObject lastProvider = new JsonObject();
 
         RecordingDiscoveryService(CodemossSettingsService settingsService, DiscoveryResult result) {
             super(settingsService, ignored -> "", (uri, authorizationHeader, acceptHeader) -> {
@@ -653,6 +721,7 @@ public class CodexProviderOperationsTest {
 
         @Override
         public DiscoveryResult discoverModels(JsonObject provider) throws IOException {
+            lastProvider = provider == null ? new JsonObject() : provider.deepCopy();
             if (failure != null) {
                 throw failure;
             }

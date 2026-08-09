@@ -557,6 +557,7 @@
         "customModelsHint": "Add extra models supported by this provider. Custom models will appear at the top of the model selection list",
         "noCustomModels": "No custom models",
         "addModel": "Add Model",
+        "fetchModelsMissingConfigTooltip": "Configurez l'URL de base et la clé API avant de récupérer la liste des modèles.",
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
@@ -613,9 +614,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "Fetch Model List",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "Fetch Model List",
       "fetchModelsLoading": "Fetching Model List",
-      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet."
+      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet.",
+      "copyProvider": "Copier la configuration du fournisseur",
+      "fetchModelsResult": {
+        "added": "{{providerName}} : {{addedCount}} modèles ajoutés. {{duplicateCount}} doublons et {{invalidCount}} entrées invalides ont été ignorés.",
+        "noNewModels": "{{providerName}} : aucun nouveau modèle trouvé. {{duplicateCount}} doublons et {{invalidCount}} entrées invalides ont été ignorés.",
+        "draftFetched": "{{providerName}} : {{fetchedCount}} modèles récupérés pour le brouillon actuel. {{duplicateCount}} doublons et {{invalidCount}} entrées invalides ont été ignorés.",
+        "localRemoteDiscovered": "Configuration locale Codex : {{totalCount}} modèles synchronisés depuis {{baseUrl}} ({{addedCount}} nouveaux). {{duplicateCount}} doublons et {{invalidCount}} entrées invalides ont été ignorés.",
+        "localFallbackRefreshed": "Configuration locale Codex : le catalogue de secours a été actualisé. Les modèles intégrés ainsi que le modèle local actuel sont utilisés car aucun chemin de découverte distante sûr n'est disponible.",
+        "removedStaleSuffix": " {{removedCount}} modèles obsolètes ont été retirés de l'ancien cache."
+      }
 
     },
     "agent": {

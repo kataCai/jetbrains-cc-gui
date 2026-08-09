@@ -38,6 +38,7 @@ const translations: Record<string, string> = {
   'settings.codexProvider.fetchModels': 'Fetch Model List',
   'settings.codexProvider.fetchModelsLoading': 'Fetching Model List',
   'settings.codexProvider.fetchModelsUnsupportedTooltip': 'This provider auth mode or request mode does not support model discovery yet.',
+  'settings.codexProvider.copyProvider': 'Copy Provider',
   'settings.codexProvider.requestModeUnavailableBadge': 'Coming Soon',
   'settings.codexProvider.requestModeUnavailableTooltip': 'This request mode is not implemented yet, so testing is disabled.',
   'common.add': 'Add',
@@ -76,6 +77,7 @@ describe('CodexProviderSection', () => {
   const onDeleteCodexProvider = vi.fn();
   const onFetchCodexProviderModels = vi.fn();
   const onTestCodexProvider = vi.fn();
+  const onDuplicateCodexProvider = vi.fn();
   const onRevokeCodexLocalConfigAuthorization = vi.fn();
 
   beforeEach(() => {
@@ -327,6 +329,55 @@ describe('CodexProviderSection', () => {
     expect(onFetchCodexProviderModels).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'provider-fetch', name: 'Provider Fetch' })
     );
+  });
+
+  /**
+   * 验证供应商复制入口位于普通托管 provider 卡片，而不是模型编辑行或 CLI Login 只读卡片。
+   * 点击后必须把完整 provider 配置对象交给上层，由上层生成新增态草稿，避免在卡片层重复维护字段裁剪规则。
+   */
+  it('shows a copy-provider action on managed cards and forwards the full provider payload', () => {
+    const provider = {
+      id: 'provider-copy',
+      name: 'Provider Copy',
+      authMode: 'api_key' as const,
+      requestMode: 'codex_sdk' as const,
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-copy',
+      models: [{ id: 'copy-model', label: 'Copy Model' }],
+      isActive: false,
+    };
+
+    render(
+      <CodexProviderSection
+        codexProviders={[provider]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onDuplicateCodexProvider={onDuplicateCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const card = screen.getByText('Provider Copy').closest('[data-drag-sort-id]');
+    const titledButtons = Array.from(card?.querySelectorAll('button[title]') || []).map(
+      (button) => button.getAttribute('title')
+    );
+    expect(titledButtons).toEqual([
+      'Fetch Model List',
+      'Test Provider',
+      'Copy Provider',
+      'Edit',
+      'Delete',
+    ]);
+
+    fireEvent.click(screen.getByTitle('Copy Provider'));
+    expect(onDuplicateCodexProvider).toHaveBeenCalledWith(provider);
   });
 
   /**

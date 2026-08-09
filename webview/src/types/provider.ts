@@ -678,6 +678,22 @@ export interface CodexProviderConfig {
 }
 
 /**
+ * 编辑态 provider 草稿模型发现结果。
+ * 后端只返回远端模型 ID 与发现统计，前端弹窗负责基于当前未保存草稿
+ * 追加缺失模型，避免把用户正在编辑的 label、description 或其它字段覆盖掉。
+ */
+export interface CodexProviderDraftModelsFetchResult {
+  /** 当前编辑弹窗对应的草稿关联 id，仅用于异步结果关联，不要求等于持久化 provider id */
+  providerId: string;
+  /** 远端发现并去重后的模型 ID 列表 */
+  modelIds: string[];
+  /** 远端响应中重复模型项数量 */
+  duplicateCount: number;
+  /** 远端响应中因结构无效而跳过的项数量 */
+  skippedCount: number;
+}
+
+/**
  * Codex provider 连通性测试结果。
  * 该结构用于把后端真实运行时解析结果返回给设置页，便于用户确认实际命中的 provider、endpoint 与凭据来源。
  */

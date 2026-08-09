@@ -46,6 +46,33 @@ public class ProviderHandlerFetchCodexModelsTest {
     }
 
     /**
+     * 验证编辑弹窗使用的草稿级模型拉取消息会进入 Codex provider 分支。
+     * 该消息不依赖已保存 provider id；当前测试使用缺失 Base URL 的草稿触发校验错误，
+     * 只断言最外层路由已识别新消息类型并返回错误回调。
+     */
+    @Test
+    public void shouldDispatchDraftCodexProviderModelsMessageToCodexOperations() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        ProviderHandler handler = new ProviderHandler(
+                new HandlerContext(
+                        null,
+                        null,
+                        new CodexSDKBridge(),
+                        new MissingProviderSettingsService(),
+                        jsCallback
+                )
+        );
+
+        boolean handled = handler.handle(
+                "fetch_codex_provider_models_from_draft",
+                "{\"providerId\":\"draft-provider\",\"authMode\":\"api_key\",\"requestMode\":\"codex_sdk\",\"apiKey\":\"sk-test\"}"
+        );
+
+        assertTrue(handled);
+        assertEquals("window.showError", jsCallback.lastFunctionName);
+    }
+
+    /**
      * 设置服务桩：始终返回“provider 不存在”。
      * 该桩用于把测试聚焦在最外层消息分发，不依赖任何真实 provider 配置或网络访问。
      */

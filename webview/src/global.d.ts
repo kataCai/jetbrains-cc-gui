@@ -142,6 +142,12 @@ interface Window {
   showTestResult?: (payloadOrSuccess: string | boolean, message?: string) => void;
 
   /**
+   * Return model IDs discovered from the currently edited Codex provider draft.
+   * The result is dialog-scoped and must not be treated as a persisted provider update.
+   */
+  onCodexProviderDraftModelsFetched?: (json: string) => void;
+
+  /**
    * Toast deferred until a session transition finishes, because backend
    * clearMessages resets transient UI state during new-session creation.
    */

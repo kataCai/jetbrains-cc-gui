@@ -557,6 +557,7 @@
         "customModelsHint": "Add extra models supported by this provider. Custom models will appear at the top of the model selection list",
         "noCustomModels": "No custom models",
         "addModel": "Add Model",
+        "fetchModelsMissingConfigTooltip": "मॉडल सूची प्राप्त करने से पहले Base URL और API Key कॉन्फ़िगर करें।",
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
@@ -613,9 +614,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "Fetch Model List",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "Fetch Model List",
       "fetchModelsLoading": "Fetching Model List",
-      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet."
+      "fetchModelsUnsupportedTooltip": "This provider auth mode or request mode does not support model discovery yet.",
+      "copyProvider": "प्रदाता कॉन्फ़िगरेशन कॉपी करें",
+      "fetchModelsResult": {
+        "added": "{{providerName}}: {{addedCount}} मॉडल जोड़े गए। {{duplicateCount}} डुप्लिकेट और {{invalidCount}} अमान्य प्रविष्टियाँ छोड़ी गईं।",
+        "noNewModels": "{{providerName}}: कोई नया मॉडल नहीं मिला। {{duplicateCount}} डुप्लिकेट और {{invalidCount}} अमान्य प्रविष्टियाँ छोड़ी गईं।",
+        "draftFetched": "{{providerName}}: वर्तमान ड्राफ्ट के लिए {{fetchedCount}} मॉडल प्राप्त हुए। {{duplicateCount}} डुप्लिकेट और {{invalidCount}} अमान्य प्रविष्टियाँ छोड़ी गईं।",
+        "localRemoteDiscovered": "स्थानीय Codex कॉन्फ़िग: {{baseUrl}} से {{totalCount}} मॉडल सिंक किए गए ({{addedCount}} नए)। {{duplicateCount}} डुप्लिकेट और {{invalidCount}} अमान्य प्रविष्टियाँ छोड़ी गईं।",
+        "localFallbackRefreshed": "स्थानीय Codex कॉन्फ़िग: फ़ॉलबैक मॉडल कैटलॉग रीफ़्रेश किया गया। सुरक्षित रिमोट डिस्कवरी पथ उपलब्ध न होने के कारण अभी बिल्ट-इन मॉडल और वर्तमान स्थानीय मॉडल का उपयोग किया जा रहा है।",
+        "removedStaleSuffix": " पिछले कैश से {{removedCount}} पुराने मॉडल हटा दिए गए।"
+      }
 
     },
     "agent": {

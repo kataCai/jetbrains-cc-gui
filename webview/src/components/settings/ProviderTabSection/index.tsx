@@ -42,6 +42,7 @@ interface ProviderTabSectionProps {
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onFetchCodexProviderModels: (provider: CodexProviderConfig) => void;
   onTestCodexProvider: (provider: CodexProviderConfig) => void;
+  onDuplicateCodexProvider?: (provider: CodexProviderConfig) => void;
   onAuthorizeCodexLocalConfig: () => void;
   onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   onRefreshCodexModelCatalog: () => void;
@@ -71,6 +72,7 @@ const ProviderTabSection = ({
   onDeleteCodexProvider,
   onFetchCodexProviderModels,
   onTestCodexProvider,
+  onDuplicateCodexProvider,
   onAuthorizeCodexLocalConfig,
   onRevokeCodexLocalConfigAuthorization,
   onRefreshCodexModelCatalog,
@@ -278,6 +280,7 @@ const ProviderTabSection = ({
               onDeleteCodexProvider={onDeleteCodexProvider}
               onFetchCodexProviderModels={onFetchCodexProviderModels}
               onTestCodexProvider={onTestCodexProvider}
+              onDuplicateCodexProvider={onDuplicateCodexProvider}
               onAuthorizeCodexLocalConfig={onAuthorizeCodexLocalConfig}
               onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
               showHeader={false}

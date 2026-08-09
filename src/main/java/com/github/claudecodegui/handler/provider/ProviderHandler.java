@@ -43,6 +43,7 @@ public class ProviderHandler extends BaseMessageHandler {
             "get_active_codex_provider",
             "test_codex_provider",
             "fetch_codex_provider_models",
+            "fetch_codex_provider_models_from_draft",
             "sort_codex_providers"
     };
 
@@ -160,6 +161,9 @@ public class ProviderHandler extends BaseMessageHandler {
                 return true;
             case "fetch_codex_provider_models":
                 codexOps.handleFetchCodexProviderModels(content);
+                return true;
+            case "fetch_codex_provider_models_from_draft":
+                codexOps.handleFetchCodexProviderModelsFromDraft(content);
                 return true;
             case "sort_codex_providers":
                 orderingService.handleSortCodexProviders(content);

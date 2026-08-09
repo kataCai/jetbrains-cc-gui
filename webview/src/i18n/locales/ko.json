@@ -593,6 +593,7 @@
         "customModelsHint": "이 제공자가 지원하는 추가 모델을 추가합니다. 사용자 지정 모델은 모델 선택 목록 상단에 표시됩니다",
         "noCustomModels": "사용자 지정 모델 없음",
         "addModel": "모델 추가",
+        "fetchModelsMissingConfigTooltip": "모델 목록을 가져오기 전에 Base URL과 API Key를 설정하세요.",
         "modelIdPlaceholder": "모델 ID (필수, 예: gpt-4o)",
         "modelLabelPlaceholder": "표시 이름 (선택사항)",
         "modelDescPlaceholder": "모델 설명 (선택사항)",
@@ -649,9 +650,19 @@
         "local_config": "Local Config"
       },
       "requestModeUnavailableBadge": "Coming Soon",
-      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",      "fetchModels": "?? ?? ????",
+      "requestModeUnavailableTooltip": "This request mode is not implemented yet, so testing and enabling are disabled.",
+      "fetchModels": "모델 목록 가져오기",
       "fetchModelsLoading": "?? ?? ???? ?",
-      "fetchModelsUnsupportedTooltip": "?? ?? ?? ?? ?? ????? ?? ??? ??? ? ????."
+      "fetchModelsUnsupportedTooltip": "?? ?? ?? ?? ?? ????? ?? ??? ??? ? ????.",
+      "copyProvider": "공급자 설정 복사",
+      "fetchModelsResult": {
+        "added": "{{providerName}}: {{addedCount}}개의 모델을 추가했습니다. 중복 {{duplicateCount}}개와 잘못된 항목 {{invalidCount}}개를 건너뛰었습니다.",
+        "noNewModels": "{{providerName}}: 새 모델을 찾지 못했습니다. 중복 {{duplicateCount}}개와 잘못된 항목 {{invalidCount}}개를 건너뛰었습니다.",
+        "draftFetched": "{{providerName}}: 현재 초안용 모델 {{fetchedCount}}개를 가져왔습니다. 중복 {{duplicateCount}}개와 잘못된 항목 {{invalidCount}}개를 건너뛰었습니다.",
+        "localRemoteDiscovered": "로컬 Codex 설정: {{baseUrl}}에서 모델 {{totalCount}}개를 동기화했습니다(신규 {{addedCount}}개). 중복 {{duplicateCount}}개와 잘못된 항목 {{invalidCount}}개를 건너뛰었습니다.",
+        "localFallbackRefreshed": "로컬 Codex 설정: 대체 모델 카탈로그를 새로 고쳤습니다. 안전한 원격 검색 경로가 없어 현재는 내장 모델과 현재 로컬 모델을 사용합니다.",
+        "removedStaleSuffix": " 이전 캐시에서 오래된 모델 {{removedCount}}개를 제거했습니다."
+      }
 
     },
     "agent": {

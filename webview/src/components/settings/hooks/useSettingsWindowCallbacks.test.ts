@@ -71,6 +71,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     setCodexConfigLoading: vi.fn(),
     setCodexModelCatalogLoading: vi.fn(),
     setSyncingCodexProviderId: vi.fn(),
+    setSyncingCodexProviderDraftId: vi.fn(),
     setTestingCodexProviderId: vi.fn(),
     setCommitGenerationEnabled: vi.fn(),
     setAiTitleGenerationEnabled: vi.fn(),
@@ -91,6 +92,7 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     handleAgentImportPreviewResult: vi.fn(),
     handleAgentImportResult: vi.fn(),
     updateCodexProviders: vi.fn(),
+    updateCodexProviderDraftModels: vi.fn(),
     updateActiveCodexProvider: vi.fn(),
     updateCurrentCodexConfig: vi.fn(),
     updateCodexModelCatalog: vi.fn(),
@@ -149,6 +151,29 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect(deps.updateCodexProviders).toHaveBeenCalledWith([{ id: 'provider-a', name: 'Provider A' }]);
     expect(deps.setSyncingCodexProviderId).toHaveBeenCalledWith('');
     expect(deps.loadCodexModelCatalog).toHaveBeenCalled();
+  });
+
+  /**
+   * 验证编辑弹窗的草稿级模型回调只把结果交给弹窗状态处理器。
+   * 该回调不应复用 provider 列表刷新事件，否则会把尚未保存的草稿字段重新覆盖。
+   */
+  it('routes draft model fetch results to the dialog-only callback', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.onCodexProviderDraftModelsFetched?.(JSON.stringify({
+      providerId: 'provider-draft',
+      modelIds: ['gpt-5.5', 'gpt-5.4'],
+      duplicateCount: 1,
+      skippedCount: 2,
+    }));
+
+    expect(deps.updateCodexProviderDraftModels).toHaveBeenCalledWith({
+      providerId: 'provider-draft',
+      modelIds: ['gpt-5.5', 'gpt-5.4'],
+      duplicateCount: 1,
+      skippedCount: 2,
+    });
   });
 
   /**
