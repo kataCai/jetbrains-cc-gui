@@ -128,6 +128,128 @@ public class CodexProviderOperationsTest {
 
     /**
      * 验证目标：
+     * 当 provider 没有模型，且当前 authMode/requestMode 本身不支持 discovery 时，
+     * 后端必须直接返回明确失败结果，而不是继续触发 `/v1/models` 或误导成“凭据/端点异常”。
+     *
+     * 前置条件：
+     * provider 仍处于空模型状态，但 authMode=`proxy`，因此 `canFetchCodexModels=false`。
+     *
+     * 断言意图：
+     * 1. 结果停留在 `model_discovery` 阶段；
+     * 2. discovery service 和 SDK bridge 都不会被调用；
+     * 3. 返回消息明确说明当前模式不支持空模型 discovery。
+     */
+    @Test
+    public void shouldFailFastWhenEmptyModelProviderDoesNotSupportDiscovery() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createEmptyModelProvider();
+        provider.addProperty("authMode", "proxy");
+        provider.addProperty("apiKey", "proxy-token");
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(provider, new JsonObject());
+        RecordingDiscoveryService discoveryService = new RecordingDiscoveryService(
+                settingsService,
+                new CodexProviderModelDiscoveryService.DiscoveryResult(List.of("ignored-model"), 0, 0)
+        );
+        RecordingCodexSDKBridge sdkBridge = new RecordingCodexSDKBridge();
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, sdkBridge, jsCallback),
+                discoveryService
+        );
+
+        operations.handleTestCodexProvider("{\"id\":\"empty-model-provider\"}");
+
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(false, payload.get("success").getAsBoolean());
+        assertEquals("model_discovery", payload.get("testStage").getAsString());
+        assertEquals("model_discovery", payload.get("failureStage").getAsString());
+        assertEquals(true, payload.get("requiresModel").getAsBoolean());
+        assertEquals(false, payload.get("canFetchModels").getAsBoolean());
+        assertTrue(payload.get("message").getAsString().contains("does not support model discovery"));
+        assertEquals(0, sdkBridge.getSendMessageCallCount());
+        assertEquals(0, discoveryService.getLastProvider().size());
+    }
+
+    /**
+     * 验证目标：
+     * 即使历史 provider 同时残留 `models: []` 与 `customModels: [...]`，
+     * 测试入口也必须遵循 runtime resolver 语义，把它继续判定为“未配置模型”。
+     *
+     * 前置条件：
+     * `models` 显式保存为空数组，同时保留旧 `customModels` 中的一条模型。
+     *
+     * 断言意图：
+     * 1. 结果仍走 `model_discovery`，不会误入 SDK 消息测试；
+     * 2. payload 中的 `model` 保持为空；
+     * 3. discovery service 被调用一次，证明旧 `customModels` 不再被当成可用模型。
+     */
+    @Test
+    public void shouldIgnoreLegacyCustomModelsWhenModelsArrayIsExplicitlyEmpty() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createEmptyModelProvider();
+        JsonArray customModels = new JsonArray();
+        JsonObject legacyModel = new JsonObject();
+        legacyModel.addProperty("id", "legacy-custom-model");
+        legacyModel.addProperty("label", "Legacy Custom Model");
+        customModels.add(legacyModel);
+        provider.add("customModels", customModels);
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(provider, new JsonObject());
+        RecordingDiscoveryService discoveryService = new RecordingDiscoveryService(
+                settingsService,
+                new CodexProviderModelDiscoveryService.DiscoveryResult(List.of("gpt-5.5"), 0, 0)
+        );
+        RecordingCodexSDKBridge sdkBridge = new RecordingCodexSDKBridge();
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, sdkBridge, jsCallback),
+                discoveryService
+        );
+
+        operations.handleTestCodexProvider("{\"id\":\"empty-model-provider\"}");
+
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(true, payload.get("success").getAsBoolean());
+        assertEquals("model_discovery", payload.get("testStage").getAsString());
+        assertEquals("", payload.get("model").getAsString());
+        assertEquals(true, payload.get("requiresModel").getAsBoolean());
+        assertEquals(0, sdkBridge.getSendMessageCallCount());
+        assertEquals("empty-model-provider", discoveryService.getLastProvider().get("id").getAsString());
+    }
+
+    /**
+     * 验证目标：
+     * 模型发现阶段的结构化结果必须展示真实生效的凭据来源；
+     * 当 inline `apiKey` 与 `apiKeyEnv` 同时存在时，展示值应与 discovery 请求一致地优先选择 inline key。
+     *
+     * 前置条件：
+     * 空模型 provider 同时配置 `apiKey` 与 `apiKeyEnv`，并成功走完 discovery 阶段。
+     *
+     * 断言意图：
+     * `credentialSource` 返回 `apiKey`，不再错误显示成环境变量来源。
+     */
+    @Test
+    public void shouldPreferInlineApiKeyCredentialSourceForModelDiscoveryPayload() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createEmptyModelProvider();
+        provider.addProperty("apiKey", "sk-inline");
+        provider.addProperty("apiKeyEnv", "INLINE_SHOULD_WIN");
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(provider, new JsonObject());
+        RecordingDiscoveryService discoveryService = new RecordingDiscoveryService(
+                settingsService,
+                new CodexProviderModelDiscoveryService.DiscoveryResult(List.of("gpt-5.5"), 0, 0)
+        );
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, new RecordingCodexSDKBridge(), jsCallback),
+                discoveryService
+        );
+
+        operations.handleTestCodexProvider("{\"id\":\"empty-model-provider\"}");
+
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals("apiKey", payload.get("credentialSource").getAsString());
+        assertEquals("model_discovery", payload.get("testStage").getAsString());
+    }
+
+    /**
+     * 验证目标：
      * 已配置模型的 provider 仍必须走完整 SDK 消息测试，不能被新的空模型短路径误伤。
      *
      * 前置条件：

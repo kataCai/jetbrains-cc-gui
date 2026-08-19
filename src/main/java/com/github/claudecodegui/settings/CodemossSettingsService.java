@@ -3563,7 +3563,10 @@ public class CodemossSettingsService {
 
     /**
      * 统一读取 provider 的模型数组。
-     * 优先读取当前 schema 的 `models`，并兼容历史 `customModels`。
+     * 该读取语义需要与 `CodexRuntimeProfileResolver` 保持一致：
+     * 1. 只要 `models` 字段存在，即使是空数组，也视为“显式声明当前没有模型”；
+     * 2. 仅当 `models` 字段缺失时，才回退读取历史 `customModels`；
+     * 3. 这样统一目录、fresh new tab 默认值和真实发送链路才能对“是否已有模型”得出一致结论。
      *
      * @param provider provider 配置
      * @return 模型数组；不存在时返回空数组
@@ -3572,7 +3575,7 @@ public class CodemossSettingsService {
         if (provider.has("models") && provider.get("models").isJsonArray()) {
             return provider.getAsJsonArray("models");
         }
-        if (provider.has("customModels") && provider.get("customModels").isJsonArray()) {
+        if (!provider.has("models") && provider.has("customModels") && provider.get("customModels").isJsonArray()) {
             return provider.getAsJsonArray("customModels");
         }
         return new JsonArray();

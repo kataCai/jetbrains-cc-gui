@@ -419,7 +419,7 @@ describe('CodexProviderSection', () => {
     const fetchButton = screen.getByTitle('Fetching Model List') as HTMLButtonElement;
     expect(fetchButton.disabled).toBe(true);
     expect(fetchButton.querySelector('.codicon-loading')).toBeTruthy();
-    expect(screen.getByTitle('No models configured. This will test the endpoint and credentials.')).toBeTruthy();
+    expect(screen.getByTitle('Configure Base URL and API Key before fetching models.')).toBeTruthy();
   });
 
   /**
@@ -485,10 +485,11 @@ describe('CodexProviderSection', () => {
       />,
     );
 
-    const fetchButton = screen.getByTitle(
+    const disabledButtons = screen.getAllByTitle(
       'This provider auth mode or request mode does not support model discovery yet.'
-    ) as HTMLButtonElement;
-    expect(fetchButton.disabled).toBe(true);
+    ) as HTMLButtonElement[];
+    expect(disabledButtons).toHaveLength(2);
+    expect(disabledButtons.every((button) => button.disabled)).toBe(true);
   });
 
   /**
@@ -578,15 +579,53 @@ describe('CodexProviderSection', () => {
 
   /**
    * 验证目标：
-   * 已保存 provider 缺少 Base URL 或凭据时，模型拉取按钮必须禁用，
-   * 避免把请求发送到后端后再用 runtime 错误解释成“模式不支持”。
+   * 当 provider 处于空模型状态，且当前 authMode/requestMode 不支持 discovery 时，
+   * 测试按钮必须和“获取模型列表”入口共用同一套能力判断，不能继续提示“将执行端点与凭据测试”。
    *
    * 前置条件：
-   * requestMode/authMode 已支持模型发现，但没有填写 Base URL。
+   * requestMode 仍是已实现的 `codex_sdk`，但 authMode=`proxy`，因此模型发现能力明确不受支持。
    *
    * 断言意图：
-   * 拉取按钮 disabled，title 提示缺少配置。
+   * 1. 获取模型与测试按钮都使用 unsupported tooltip 且处于 disabled；
+   * 2. 不再出现空模型 endpoint test tooltip，避免把用户误导到错误排查方向。
    */
+  it('disables the empty-model test action when model discovery is unsupported', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-unsupported-discovery',
+            name: 'Unsupported Discovery Provider',
+            authMode: 'proxy',
+            requestMode: 'codex_sdk',
+            baseUrl: 'https://gateway.example.com/v1',
+            apiKey: 'proxy-token',
+            models: [],
+            isActive: false,
+          },
+        ]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const disabledButtons = screen.getAllByTitle(
+      'This provider auth mode or request mode does not support model discovery yet.'
+    ) as HTMLButtonElement[];
+
+    expect(disabledButtons).toHaveLength(2);
+    expect(disabledButtons.every((button) => button.disabled)).toBe(true);
+    expect(screen.queryByTitle('No models configured. This will test the endpoint and credentials.')).toBeNull();
+  });
+
   it('disables the fetch-models action when base URL or credentials are missing', () => {
     render(
       <CodexProviderSection
@@ -612,9 +651,10 @@ describe('CodexProviderSection', () => {
       />,
     );
 
-    const fetchButton = screen.getByTitle(
+    const disabledButtons = screen.getAllByTitle(
       'Configure Base URL and API Key before fetching models.'
-    ) as HTMLButtonElement;
-    expect(fetchButton.disabled).toBe(true);
+    ) as HTMLButtonElement[];
+    expect(disabledButtons).toHaveLength(2);
+    expect(disabledButtons.every((button) => button.disabled)).toBe(true);
   });
 });

@@ -182,6 +182,35 @@ public class CodexRuntimeProfileResolverTest {
         resolver.resolve("", "");
     }
 
+    /**
+     * 验证目标：
+     * `CodexRuntimeProfileResolver` 作为真实发送链路的基准实现，必须坚持“`models` 存在时不再回退 `customModels`”。
+     *
+     * 前置条件：
+     * provider 显式保存 `models=[]`，同时残留一条历史 `customModels`。
+     *
+     * 断言意图：
+     * 即使旧字段里还有模型，resolver 仍应抛出 “No Codex model configured”，
+     * 避免把“显式清空模型列表”的 provider 误判成仍可发送消息。
+     */
+    @Test(expected = IllegalStateException.class)
+    public void shouldNotFallbackToLegacyCustomModelsWhenModelsArrayExists() throws Exception {
+        JsonObject provider = createManagedProvider();
+        provider.add("models", new JsonArray());
+        JsonArray customModels = new JsonArray();
+        JsonObject legacyModel = new JsonObject();
+        legacyModel.addProperty("id", "legacy-custom-model");
+        legacyModel.addProperty("label", "Legacy Custom Model");
+        customModels.add(legacyModel);
+        provider.add("customModels", customModels);
+        TestSettingsService settings = new TestSettingsService(provider);
+        Map<String, String> env = new HashMap<>();
+        env.put("MINIMAX_CN_API_KEY", "secret-value");
+        CodexRuntimeProfileResolver resolver = new CodexRuntimeProfileResolver(settings, env::get);
+
+        resolver.resolveForProvider(provider, "", "");
+    }
+
     private JsonObject createManagedProvider() {
         JsonObject provider = new JsonObject();
         provider.addProperty("id", "minimax-cn");

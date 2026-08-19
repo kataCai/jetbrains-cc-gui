@@ -331,7 +331,10 @@ export function hasCodexProviderModelDiscoveryConfig(
 
 /**
  * 判断当前 Codex provider 是否已经配置了至少一个本地模型。
- * 该判断同时兼容 `models` 与历史 `customModels` 字段，供测试按钮文案和卡片摘要复用。
+ * 该判断需要与后端 `CodexRuntimeProfileResolver` 保持完全一致：
+ * 1. 只要 `models` 字段存在，就只认 `models`，即使它是空数组；
+ * 2. 仅当 `models` 字段缺失时，才回退历史 `customModels`；
+ * 3. 这样卡片摘要、测试按钮文案与真实 runtime 发送语义才不会分叉。
  *
  * @param provider 待判断的 Codex provider
  * @return `true` 表示本地已有模型；`false` 表示应提示未配置模型
@@ -339,12 +342,18 @@ export function hasCodexProviderModelDiscoveryConfig(
 export function hasCodexProviderConfiguredModels(
   provider?: Pick<CodexProviderConfig, 'models' | 'customModels'> | null
 ): boolean {
-  return (provider?.models?.length || 0) > 0 || (provider?.customModels?.length || 0) > 0;
+  if (provider?.models) {
+    return provider.models.length > 0;
+  }
+  return (provider?.customModels?.length || 0) > 0;
 }
 
 /**
  * 统计当前 Codex provider 本地已配置的模型数量。
- * 优先使用 `models`，没有时再回退 `customModels`，避免同一卡片把两套字段相加后重复计数。
+ * 该统计同样沿用 runtime resolver 的读取语义：
+ * 1. `models` 字段存在时直接返回其长度，即使它是 0；
+ * 2. 仅在 `models` 缺失时才回退 `customModels`；
+ * 3. 这样“显式清空模型列表”的 provider 不会再被历史 `customModels` 误判成仍有模型。
  *
  * @param provider 待统计的 Codex provider
  * @return 本地模型数量；没有配置时返回 0
@@ -352,7 +361,7 @@ export function hasCodexProviderConfiguredModels(
 export function getCodexProviderConfiguredModelCount(
   provider?: Pick<CodexProviderConfig, 'models' | 'customModels'> | null
 ): number {
-  if (provider?.models && provider.models.length > 0) {
+  if (provider?.models) {
     return provider.models.length;
   }
   return provider?.customModels?.length || 0;

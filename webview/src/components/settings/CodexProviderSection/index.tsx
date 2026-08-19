@@ -351,6 +351,8 @@ const CodexProviderSection = ({
                 const modelDiscoveryConfigured = hasCodexProviderModelDiscoveryConfig(provider);
                 const canFetchModels = modelDiscoverySupported && modelDiscoveryConfigured;
                 const hasConfiguredModels = hasCodexProviderConfiguredModels(provider);
+                // 空模型测试本质上依赖 discovery 能力；只有“已有模型”或“空模型但可走 discovery”两类 provider 才允许点测试。
+                const canRunProviderTest = hasConfiguredModels || canFetchModels;
                 const isSyncingModels = syncingCodexProviderId === provider.id;
                 return (
                   <div
@@ -422,8 +424,12 @@ const CodexProviderSection = ({
                               ? t('settings.provider.loading')
                               : hasConfiguredModels
                                 ? t('settings.codexProvider.testSdkMessageTooltip')
-                                : t('settings.codexProvider.testEndpointAndCredentialsTooltip')}
-                          disabled={testingCodexProviderId === provider.id || requestModeUnavailable}
+                                : !modelDiscoverySupported
+                                  ? t('settings.codexProvider.fetchModelsUnsupportedTooltip')
+                                  : !modelDiscoveryConfigured
+                                    ? t('settings.codexProvider.dialog.fetchModelsMissingConfigTooltip')
+                                    : t('settings.codexProvider.testEndpointAndCredentialsTooltip')}
+                          disabled={testingCodexProviderId === provider.id || requestModeUnavailable || !canRunProviderTest}
                         >
                           <span className={testingCodexProviderId === provider.id
                             ? 'codicon codicon-loading codicon-modifier-spin'

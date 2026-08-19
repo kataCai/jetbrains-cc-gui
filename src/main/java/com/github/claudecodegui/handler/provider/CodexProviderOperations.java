@@ -42,6 +42,8 @@ public class CodexProviderOperations {
     private static final String DEFAULT_REQUEST_MODE = "codex_sdk";
     private static final String AUTH_MODE_API_KEY = "api_key";
     private static final String AUTH_MODE_API_KEY_ENV = "api_key_env";
+    private static final String EMPTY_MODEL_DISCOVERY_UNSUPPORTED_MESSAGE =
+            "Codex provider test failed: current authMode/requestMode does not support model discovery for empty-model providers.";
 
     private final HandlerContext context;
     private final CodexProviderModelDiscoveryService codexProviderModelDiscoveryService;
@@ -1002,8 +1004,10 @@ public class CodexProviderOperations {
 
     /**
      * 对空模型 provider 执行端点与凭据测试。
-     * 该路径复用模型发现服务访问 `/v1/models`，成功只代表 Base URL 和凭据可用，
-     * 并不等同于完整 Codex SDK 消息测试已经通过。
+     * 该路径会先复用 `canFetchCodexModels` 做能力判断：
+     * 1. 若当前 auth/request mode 不支持空模型发现，则直接返回明确失败结果，不再继续触发 `/v1/models`；
+     * 2. 仅在 discovery 能力和最小配置都满足时，才真正访问 `/v1/models`；
+     * 3. discovery 成功只代表 Base URL 和凭据可用，并不等同于完整 Codex SDK 消息测试已经通过。
      *
      * @param providerId 被测 provider id
      * @param targetProvider 被测 provider 原始配置
@@ -1015,6 +1019,20 @@ public class CodexProviderOperations {
             JsonObject targetProvider,
             boolean canFetchModels
     ) throws IOException {
+        // 空模型测试本质上依赖模型发现链路；当前模式不支持时必须直接短路，避免前端提示与真实行为分叉。
+        if (!canFetchModels) {
+            showTestResult(buildTestResultPayload(
+                    false,
+                    providerId,
+                    targetProvider,
+                    null,
+                    EMPTY_MODEL_DISCOVERY_UNSUPPORTED_MESSAGE,
+                    TEST_STAGE_MODEL_DISCOVERY,
+                    true,
+                    false
+            ));
+            return;
+        }
         CodexProviderModelDiscoveryService.DiscoveryResult discoveryResult =
                 codexProviderModelDiscoveryService.discoverModels(targetProvider);
         int discoveredCount = discoveryResult.getModelIds().size();
@@ -1073,15 +1091,20 @@ public class CodexProviderOperations {
 
     /**
      * 读取 provider 中第一个可用模型 id。
-     * 优先读取 `models`，再回退 `customModels`，并跳过空白 id，避免把空对象误判成已配置模型。
+     * 该读取语义必须与 `CodexRuntimeProfileResolver` 完全一致：
+     * 1. 只要 `models` 字段存在，就只认 `models`，即使它是空数组；
+     * 2. 仅当 `models` 字段缺失时，才回退历史 `customModels`；
+     * 3. 继续跳过空白 id，避免把空对象误判成已配置模型。
      *
      * @param provider provider 原始配置
      * @return 第一个非空模型 id；不存在时返回空串
      */
     private String readFirstUsableModelId(JsonObject provider) {
-        String modelId = readFirstModelIdFromArray(provider, "models");
-        if (!modelId.isEmpty()) {
-            return modelId;
+        if (provider == null) {
+            return "";
+        }
+        if (provider.has("models") && provider.get("models").isJsonArray()) {
+            return readFirstModelIdFromArray(provider, "models");
         }
         return readFirstModelIdFromArray(provider, "customModels");
     }
@@ -1226,17 +1249,21 @@ public class CodexProviderOperations {
 
     /**
      * 根据 provider 原始字段推断脱敏后的凭据来源描述。
+     * 这里需要与 discovery/runtime 解析链路保持同一优先级和标签语义：
+     * 1. inline `apiKey` 优先于 `apiKeyEnv`；
+     * 2. inline key 统一标记为 `apiKey`，避免同一来源在不同测试阶段出现两个名字；
+     * 3. 仅在两者都缺失时返回空串。
      *
      * @param provider provider 原始配置
      * @return 脱敏后的凭据来源字符串
      */
     private String inferCredentialSource(JsonObject provider) {
+        if (!readString(provider, "apiKey").isEmpty()) {
+            return "apiKey";
+        }
         String apiKeyEnv = readString(provider, "apiKeyEnv");
         if (!apiKeyEnv.isEmpty()) {
             return "apiKeyEnv:" + apiKeyEnv;
-        }
-        if (!readString(provider, "apiKey").isEmpty()) {
-            return "apiKey:inline";
         }
         return "";
     }

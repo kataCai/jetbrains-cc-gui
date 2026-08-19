@@ -54,6 +54,87 @@ public class CodexProviderManagerRuntimeProfileTest {
                 .getAsJsonObject("legacy");
         assertTrue(saved.has("models"));
         assertEquals("MiniMax-M2.7", saved.getAsJsonArray("models").get(0).getAsJsonObject().get("id").getAsString());
+        assertFalse(saved.has("customModels"));
+    }
+
+    /**
+     * 验证目标：
+     * 当历史 provider 同时残留 `models: []` 与 `customModels: [...]` 时，
+     * provider manager 必须保留“显式空模型”的语义，而不是再次把旧字段迁回运行时 schema。
+     *
+     * 前置条件：
+     * 原始配置显式声明 `models=[]`，同时仍带有一条 legacy `customModels`。
+     *
+     * 断言意图：
+     * 1. 写回后的 `models` 仍然为空数组；
+     * 2. 历史 `customModels` 会被清理，避免继续污染后续读取链路。
+     */
+    @Test
+    public void shouldKeepExplicitEmptyModelsInsteadOfFallingBackToLegacyCustomModels() throws Exception {
+        AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
+        CodexProviderManager manager = createManager(configRef, new RecordingCodexSettingsManager());
+        JsonObject provider = createManagedProviderWithoutModels("legacy-empty", "Legacy Empty Provider");
+        provider.add("models", new JsonArray());
+        JsonArray customModels = new JsonArray();
+        JsonObject model = new JsonObject();
+        model.addProperty("id", "legacy-only-model");
+        model.addProperty("label", "Legacy Only Model");
+        customModels.add(model);
+        provider.add("customModels", customModels);
+
+        manager.addCodexProvider(provider);
+
+        JsonObject saved = configRef.get()
+                .getAsJsonObject("codex")
+                .getAsJsonObject("providers")
+                .getAsJsonObject("legacy-empty");
+        assertTrue(saved.has("models"));
+        assertEquals(0, saved.getAsJsonArray("models").size());
+        assertFalse(saved.has("customModels"));
+    }
+
+    /**
+     * 验证目标：
+     * 只读查询接口也必须沿用与写入相同的模型归一化语义，
+     * 避免历史脏数据在“未重新保存前”继续暴露给设置页、测试连接或会话恢复链路。
+     *
+     * 前置条件：
+     * 配置文件中手工写入一个 `models: [] + customModels: [...]` 的历史 provider。
+     *
+     * 断言意图：
+     * 1. `getCodexProviders()` 与 `getCodexProviderById()` 都返回空 `models`；
+     * 2. 返回结果中不再暴露 `customModels`。
+     */
+    @Test
+    public void shouldNormalizeLegacyModelFieldsOnReadApis() {
+        AtomicReference<JsonObject> configRef = new AtomicReference<>(createConfig());
+        JsonObject rawProvider = createManagedProviderWithoutModels("legacy-read", "Legacy Read Provider");
+        rawProvider.add("models", new JsonArray());
+        JsonArray customModels = new JsonArray();
+        JsonObject legacyModel = new JsonObject();
+        legacyModel.addProperty("id", "legacy-read-model");
+        legacyModel.addProperty("label", "Legacy Read Model");
+        customModels.add(legacyModel);
+        rawProvider.add("customModels", customModels);
+        configRef.get()
+                .getAsJsonObject("codex")
+                .getAsJsonObject("providers")
+                .add("legacy-read", rawProvider);
+
+        CodexProviderManager manager = createManager(configRef, new RecordingCodexSettingsManager());
+
+        JsonObject listedProvider = manager.getCodexProviders().stream()
+                .filter(provider -> "legacy-read".equals(provider.get("id").getAsString()))
+                .findFirst()
+                .orElse(new JsonObject());
+        JsonObject providerById = manager.getCodexProviderById("legacy-read");
+
+        assertTrue(listedProvider.has("models"));
+        assertEquals(0, listedProvider.getAsJsonArray("models").size());
+        assertFalse(listedProvider.has("customModels"));
+        assertTrue(providerById.has("models"));
+        assertEquals(0, providerById.getAsJsonArray("models").size());
+        assertFalse(providerById.has("customModels"));
     }
 
     @Test

@@ -100,8 +100,18 @@ function ensureSelectedModelVisible(models: ModelInfo[], selectedModel: string):
   return [runtimeModel, ...models];
 }
 
+/**
+ * 读取当前 Codex provider 在聊天区应展示的模型列表。
+ * 这里必须与 runtime resolver 保持一致：
+ * 1. 只要 `models` 字段存在，就只认 `models`，即使它是空数组；
+ * 2. 仅当 `models` 缺失时，才回退历史 `customModels`；
+ * 3. 这样聊天区不会再把已经显式清空的 provider 误展示成“仍有模型”。
+ *
+ * @param provider 当前 Codex provider 配置；允许为 null
+ * @return 适合直接渲染到选择器里的模型列表
+ */
 function getProviderCodexModels(provider: CodexProviderConfig | null): ModelInfo[] {
-  const providerModels = provider?.models && provider.models.length > 0
+  const providerModels = provider?.models
     ? provider.models
     : provider?.customModels;
   if (!providerModels || providerModels.length === 0) {

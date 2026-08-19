@@ -220,6 +220,42 @@ describe('ButtonArea', () => {
     expect(screen.getByText('chat.codexModelConfigRequired')).toBeTruthy();
   });
 
+  /**
+   * 验证目标：
+   * 当 provider 显式保存 `models: []` 时，聊天区也不能再把历史 `customModels` 当作可用模型回退展示。
+   *
+   * 前置条件：
+   * active Codex provider 同时携带空 `models` 和旧 `customModels`。
+   *
+   * 断言意图：
+   * 1. 选择器仍应显示“未配置模型”提示；
+   * 2. 旧 `customModels` 不应出现在当前 provider 的模型按钮里。
+   */
+  it('ignores legacy customModels when an explicit empty models array exists', () => {
+    render(
+      <ButtonArea
+        hasInputContent
+        selectedModel="gpt-5.4"
+        permissionMode="default"
+        currentProvider="codex"
+        onSubmit={() => {}}
+        onModelSelect={() => {}}
+      />
+    );
+
+    act(() => {
+      window.updateActiveCodexProvider?.(JSON.stringify({
+        id: 'managed-empty-provider',
+        name: 'Managed Empty Provider',
+        models: [],
+        customModels: [{ id: 'legacy-model', label: 'Legacy Model' }],
+      }));
+    });
+
+    expect(screen.getByText('chat.codexModelConfigRequired')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /legacy-model/i })).toBeNull();
+  });
+
   it('keeps the currently selected codex model visible when catalog does not include it yet', () => {
     /**
      * 验证目标：

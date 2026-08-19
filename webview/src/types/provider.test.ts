@@ -177,13 +177,20 @@ describe('Codex provider discovery helpers', () => {
 
   /**
    * 验证目标：
-   * 卡片和测试按钮需要一份统一的“是否已配置模型”判断，避免 models 与 customModels 各算各的。
+   * 卡片和测试按钮需要一份统一的“是否已配置模型”判断，避免 `models` 与历史 `customModels` 各算各的；
+   * 同时 `models` 一旦存在，就必须以它为准，哪怕它是显式保存下来的空数组。
    *
    * 断言意图：
-   * 空数组视为未配置；任一字段有模型即视为已配置。
+   * 1. 空数组视为未配置；
+   * 2. 仅当 `models` 缺失时才回退 `customModels`；
+   * 3. `models: [] + customModels: [...]` 必须继续判定为“未配置模型”。
    */
   it('treats empty model lists as unconfigured and counts the primary model collection', () => {
     expect(hasCodexProviderConfiguredModels({ models: [] })).toBe(false);
+    expect(hasCodexProviderConfiguredModels({
+      models: [],
+      customModels: [{ id: 'legacy', label: 'Legacy' }],
+    })).toBe(false);
     expect(hasCodexProviderConfiguredModels({
       models: [{ id: 'gpt-5.5', label: 'GPT 5.5' }],
     })).toBe(true);
@@ -191,6 +198,10 @@ describe('Codex provider discovery helpers', () => {
       models: [{ id: 'gpt-5.5', label: 'GPT 5.5' }],
       customModels: [{ id: 'legacy', label: 'Legacy' }],
     })).toBe(1);
+    expect(getCodexProviderConfiguredModelCount({
+      models: [],
+      customModels: [{ id: 'legacy', label: 'Legacy' }],
+    })).toBe(0);
     expect(getCodexProviderConfiguredModelCount({
       customModels: [{ id: 'legacy', label: 'Legacy' }],
     })).toBe(1);

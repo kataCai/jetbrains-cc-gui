@@ -60,7 +60,13 @@ public class CodexProviderManager {
     }
 
     /**
-     * Get all Codex providers
+     * 读取全部 Codex provider 列表。
+     * 该只读接口在返回前会统一归一化模型字段：
+     * 1. 兼容历史 `customModels` 并映射到当前 `models` schema；
+     * 2. 一旦 `models` 字段存在，即使为空数组也不再继续暴露旧 `customModels`；
+     * 3. 仅补齐返回给前端所需的 `id/isActive` 元数据，不在这里校验或改写 request/auth mode。
+     *
+     * @return 适合设置页直接消费的 provider 列表
      */
     public List<JsonObject> getCodexProviders() {
         JsonObject config = configReader.apply(null);
@@ -98,12 +104,7 @@ public class CodexProviderManager {
         // Add providers in order
         for (String id : orderedIds) {
             if (providers.has(id)) {
-                JsonObject provider = providers.getAsJsonObject(id).deepCopy();
-                // Ensure id field exists
-                if (!provider.has("id")) {
-                    provider.addProperty("id", id);
-                }
-                // Add isActive flag
+                JsonObject provider = prepareProviderForRead(providers.getAsJsonObject(id), id);
                 provider.addProperty("isActive", id.equals(currentId));
                 result.add(provider);
             }
@@ -133,7 +134,11 @@ public class CodexProviderManager {
     }
 
     /**
-     * Get currently active Codex provider
+     * 读取当前激活的 Codex provider。
+     * 返回前会沿用与 provider 列表相同的模型字段归一化语义，
+     * 避免历史 `models: [] + customModels: [...]` 在运行时预览里再次被误判成“仍有模型”。
+     *
+     * @return 当前激活的 provider；不存在时返回 null
      */
     public JsonObject getActiveCodexProvider() {
         JsonObject config = configReader.apply(null);
@@ -167,10 +172,7 @@ public class CodexProviderManager {
         JsonObject providers = codex.getAsJsonObject(PROVIDERS_KEY);
 
         if (providers.has(currentId)) {
-            JsonObject provider = providers.getAsJsonObject(currentId).deepCopy();
-            if (!provider.has("id")) {
-                provider.addProperty("id", currentId);
-            }
+            JsonObject provider = prepareProviderForRead(providers.getAsJsonObject(currentId), currentId);
             provider.addProperty("isActive", true);
             return provider;
         }
@@ -180,7 +182,9 @@ public class CodexProviderManager {
 
     /**
      * 按 providerId 读取 Codex provider 配置。
-     * 该方法只做只读查询，不会修改 current 状态，供测试连接和运行时预览复用。
+     * 该方法只做只读查询，不会修改 current 状态；返回前会只归一化模型字段，
+     * 确保调用方看到的“是否已配置模型”语义与 runtime resolver 一致，
+     * 同时避免把历史 `customModels` 残留再次透传给测试连接、会话恢复或设置页预览链路。
      *
      * @param providerId 目标 provider id
      * @return provider 深拷贝；不存在时返回 null
@@ -212,11 +216,7 @@ public class CodexProviderManager {
             return null;
         }
 
-        JsonObject provider = providers.getAsJsonObject(providerId).deepCopy();
-        if (!provider.has("id")) {
-            provider.addProperty("id", providerId);
-        }
-        return provider;
+        return prepareProviderForRead(providers.getAsJsonObject(providerId), providerId);
     }
 
     /**
@@ -697,15 +697,45 @@ public class CodexProviderManager {
         }
     }
 
+    /**
+     * 统一归一化 provider 的模型字段。
+     * 该方法同时服务于“写入前标准化”和“只读返回前清洗”两个场景，
+     * 关键约束如下：
+     * 1. 当前 schema 以 `models` 为准；只要 `models` 字段存在，就不再继续暴露历史 `customModels`；
+     * 2. 仅当 `models` 字段不存在时，才把历史 `customModels` 迁移到 `models`；
+     * 3. 归一化完成后会移除 `customModels`，避免后续调用方再次基于旧字段做分叉判断。
+     *
+     * @param provider 待归一化的 provider
+     */
     private void normalizeModels(JsonObject provider) {
         if (provider.has(MODELS_KEY) && provider.get(MODELS_KEY).isJsonArray()) {
             provider.add(MODELS_KEY, sanitizeModels(provider.getAsJsonArray(MODELS_KEY)));
+            provider.remove(CUSTOM_MODELS_KEY);
             return;
         }
         if (provider.has(CUSTOM_MODELS_KEY) && provider.get(CUSTOM_MODELS_KEY).isJsonArray()) {
             // 兼容历史 customModels，读取后统一落到 models 作为运行时 schema。
             provider.add(MODELS_KEY, sanitizeModels(provider.getAsJsonArray(CUSTOM_MODELS_KEY)));
+            provider.remove(CUSTOM_MODELS_KEY);
         }
+    }
+
+    /**
+     * 为只读返回场景准备 provider 副本。
+     * 这里故意只做模型字段归一化和 `id` 补齐，不复用完整写入校验，
+     * 以免历史配置在“查看/测试/恢复”场景因模式校验被提前拦截。
+     *
+     * @param provider 原始 provider 配置
+     * @param providerId provider id，用于在原始对象缺失 `id` 时补齐
+     * @return 适合返回给调用方的 provider 副本
+     */
+    private JsonObject prepareProviderForRead(JsonObject provider, String providerId) {
+        JsonObject normalized = provider == null ? new JsonObject() : provider.deepCopy();
+        normalizeModels(normalized);
+        if (!normalized.has("id")) {
+            normalized.addProperty("id", safeTrim(providerId));
+        }
+        return normalized;
     }
 
     private JsonArray sanitizeModels(JsonArray sourceModels) {
