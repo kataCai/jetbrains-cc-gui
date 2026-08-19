@@ -313,6 +313,52 @@ export function isCodexProviderModelFetchSupported(
 }
 
 /**
+ * 判断当前 Codex provider 是否已经填写模型发现所需的 Base URL 和凭据。
+ * 该判断只检查配置完整性，不检查 requestMode/authMode 是否已实现；
+ * 调用方应先用 `isCodexProviderModelFetchSupported` 过滤不支持的模式。
+ *
+ * @param provider 待判断的 Codex provider，可为只包含连接字段的轻量对象
+ * @return `true` 表示 Base URL 和 API Key/API Key Env 都已填写
+ */
+export function hasCodexProviderModelDiscoveryConfig(
+  provider?: Pick<CodexProviderConfig, 'baseUrl' | 'apiKey' | 'apiKeyEnv'> | null
+): boolean {
+  const baseUrl = typeof provider?.baseUrl === 'string' ? provider.baseUrl.trim() : '';
+  const apiKey = typeof provider?.apiKey === 'string' ? provider.apiKey.trim() : '';
+  const apiKeyEnv = typeof provider?.apiKeyEnv === 'string' ? provider.apiKeyEnv.trim() : '';
+  return Boolean(baseUrl && (apiKey || apiKeyEnv));
+}
+
+/**
+ * 判断当前 Codex provider 是否已经配置了至少一个本地模型。
+ * 该判断同时兼容 `models` 与历史 `customModels` 字段，供测试按钮文案和卡片摘要复用。
+ *
+ * @param provider 待判断的 Codex provider
+ * @return `true` 表示本地已有模型；`false` 表示应提示未配置模型
+ */
+export function hasCodexProviderConfiguredModels(
+  provider?: Pick<CodexProviderConfig, 'models' | 'customModels'> | null
+): boolean {
+  return (provider?.models?.length || 0) > 0 || (provider?.customModels?.length || 0) > 0;
+}
+
+/**
+ * 统计当前 Codex provider 本地已配置的模型数量。
+ * 优先使用 `models`，没有时再回退 `customModels`，避免同一卡片把两套字段相加后重复计数。
+ *
+ * @param provider 待统计的 Codex provider
+ * @return 本地模型数量；没有配置时返回 0
+ */
+export function getCodexProviderConfiguredModelCount(
+  provider?: Pick<CodexProviderConfig, 'models' | 'customModels'> | null
+): number {
+  if (provider?.models && provider.models.length > 0) {
+    return provider.models.length;
+  }
+  return provider?.customModels?.length || 0;
+}
+
+/**
  * 运行时来源标签的稳定枚举。
  * 该值只服务于前端展示层，用于把后端诊断字段折叠成用户能快速理解的四类来源状态。
  */
@@ -697,6 +743,8 @@ export interface CodexProviderDraftModelsFetchResult {
  * Codex provider 连通性测试结果。
  * 该结构用于把后端真实运行时解析结果返回给设置页，便于用户确认实际命中的 provider、endpoint 与凭据来源。
  */
+export type CodexProviderTestStage = 'model_discovery' | 'sdk_message' | 'runtime_profile';
+
 export interface CodexProviderTestResult {
   success: boolean;
   providerId: string;
@@ -713,6 +761,10 @@ export interface CodexProviderTestResult {
   localCodexModelProvider?: string;
   localConfigConflictDetected?: boolean;
   finalModelProvider?: string;
+  testStage?: CodexProviderTestStage | string;
+  failureStage?: string;
+  requiresModel?: boolean;
+  canFetchModels?: boolean;
   message: string;
 }
 

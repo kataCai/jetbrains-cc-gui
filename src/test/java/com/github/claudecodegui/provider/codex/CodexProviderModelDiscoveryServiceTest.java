@@ -142,8 +142,44 @@ public class CodexProviderModelDiscoveryServiceTest {
     }
 
     /**
+     * 验证目标：
+     * 空 models 数组不能再阻断模型发现。轻量发现 profile 只依赖 Base URL 和凭据，
+     * 必须继续把请求发到归一化后的 `/v1/models`。
+     *
+     * 前置条件：
+     * provider.models 为空，但 baseUrl 和 apiKey 已配置。
+     *
+     * 断言意图：
+     * 1. 最终请求 URL 仍是 `https://provider.example.com/v1/models`。
+     * 2. 返回结果包含远端 `data[].id`，不再出现 runtime profile 空模型错误。
+     */
+    @Test
+    public void shouldDiscoverModelsWhenProviderModelsAreEmpty() throws Exception {
+        RecordingTransport transport = new RecordingTransport(
+                200,
+                "{\"object\":\"list\",\"data\":["
+                        + "{\"id\":\"gpt-5.5\"},"
+                        + "{\"id\":\"gpt-5.4-mini\"}"
+                        + "]}"
+        );
+        CodexProviderModelDiscoveryService service = new CodexProviderModelDiscoveryService(
+                new DiscoverySettingsService(),
+                key -> "secret-value",
+                transport
+        );
+
+        JsonObject provider = createProvider("provider-a", "https://provider.example.com", "api_key", "codex_sdk");
+        provider.add("models", new JsonArray());
+
+        CodexProviderModelDiscoveryService.DiscoveryResult result = service.discoverModels(provider);
+
+        assertEquals("https://provider.example.com/v1/models", transport.requestUri.toString());
+        assertEquals(List.of("gpt-5.5", "gpt-5.4-mini"), result.getModelIds());
+    }
+
+    /**
      * 构造一个最小可解析的托管 provider。
-     * 这里强制带上一条种子模型，是因为运行时 profile 解析器需要至少一个模型 id 才能完成请求级配置解析。
+     * 模型发现不再依赖 seed-model，因此这里默认使用空 models，只保留连接配置。
      *
      * @param id provider id
      * @param baseUrl provider 基础地址
@@ -159,17 +195,12 @@ public class CodexProviderModelDiscoveryServiceTest {
         provider.addProperty("authMode", authMode);
         provider.addProperty("requestMode", requestMode);
         provider.addProperty("apiKeyEnv", "DISCOVERY_KEY");
-        JsonArray models = new JsonArray();
-        JsonObject model = new JsonObject();
-        model.addProperty("id", "seed-model");
-        model.addProperty("label", "Seed Model");
-        models.add(model);
-        provider.add("models", models);
+        provider.add("models", new JsonArray());
         return provider;
     }
 
     /**
-     * 提供给运行时 profile 解析器使用的最小设置服务桩。
+     * 提供给发现服务构造入口使用的最小设置服务桩。
      * 该测试只关心 provider 自身字段，不依赖当前激活 provider、选中模型或本地 `~/.codex` 状态，
      * 因此所有读取都返回空对象，确保断言聚焦在 discovery service 本身。
      */

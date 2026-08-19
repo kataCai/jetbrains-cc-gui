@@ -12,6 +12,7 @@ import type {
 } from '../types/provider';
 import {
   ENV_VAR_VALUE_MAX_LENGTH,
+  hasCodexProviderModelDiscoveryConfig,
   isCodexProviderModelFetchSupported,
   isCodexRequestModeImplemented,
   validateCodexCustomModels,
@@ -421,7 +422,11 @@ export default function CodexProviderDialog({
   const isCcSwitchProxyMode = requestMode === 'cc_switch_proxy';
   const isCustomAdapterMode = requestMode === 'custom_adapter';
   const draftModelFetchSupported = isCodexProviderModelFetchSupported({ authMode, requestMode });
-  const draftModelFetchConfigured = Boolean(baseUrl.trim() && (apiKey.trim() || apiKeyEnv.trim()));
+  const draftModelFetchConfigured = hasCodexProviderModelDiscoveryConfig({
+    baseUrl,
+    apiKey,
+    apiKeyEnv,
+  });
 
   /**
    * 将 provider 数据投影到结构化表单。

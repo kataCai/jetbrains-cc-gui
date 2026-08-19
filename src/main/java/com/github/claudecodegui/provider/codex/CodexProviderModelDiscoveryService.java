@@ -34,15 +34,21 @@ public class CodexProviderModelDiscoveryService {
     private static final String AUTH_MODE_API_KEY = "api_key";
     private static final String AUTH_MODE_API_KEY_ENV = "api_key_env";
 
+    /**
+     * 保留设置服务引用，只为兼容既有构造入口和测试桩。
+     * 模型发现已经改为直接读取 provider 字段，不再从这里取选中模型或本地 Codex 状态。
+     */
+    @SuppressWarnings("unused")
     private final CodemossSettingsService settingsService;
     private final Function<String, String> environmentReader;
     private final HttpTransport transport;
 
     /**
      * 创建默认模型发现服务。
-     * 默认实现直接读取当前设置服务、系统环境变量，并通过 Java HttpClient 发起请求。
+     * 默认实现直接读取系统环境变量，并通过 Java HttpClient 发起请求。
+     * settingsService 仅保留给既有构造入口和测试桩，模型发现不再依赖发送消息 runtime profile。
      *
-     * @param settingsService 提供 runtime profile 解析所需的设置访问能力
+     * @param settingsService 既有构造契约所需的设置服务，当前发现链路不再读取其中的选中模型
      */
     public CodexProviderModelDiscoveryService(CodemossSettingsService settingsService) {
         this(settingsService, System::getenv, new JavaHttpTransport());
@@ -52,7 +58,7 @@ public class CodexProviderModelDiscoveryService {
      * 创建使用默认 HTTP 传输、但允许注入环境变量读取器的模型发现服务。
      * 该入口主要服务于需要自定义环境变量来源、但仍希望复用生产级 HttpClient 实现的调用方。
      *
-     * @param settingsService 提供 runtime profile 解析所需的设置访问能力
+     * @param settingsService 既有构造契约所需的设置服务，当前发现链路不再读取其中的选中模型
      * @param environmentReader 读取环境变量值的函数
      */
     public CodexProviderModelDiscoveryService(
@@ -66,7 +72,7 @@ public class CodexProviderModelDiscoveryService {
      * 创建可注入依赖的模型发现服务。
      * 该入口主要服务于单元测试，允许替换环境变量读取器与 HTTP 传输层。
      *
-     * @param settingsService 提供 runtime profile 解析所需的设置访问能力
+     * @param settingsService 既有构造契约所需的设置服务，当前发现链路不再读取其中的选中模型
      * @param environmentReader 读取环境变量值的函数
      * @param transport 发送 HTTP GET 请求的抽象传输层
      */
@@ -82,31 +88,23 @@ public class CodexProviderModelDiscoveryService {
 
     /**
      * 调用目标 provider 的远端模型发现接口。
-     * 该方法会先复用运行时 profile 解析器拿到已经展开的鉴权信息，再按 OpenAI 兼容协议访问 `/v1/models`。
+     * 该方法只解析模型发现轻量 profile，不再复用发送消息所需的 runtime profile，
+     * 因此 provider.models 为空时仍可访问 `/v1/models`。
      *
      * @param provider 目标 provider 配置
      * @return 发现到的唯一模型 id 列表及统计信息
-     * @throws IOException 当运行时配置、网络请求或响应解析失败时抛出
+     * @throws IOException 当发现配置、网络请求或响应解析失败时抛出
      */
     public DiscoveryResult discoverModels(JsonObject provider) throws IOException {
-        CodexRuntimeProfile runtimeProfile;
-        try {
-            runtimeProfile = new CodexRuntimeProfileResolver(settingsService, environmentReader)
-                    .resolveForProvider(provider, "", "");
-        } catch (IOException exception) {
-            throw exception;
-        } catch (RuntimeException exception) {
-            throw new IOException("Failed to resolve provider runtime profile: " + exception.getMessage(), exception);
-        }
-
-        validateDiscoverySupport(runtimeProfile);
-        URI endpoint = buildModelsEndpoint(runtimeProfile.getBaseUrl());
+        CodexProviderDiscoveryProfile discoveryProfile = resolveDiscoveryProfile(provider);
+        validateDiscoverySupport(discoveryProfile);
+        URI endpoint = buildModelsEndpoint(discoveryProfile.getBaseUrl());
 
         TransportResponse response;
         try {
             response = transport.get(
                     endpoint,
-                    "Bearer " + runtimeProfile.getApiKey(),
+                    "Bearer " + discoveryProfile.getApiKey(),
                     ACCEPT_JSON
             );
         } catch (InterruptedException exception) {
@@ -124,28 +122,95 @@ public class CodexProviderModelDiscoveryService {
     }
 
     /**
-     * 校验当前 runtime profile 是否满足第一阶段模型发现能力的约束。
+     * 从 provider 原始配置解析模型发现轻量 profile。
+     * 这里只读取 id/name/requestMode/authMode/baseUrl 和凭据，不读取 models、选中模型或推理强度，
+     * 避免空模型 provider 在真正访问 `/v1/models` 前就被发送链路的“必须有模型”约束拦住。
+     *
+     * @param provider 目标 provider 配置
+     * @return 仅服务模型发现和端点测试的轻量配置
+     * @throws IOException 当 provider 缺失、环境变量未设置或必填凭据为空时抛出
+     */
+    private CodexProviderDiscoveryProfile resolveDiscoveryProfile(JsonObject provider) throws IOException {
+        if (provider == null || provider.size() == 0) {
+            throw new IOException("No Codex provider configured");
+        }
+
+        String providerId = readProviderString(provider, "id");
+        String name = readProviderString(provider, "name");
+        String requestMode = firstNonBlank(readProviderString(provider, "requestMode"), REQUEST_MODE_CODEX_SDK);
+        String authMode = firstNonBlank(readProviderString(provider, "authMode"), AUTH_MODE_API_KEY_ENV);
+        if (provider.has("isCodexCliLoginProvider") && provider.get("isCodexCliLoginProvider").getAsBoolean()) {
+            authMode = CodexRuntimeProfile.AUTH_MODE_CLI_LOGIN;
+        }
+        String baseUrl = readProviderString(provider, "baseUrl");
+        DiscoveryCredential credential = resolveDiscoveryCredential(provider, authMode);
+        return new CodexProviderDiscoveryProfile(
+                providerId,
+                name,
+                requestMode,
+                authMode,
+                baseUrl,
+                credential.apiKey,
+                credential.source
+        );
+    }
+
+    /**
+     * 解析模型发现所需的脱敏凭据。
+     * 优先级与发送链路保持一致：先用本地 apiKey，再展开 apiKeyEnv；
+     * 但这里把失败直接转成 IOException，不再包装成 runtime profile 解析错误。
+     *
+     * @param provider 目标 provider 配置
+     * @param authMode 已归一化的鉴权模式
+     * @return 已展开的 API Key 和脱敏来源
+     * @throws IOException 当环境变量未设置，或 api_key/api_key_env 模式下缺少凭据时抛出
+     */
+    private DiscoveryCredential resolveDiscoveryCredential(JsonObject provider, String authMode) throws IOException {
+        if (CodexRuntimeProfile.AUTH_MODE_CLI_LOGIN.equals(authMode)) {
+            return new DiscoveryCredential("", "codex_cli_login");
+        }
+        String apiKey = readProviderString(provider, "apiKey");
+        if (!apiKey.isEmpty()) {
+            return new DiscoveryCredential(apiKey, "apiKey");
+        }
+        String apiKeyEnv = readProviderString(provider, "apiKeyEnv");
+        if (!apiKeyEnv.isEmpty()) {
+            String envValue = environmentReader.apply(apiKeyEnv);
+            if (envValue == null || envValue.trim().isEmpty()) {
+                throw new IOException("Codex provider API key env is not set: " + apiKeyEnv);
+            }
+            return new DiscoveryCredential(envValue.trim(), "apiKeyEnv:" + apiKeyEnv);
+        }
+        if (AUTH_MODE_API_KEY.equals(authMode) || AUTH_MODE_API_KEY_ENV.equals(authMode)) {
+            throw new IOException("Codex provider API key is not configured");
+        }
+        return new DiscoveryCredential("", authMode);
+    }
+
+    /**
+     * 校验当前发现 profile 是否满足第一阶段模型发现能力的约束。
      * 当前仅支持直接使用 Bearer Token 访问 OpenAI 兼容接口的 `codex_sdk` 模式；
      * 其余 requestMode / authMode 必须明确拒绝，避免发出语义不完整的探测请求。
      *
-     * @param runtimeProfile 已解析完成的请求级运行时 profile
+     * @param discoveryProfile 已解析完成的模型发现轻量 profile
+     * @throws IOException 当前模式、凭据或 Base URL 不满足发现条件时抛出
      */
-    private void validateDiscoverySupport(CodexRuntimeProfile runtimeProfile) throws IOException {
-        String requestMode = runtimeProfile.getRequestMode();
+    private void validateDiscoverySupport(CodexProviderDiscoveryProfile discoveryProfile) throws IOException {
+        String requestMode = discoveryProfile.getRequestMode();
         if (!REQUEST_MODE_CODEX_SDK.equals(requestMode)) {
             throw new IOException("Unsupported requestMode for model discovery: " + requestMode);
         }
 
-        String authMode = runtimeProfile.getAuthMode();
+        String authMode = discoveryProfile.getAuthMode();
         if (!AUTH_MODE_API_KEY.equals(authMode) && !AUTH_MODE_API_KEY_ENV.equals(authMode)) {
             throw new IOException("Unsupported authMode for model discovery: " + authMode);
         }
 
-        if (runtimeProfile.getApiKey().isEmpty()) {
+        if (!discoveryProfile.hasApiKey()) {
             throw new IOException("Codex provider API key is not configured for model discovery");
         }
 
-        if (runtimeProfile.getBaseUrl().isEmpty()) {
+        if (discoveryProfile.getBaseUrl().isEmpty()) {
             throw new IOException("Codex provider baseUrl is required for model discovery");
         }
     }
@@ -256,6 +321,62 @@ public class CodexProviderModelDiscoveryService {
      */
     private String safeTrim(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    /**
+     * 安全读取 provider 字符串字段。
+     * 该方法只做空值和空白归一化，不在这里应用默认 requestMode/authMode，避免把“字段缺失”和“显式空值”提前混淆。
+     *
+     * @param provider provider 配置
+     * @param fieldName 字段名
+     * @return 去首尾空白后的字段值；缺失时返回空串
+     */
+    private String readProviderString(JsonObject provider, String fieldName) {
+        if (provider == null || fieldName == null || fieldName.isBlank()) {
+            return "";
+        }
+        if (!provider.has(fieldName) || provider.get(fieldName).isJsonNull()) {
+            return "";
+        }
+        return safeTrim(provider.get(fieldName).getAsString());
+    }
+
+    /**
+     * 返回第一个非空字符串。
+     *
+     * @param values 候选值
+     * @return 第一个非空候选；全部为空时返回空串
+     */
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 模型发现阶段使用的内部凭据对象。
+     * 该对象只在解析轻量 profile 时传递 apiKey 和脱敏来源，避免把发送消息 runtime profile 的额外字段带进来。
+     */
+    private static class DiscoveryCredential {
+        private final String apiKey;
+        private final String source;
+
+        /**
+         * 创建发现阶段凭据。
+         *
+         * @param apiKey 已展开的 API Key
+         * @param source 脱敏后的凭据来源
+         */
+        DiscoveryCredential(String apiKey, String source) {
+            this.apiKey = apiKey == null ? "" : apiKey;
+            this.source = source == null ? "" : source;
+        }
     }
 
     /**

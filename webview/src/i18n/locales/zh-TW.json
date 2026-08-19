@@ -589,6 +589,19 @@
       "providerTypeMeta": "模板：{{type}}",
       "baseUrlMeta": "Base URL：{{baseUrl}}",
       "modelCountMeta": "模型數：{{count}}",
+      "noModelsConfigured": "未設定模型",
+      "testEndpointAndCredentialsTooltip": "目前未設定模型，將執行端點與憑證測試",
+      "testSdkMessageTooltip": "使用已設定模型執行完整訊息測試",
+      "testResult": {
+        "testStage": "測試階段：{{stage}}",
+        "modelDiscoverySuccess": "模型探索成功，但尚未執行訊息測試",
+        "requiresModel": "目前供應商尚未設定模型。可以先點擊「取得模型列表」匯入模型，或手動新增一個該供應商支援的模型 ID。"
+      },
+      "testStage": {
+        "model_discovery": "端點與憑證測試",
+        "sdk_message": "完整訊息測試",
+        "runtime_profile": "執行期設定解析"
+      },
       "deleteConfirmTitle": "確認刪除",
       "deleteConfirmMessage": "確定要刪除供應商 \"{{name}}\" 嗎？此操作無法復原。",
       "dialog": {

@@ -31,6 +31,10 @@ const translations: Record<string, string> = {
   'settings.codexProvider.providerTypeMeta': 'Preset: {{type}}',
   'settings.codexProvider.baseUrlMeta': 'Base URL: {{baseUrl}}',
   'settings.codexProvider.modelCountMeta': 'Models: {{count}}',
+  'settings.codexProvider.noModelsConfigured': 'No models configured',
+  'settings.codexProvider.testEndpointAndCredentialsTooltip': 'No models configured. This will test the endpoint and credentials.',
+  'settings.codexProvider.testSdkMessageTooltip': 'Run a full SDK message test with the configured model.',
+  'settings.codexProvider.dialog.fetchModelsMissingConfigTooltip': 'Configure Base URL and API Key before fetching models.',
   'settings.provider.loading': 'Loading',
   'settings.provider.allProviders': 'All Providers',
   'settings.provider.revokeAuthorization': 'Revoke Authorization',
@@ -262,6 +266,7 @@ describe('CodexProviderSection', () => {
             name: 'MiniMax',
             presetId: 'minimax',
             baseUrl: 'https://api.minimaxi.com/v1',
+            apiKeyEnv: 'MINIMAX_API_KEY',
             models: [{ id: 'MiniMax-M2.5', label: 'MiniMax-M2.5' }],
             isActive: false,
           },
@@ -282,7 +287,7 @@ describe('CodexProviderSection', () => {
     expect(screen.getByText('Preset: minimax')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull();
     expect(screen.getAllByTitle('Fetch Model List')).toHaveLength(1);
-    expect(screen.getAllByTitle('Test Provider')).toHaveLength(1);
+    expect(screen.getAllByTitle('Run a full SDK message test with the configured model.')).toHaveLength(1);
     expect(screen.getByTitle('Edit')).toBeTruthy();
     expect(screen.getByTitle('Delete')).toBeTruthy();
   });
@@ -298,6 +303,10 @@ describe('CodexProviderSection', () => {
           {
             id: 'provider-fetch',
             name: 'Provider Fetch',
+            authMode: 'api_key',
+            requestMode: 'codex_sdk',
+            baseUrl: 'https://gateway.example.com/v1',
+            apiKey: 'sk-fetch',
             isActive: false,
           },
         ]}
@@ -320,7 +329,7 @@ describe('CodexProviderSection', () => {
     );
     expect(titledButtons).toEqual([
       'Fetch Model List',
-      'Test Provider',
+      'No models configured. This will test the endpoint and credentials.',
       'Edit',
       'Delete',
     ]);
@@ -370,7 +379,7 @@ describe('CodexProviderSection', () => {
     );
     expect(titledButtons).toEqual([
       'Fetch Model List',
-      'Test Provider',
+      'Run a full SDK message test with the configured model.',
       'Copy Provider',
       'Edit',
       'Delete',
@@ -410,7 +419,7 @@ describe('CodexProviderSection', () => {
     const fetchButton = screen.getByTitle('Fetching Model List') as HTMLButtonElement;
     expect(fetchButton.disabled).toBe(true);
     expect(fetchButton.querySelector('.codicon-loading')).toBeTruthy();
-    expect(screen.getByTitle('Test Provider')).toBeTruthy();
+    expect(screen.getByTitle('No models configured. This will test the endpoint and credentials.')).toBeTruthy();
   });
 
   /**
@@ -518,5 +527,94 @@ describe('CodexProviderSection', () => {
     expect(providerListStyles).toMatch(
       /\.website\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*text-overflow:\s*ellipsis;[\s\S]*white-space:\s*nowrap;/,
     );
+  });
+
+  /**
+   * 验证目标：
+   * 空模型 provider 的测试按钮必须改成“端点与凭据测试”提示，
+   * 同时卡片元信息要明确显示“未配置模型”，不能继续伪装成普通完整测试。
+   *
+   * 前置条件：
+   * provider 已有 Base URL 和 API Key，但 models 为空。
+   *
+   * 断言意图：
+   * 1. 测试按钮 title 使用端点测试文案。
+   * 2. 卡片展示“未配置模型”。
+   * 3. 拉取模型按钮仍然可用。
+   */
+  it('shows an endpoint test tooltip and empty-model badge for providers without models', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-empty-models',
+            name: 'Empty Models Provider',
+            authMode: 'api_key',
+            requestMode: 'codex_sdk',
+            baseUrl: 'https://gateway.example.com/v1',
+            apiKey: 'sk-test',
+            models: [],
+            isActive: false,
+          },
+        ]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    expect(screen.getByText('No models configured')).toBeTruthy();
+    expect(screen.getByTitle('Fetch Model List')).toBeTruthy();
+    expect(screen.getByTitle('No models configured. This will test the endpoint and credentials.')).toBeTruthy();
+    expect(screen.queryByTitle('Test Provider')).toBeNull();
+  });
+
+  /**
+   * 验证目标：
+   * 已保存 provider 缺少 Base URL 或凭据时，模型拉取按钮必须禁用，
+   * 避免把请求发送到后端后再用 runtime 错误解释成“模式不支持”。
+   *
+   * 前置条件：
+   * requestMode/authMode 已支持模型发现，但没有填写 Base URL。
+   *
+   * 断言意图：
+   * 拉取按钮 disabled，title 提示缺少配置。
+   */
+  it('disables the fetch-models action when base URL or credentials are missing', () => {
+    render(
+      <CodexProviderSection
+        codexProviders={[
+          {
+            id: 'provider-missing-config',
+            name: 'Missing Config Provider',
+            authMode: 'api_key_env',
+            requestMode: 'codex_sdk',
+            isActive: false,
+          },
+        ]}
+        codexLocalConfigAuthorized={false}
+        codexLoading={false}
+        syncingCodexProviderId=""
+        testingCodexProviderId=""
+        onAddCodexProvider={onAddCodexProvider}
+        onEditCodexProvider={onEditCodexProvider}
+        onDeleteCodexProvider={onDeleteCodexProvider}
+        onFetchCodexProviderModels={onFetchCodexProviderModels}
+        onTestCodexProvider={onTestCodexProvider}
+        onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
+      />,
+    );
+
+    const fetchButton = screen.getByTitle(
+      'Configure Base URL and API Key before fetching models.'
+    ) as HTMLButtonElement;
+    expect(fetchButton.disabled).toBe(true);
   });
 });

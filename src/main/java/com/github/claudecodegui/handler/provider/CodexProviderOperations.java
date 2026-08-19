@@ -36,6 +36,12 @@ public class CodexProviderOperations {
 
     private static final Logger LOG = Logger.getInstance(CodexProviderOperations.class);
     private static final Gson GSON = new Gson();
+    private static final String TEST_STAGE_MODEL_DISCOVERY = "model_discovery";
+    private static final String TEST_STAGE_SDK_MESSAGE = "sdk_message";
+    private static final String TEST_STAGE_RUNTIME_PROFILE = "runtime_profile";
+    private static final String DEFAULT_REQUEST_MODE = "codex_sdk";
+    private static final String AUTH_MODE_API_KEY = "api_key";
+    private static final String AUTH_MODE_API_KEY_ENV = "api_key_env";
 
     private final HandlerContext context;
     private final CodexProviderModelDiscoveryService codexProviderModelDiscoveryService;
@@ -500,37 +506,53 @@ public class CodexProviderOperations {
     }
 
     /**
-     * 测试指定 Codex provider 的真实请求链路。
-     * 这里会基于目标 provider 临时解析运行时 profile，并发起一次最小真实请求；
+     * 测试指定 Codex provider 的连通性。
+     * 该方法按模型是否已配置拆成两个阶段：
+     * 1. 空模型时只做端点与凭据测试，复用 `/v1/models` 发现链路，不调用 Codex SDK 发送消息。
+     * 2. 已有模型时保持完整 SDK 消息测试。
      * 整个过程只读，不切换当前 active provider，也不会落盘修改本地配置。
      *
      * @param content 前端传入的 JSON，请至少包含 provider id
      */
     public void handleTestCodexProvider(String content) {
+        String providerId = "";
+        JsonObject targetProvider = null;
+        String testStage = TEST_STAGE_RUNTIME_PROFILE;
         try {
             JsonObject data = content == null || content.isBlank()
                     ? new JsonObject()
                     : GSON.fromJson(content, JsonObject.class);
-            String providerId = data != null && data.has("id") && !data.get("id").isJsonNull()
+            String resolvedProviderId = data != null && data.has("id") && !data.get("id").isJsonNull()
                     ? data.get("id").getAsString()
                     : "";
-            if (providerId.isBlank()) {
+            if (resolvedProviderId.isBlank()) {
                 throw new IllegalArgumentException("Missing provider id");
             }
+            providerId = resolvedProviderId;
 
-            JsonObject targetProvider = context.getSettingsService().getCodexProviderById(providerId);
-            if (targetProvider == null || targetProvider.size() == 0) {
-                throw new IllegalArgumentException("Provider not found: " + providerId);
+            JsonObject resolvedProvider = context.getSettingsService().getCodexProviderById(resolvedProviderId);
+            if (resolvedProvider == null || resolvedProvider.size() == 0) {
+                throw new IllegalArgumentException("Provider not found: " + resolvedProviderId);
+            }
+            targetProvider = resolvedProvider;
+
+            boolean requiresModel = !hasUsableCodexModel(resolvedProvider);
+            boolean canFetchModels = canFetchCodexModels(resolvedProvider);
+            if (requiresModel) {
+                testStage = TEST_STAGE_MODEL_DISCOVERY;
+                showEmptyModelProviderTestResult(resolvedProviderId, resolvedProvider, canFetchModels);
+                return;
             }
 
             CodexRuntimeProfile runtimeProfile = new CodexRuntimeProfileResolver(
                     context.getSettingsService(),
                     System::getenv
-            ).resolveForProvider(targetProvider, "", "");
+            ).resolveForProvider(resolvedProvider, "", "");
+            testStage = TEST_STAGE_SDK_MESSAGE;
 
             String runtimeSummary = buildRuntimeProfileSummary(runtimeProfile);
             CompletableFuture<SDKResult> testFuture = context.getCodexSDKBridge().sendMessage(
-                    "codex-provider-test-" + providerId,
+                    "codex-provider-test-" + resolvedProviderId,
                     "Reply with OK only.",
                     "codex-provider-test-thread-" + UUID.randomUUID(),
                     context.getProject() != null && context.getProject().getBasePath() != null
@@ -550,10 +572,13 @@ public class CodexProviderOperations {
                     LOG.warn("[ProviderHandler] Codex provider live test failed: " + throwable.getMessage(), throwable);
                     showTestResult(buildTestResultPayload(
                             false,
-                            providerId,
-                            targetProvider,
+                            resolvedProviderId,
+                            resolvedProvider,
                             runtimeProfile,
-                            "Codex provider test failed: " + throwable.getMessage()
+                            "Codex provider test failed: " + throwable.getMessage(),
+                            TEST_STAGE_SDK_MESSAGE,
+                            false,
+                            canFetchModels
                     ));
                     return;
                 }
@@ -565,30 +590,39 @@ public class CodexProviderOperations {
                     LOG.warn("[ProviderHandler] Codex provider live test failed: " + errorMessage);
                     showTestResult(buildTestResultPayload(
                             false,
-                            providerId,
-                            targetProvider,
+                            resolvedProviderId,
+                            resolvedProvider,
                             runtimeProfile,
-                            "Codex provider test failed: " + errorMessage
+                            "Codex provider test failed: " + errorMessage,
+                            TEST_STAGE_SDK_MESSAGE,
+                            false,
+                            canFetchModels
                     ));
                     return;
                 }
 
                 showTestResult(buildTestResultPayload(
                         true,
-                        providerId,
-                        targetProvider,
+                        resolvedProviderId,
+                        resolvedProvider,
                         runtimeProfile,
-                        "Codex provider test passed: " + runtimeSummary
+                        "Codex provider test passed: " + runtimeSummary,
+                        TEST_STAGE_SDK_MESSAGE,
+                        false,
+                        canFetchModels
                 ));
             });
         } catch (Exception e) {
             LOG.warn("[ProviderHandler] Codex provider check failed: " + e.getMessage(), e);
             showTestResult(buildTestResultPayload(
                     false,
-                    "",
+                    providerId,
+                    targetProvider,
                     null,
-                    null,
-                    "Codex provider test failed: " + e.getMessage()
+                    "Codex provider test failed: " + e.getMessage(),
+                    testStage,
+                    targetProvider == null || !hasUsableCodexModel(targetProvider),
+                    canFetchCodexModels(targetProvider)
             ));
         }
     }
@@ -967,15 +1001,133 @@ public class CodexProviderOperations {
     }
 
     /**
+     * 对空模型 provider 执行端点与凭据测试。
+     * 该路径复用模型发现服务访问 `/v1/models`，成功只代表 Base URL 和凭据可用，
+     * 并不等同于完整 Codex SDK 消息测试已经通过。
+     *
+     * @param providerId 被测 provider id
+     * @param targetProvider 被测 provider 原始配置
+     * @param canFetchModels 当前配置是否具备再次拉取模型的条件
+     * @throws IOException 当模型发现配置、网络请求或响应解析失败时抛出
+     */
+    private void showEmptyModelProviderTestResult(
+            String providerId,
+            JsonObject targetProvider,
+            boolean canFetchModels
+    ) throws IOException {
+        CodexProviderModelDiscoveryService.DiscoveryResult discoveryResult =
+                codexProviderModelDiscoveryService.discoverModels(targetProvider);
+        int discoveredCount = discoveryResult.getModelIds().size();
+        String message = "Endpoint and credentials are available. Discovered "
+                + discoveredCount
+                + " models. Import a model before running a full SDK message test.";
+        showTestResult(buildTestResultPayload(
+                true,
+                providerId,
+                targetProvider,
+                null,
+                message,
+                TEST_STAGE_MODEL_DISCOVERY,
+                true,
+                canFetchModels
+        ));
+    }
+
+    /**
+     * 判断 provider 是否已经配置了可用于完整消息测试的模型。
+     * 这里只看 provider 自身的 models/customModels，不回退到全局选中模型，
+     * 以便前端“空模型提示”和后端测试阶段选择保持一致。
+     *
+     * @param provider 目标 provider 配置
+     * @return true 表示至少存在一个非空模型 id；false 表示应走端点与凭据测试
+     */
+    private boolean hasUsableCodexModel(JsonObject provider) {
+        return !readFirstUsableModelId(provider).isEmpty();
+    }
+
+    /**
+     * 判断当前 provider 是否具备前端可再次发起模型发现的最小配置。
+     * 该判断与发现服务默认值保持一致：requestMode 默认 `codex_sdk`，authMode 默认 `api_key_env`，
+     * 同时还要求 Base URL 和 apiKey/apiKeyEnv 至少有一项已填写。
+     *
+     * @param provider 目标 provider 配置
+     * @return true 表示可以继续拉取模型；false 表示模式不受支持或配置不完整
+     */
+    private boolean canFetchCodexModels(JsonObject provider) {
+        if (provider == null || provider.size() == 0) {
+            return false;
+        }
+        String requestMode = firstNonBlank(readString(provider, "requestMode"), DEFAULT_REQUEST_MODE);
+        String authMode = firstNonBlank(readString(provider, "authMode"), AUTH_MODE_API_KEY_ENV);
+        if (!DEFAULT_REQUEST_MODE.equals(requestMode)) {
+            return false;
+        }
+        if (!AUTH_MODE_API_KEY.equals(authMode) && !AUTH_MODE_API_KEY_ENV.equals(authMode)) {
+            return false;
+        }
+        if (readString(provider, "baseUrl").isEmpty()) {
+            return false;
+        }
+        return !readString(provider, "apiKey").isEmpty() || !readString(provider, "apiKeyEnv").isEmpty();
+    }
+
+    /**
+     * 读取 provider 中第一个可用模型 id。
+     * 优先读取 `models`，再回退 `customModels`，并跳过空白 id，避免把空对象误判成已配置模型。
+     *
+     * @param provider provider 原始配置
+     * @return 第一个非空模型 id；不存在时返回空串
+     */
+    private String readFirstUsableModelId(JsonObject provider) {
+        String modelId = readFirstModelIdFromArray(provider, "models");
+        if (!modelId.isEmpty()) {
+            return modelId;
+        }
+        return readFirstModelIdFromArray(provider, "customModels");
+    }
+
+    /**
+     * 从指定模型数组中读取第一个非空 id。
+     *
+     * @param provider provider 原始配置
+     * @param fieldName 数组字段名，通常是 `models` 或 `customModels`
+     * @return 第一个非空模型 id；数组不存在或全无效时返回空串
+     */
+    private String readFirstModelIdFromArray(JsonObject provider, String fieldName) {
+        if (provider == null || fieldName == null || fieldName.isBlank()) {
+            return "";
+        }
+        if (!provider.has(fieldName) || !provider.get(fieldName).isJsonArray()) {
+            return "";
+        }
+        JsonArray models = provider.getAsJsonArray(fieldName);
+        for (JsonElement element : models) {
+            if (element == null || !element.isJsonObject()) {
+                continue;
+            }
+            String modelId = readString(element.getAsJsonObject(), "id");
+            if (!modelId.isEmpty()) {
+                return modelId;
+            }
+        }
+        return "";
+    }
+
+    /**
      * 基于 provider 与运行时 profile 组装结构化测试结果。
      * 这里优先使用运行时 profile，因为它代表真正送入桥接层的请求参数；
      * 当 profile 尚未解析成功时，再回退到 provider 原始字段，避免前端完全拿不到上下文。
+     * endpointSource 在缺少 runtime profile 时，只要 provider 自身带有 baseUrl 就回退为 `provider`，
+     * 禁止再误报成 `sdk_default`。
      *
      * @param success 本次测试是否成功
      * @param requestedProviderId 前端请求测试的 provider id
      * @param provider 被测试的 provider 原始配置；解析失败时允许为 null
-     * @param runtimeProfile 请求级运行时 profile；解析失败时允许为 null
+     * @param runtimeProfile 请求级运行时 profile；解析失败或端点测试阶段允许为 null
      * @param message 展示给前端的结果消息
+     * @param testStage 本次测试实际执行到的阶段
+     * @param requiresModel 是否仍需要用户先配置或导入模型
+     * @param canFetchModels 当前配置是否允许继续拉取模型
      * @return 可直接序列化并回传前端的 JSON payload
      */
     private JsonObject buildTestResultPayload(
@@ -983,7 +1135,10 @@ public class CodexProviderOperations {
             String requestedProviderId,
             JsonObject provider,
             CodexRuntimeProfile runtimeProfile,
-            String message
+            String message,
+            String testStage,
+            boolean requiresModel,
+            boolean canFetchModels
     ) {
         JsonObject payload = new JsonObject();
         String resolvedProviderId = runtimeProfile != null && !runtimeProfile.getProviderId().isEmpty()
@@ -991,10 +1146,10 @@ public class CodexProviderOperations {
                 : firstNonBlank(requestedProviderId, readString(provider, "id"));
         String resolvedRequestMode = runtimeProfile != null && !runtimeProfile.getRequestMode().isEmpty()
                 ? runtimeProfile.getRequestMode()
-                : firstNonBlank(readString(provider, "requestMode"), "codex_sdk");
+                : firstNonBlank(readString(provider, "requestMode"), DEFAULT_REQUEST_MODE);
         String resolvedModel = runtimeProfile != null && !runtimeProfile.getModel().isEmpty()
                 ? runtimeProfile.getModel()
-                : readFirstModelId(provider);
+                : readFirstUsableModelId(provider);
         String resolvedBaseUrl = runtimeProfile != null
                 ? runtimeProfile.getBaseUrl()
                 : readString(provider, "baseUrl");
@@ -1003,13 +1158,14 @@ public class CodexProviderOperations {
                 : inferCredentialSource(provider);
         String resolvedAuthMode = runtimeProfile != null && !runtimeProfile.getAuthMode().isEmpty()
                 ? runtimeProfile.getAuthMode()
-                : readString(provider, "authMode");
+                : firstNonBlank(readString(provider, "authMode"), AUTH_MODE_API_KEY_ENV);
         String resolvedConfigSource = runtimeProfile != null && !runtimeProfile.getEffectiveConfigSource().isEmpty()
                 ? runtimeProfile.getEffectiveConfigSource()
                 : CodexRuntimeProfile.CONFIG_SOURCE_MANAGED_PROVIDER;
         String resolvedEndpointSource = runtimeProfile != null && !runtimeProfile.getBaseUrlSource().isEmpty()
                 ? runtimeProfile.getBaseUrlSource()
                 : (resolvedBaseUrl.isEmpty() ? "sdk_default" : "provider");
+        String resolvedTestStage = firstNonBlank(testStage, TEST_STAGE_RUNTIME_PROFILE);
 
         payload.addProperty("success", success);
         payload.addProperty("providerId", resolvedProviderId);
@@ -1029,6 +1185,10 @@ public class CodexProviderOperations {
                 runtimeProfile != null && runtimeProfile.isLocalConfigConflictDetected()
         );
         payload.addProperty("finalModelProvider", runtimeProfile != null ? runtimeProfile.getFinalModelProvider() : "");
+        payload.addProperty("testStage", resolvedTestStage);
+        payload.addProperty("failureStage", success ? "" : resolvedTestStage);
+        payload.addProperty("requiresModel", requiresModel);
+        payload.addProperty("canFetchModels", canFetchModels);
         payload.addProperty("message", message == null ? "" : message);
         return payload;
     }
@@ -1062,27 +1222,6 @@ public class CodexProviderOperations {
                 context.escapeJs(payloadJson)
         );
         invokeLaterOrRun(action);
-    }
-
-    /**
-     * 读取 provider 中声明的第一个模型 id。
-     *
-     * @param provider provider 原始配置
-     * @return 首个模型 id；不存在时返回空串
-     */
-    private String readFirstModelId(JsonObject provider) {
-        if (provider == null || !provider.has("models") || !provider.get("models").isJsonArray()) {
-            return "";
-        }
-        if (provider.getAsJsonArray("models").size() == 0) {
-            return "";
-        }
-
-        JsonElement firstModel = provider.getAsJsonArray("models").get(0);
-        if (firstModel == null || !firstModel.isJsonObject()) {
-            return "";
-        }
-        return readString(firstModel.getAsJsonObject(), "id");
     }
 
     /**

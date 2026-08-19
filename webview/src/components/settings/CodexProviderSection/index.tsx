@@ -2,7 +2,10 @@ import { useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CodexProviderConfig } from '../../../types/provider';
 import {
+  getCodexProviderConfiguredModelCount,
   getCodexRuntimeSourceTranslationKey,
+  hasCodexProviderConfiguredModels,
+  hasCodexProviderModelDiscoveryConfig,
   hasCodexRuntimeSourceDiagnostics,
   isCodexProviderModelFetchSupported,
   isCodexRequestModeImplemented,
@@ -37,9 +40,11 @@ function buildProviderMetaItems(
   if (provider.baseUrl) {
     metaItems.push(t('settings.codexProvider.baseUrlMeta', { baseUrl: provider.baseUrl }));
   }
-  const modelCount = provider.models?.length || provider.customModels?.length || 0;
+  const modelCount = getCodexProviderConfiguredModelCount(provider);
   if (modelCount > 0) {
     metaItems.push(t('settings.codexProvider.modelCountMeta', { count: modelCount }));
+  } else {
+    metaItems.push(t('settings.codexProvider.noModelsConfigured'));
   }
   if (hasCodexRuntimeSourceDiagnostics(provider)) {
     const runtimeSource = resolveCodexRuntimeSource(provider);
@@ -343,6 +348,9 @@ const CodexProviderSection = ({
                 const metaItems = buildProviderMetaItems(provider, t);
                 const requestModeUnavailable = !isCodexRequestModeImplemented(provider.requestMode);
                 const modelDiscoverySupported = isCodexProviderModelFetchSupported(provider);
+                const modelDiscoveryConfigured = hasCodexProviderModelDiscoveryConfig(provider);
+                const canFetchModels = modelDiscoverySupported && modelDiscoveryConfigured;
+                const hasConfiguredModels = hasCodexProviderConfiguredModels(provider);
                 const isSyncingModels = syncingCodexProviderId === provider.id;
                 return (
                   <div
@@ -392,12 +400,14 @@ const CodexProviderSection = ({
                         <button
                           className={sharedStyles.iconBtn}
                           onClick={() => onFetchCodexProviderModels(provider)}
-                          title={!modelDiscoverySupported
-                            ? t('settings.codexProvider.fetchModelsUnsupportedTooltip')
-                            : isSyncingModels
-                              ? t('settings.codexProvider.fetchModelsLoading')
-                              : t('settings.codexProvider.fetchModels')}
-                          disabled={isSyncingModels || !modelDiscoverySupported}
+                          title={isSyncingModels
+                            ? t('settings.codexProvider.fetchModelsLoading')
+                            : !modelDiscoverySupported
+                              ? t('settings.codexProvider.fetchModelsUnsupportedTooltip')
+                              : !modelDiscoveryConfigured
+                                ? t('settings.codexProvider.dialog.fetchModelsMissingConfigTooltip')
+                                : t('settings.codexProvider.fetchModels')}
+                          disabled={isSyncingModels || !canFetchModels}
                         >
                           <span className={isSyncingModels
                             ? 'codicon codicon-loading codicon-modifier-spin'
@@ -410,7 +420,9 @@ const CodexProviderSection = ({
                             ? t('settings.codexProvider.requestModeUnavailableTooltip')
                             : testingCodexProviderId === provider.id
                               ? t('settings.provider.loading')
-                              : t('settings.codexProvider.dialog.testProvider')}
+                              : hasConfiguredModels
+                                ? t('settings.codexProvider.testSdkMessageTooltip')
+                                : t('settings.codexProvider.testEndpointAndCredentialsTooltip')}
                           disabled={testingCodexProviderId === provider.id || requestModeUnavailable}
                         >
                           <span className={testingCodexProviderId === provider.id

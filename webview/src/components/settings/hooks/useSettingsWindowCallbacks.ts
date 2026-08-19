@@ -800,11 +800,16 @@ function normalizeCodexProviderTestResultPayload(
   };
 }
 
+const CODEX_NO_MODEL_CONFIGURED_ERROR = 'No Codex model configured';
+
 /**
  * 将结构化 provider 测试结果格式化为设置页展示文案。
- * 文案明确展示真实命中的 provider/model/baseUrl/requestMode，并在检测到 fallback 时追加警告提示。
+ * 文案明确展示真实命中的 provider/model/baseUrl/requestMode，并补充 testStage 与空模型下一步提示。
+ * 底层 `No Codex model configured` 不会再作为首行主错误直接暴露。
  *
  * @param payload 结构化测试结果
+ * @param t i18n 翻译函数
+ * @param runtimeSource 已解析的运行时来源
  * @returns 供 AlertDialog 直接展示的多行消息
  */
 function formatCodexProviderTestResultMessage(
@@ -812,7 +817,27 @@ function formatCodexProviderTestResultMessage(
   t: (key: string, options?: Record<string, string | number>) => string,
   runtimeSource = resolveCodexRuntimeSource(payload),
 ): string {
-  const lines = [payload.message || ''];
+  const rawMessage = payload.message || '';
+  const hidesRawNoModelError = rawMessage.includes(CODEX_NO_MODEL_CONFIGURED_ERROR);
+  const lines = [
+    hidesRawNoModelError
+      ? t('settings.codexProvider.testResult.requiresModel')
+      : rawMessage,
+  ];
+  if (payload.testStage) {
+    const stageLabel = t(`settings.codexProvider.testStage.${payload.testStage}`, {
+      defaultValue: payload.testStage,
+    });
+    lines.push(t('settings.codexProvider.testResult.testStage', {
+      stage: stageLabel,
+    }));
+  }
+  if (payload.success && payload.testStage === 'model_discovery') {
+    lines.push(t('settings.codexProvider.testResult.modelDiscoverySuccess'));
+  }
+  if (payload.requiresModel && !hidesRawNoModelError) {
+    lines.push(t('settings.codexProvider.testResult.requiresModel'));
+  }
   const managedProviderConfirmed = payload.forcedModelProvider
     && payload.finalModelProvider
     && payload.forcedModelProvider === payload.finalModelProvider;

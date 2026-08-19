@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROVIDER_PRESETS,
+  getCodexProviderConfiguredModelCount,
   getCodexProviderModeFieldGroups,
+  hasCodexProviderConfiguredModels,
+  hasCodexProviderModelDiscoveryConfig,
   isCodexRequestModeImplemented,
 } from './provider';
 import * as providerModule from './provider';
@@ -146,6 +149,51 @@ describe('Codex runtime provider types', () => {
     expect(isCodexRequestModeImplemented('codex_sdk')).toBe(true);
     expect(isCodexRequestModeImplemented('cc_switch_proxy')).toBe(false);
     expect(isCodexRequestModeImplemented('custom_adapter')).toBe(false);
+  });
+});
+
+describe('Codex provider discovery helpers', () => {
+  /**
+   * 验证目标：
+   * 模型发现配置判断只关心 Base URL 与凭据是否齐全，不把空模型当成配置缺失。
+   *
+   * 断言意图：
+   * 同时覆盖 apiKey、apiKeyEnv、缺 Base URL 和完全空白四类输入。
+   */
+  it('requires base URL and credential fields before model discovery is considered configured', () => {
+    expect(hasCodexProviderModelDiscoveryConfig({
+      baseUrl: 'https://provider.example.com/v1',
+      apiKey: 'sk-test',
+    })).toBe(true);
+    expect(hasCodexProviderModelDiscoveryConfig({
+      baseUrl: 'https://provider.example.com/v1',
+      apiKeyEnv: 'PROVIDER_KEY',
+    })).toBe(true);
+    expect(hasCodexProviderModelDiscoveryConfig({
+      apiKey: 'sk-test',
+    })).toBe(false);
+    expect(hasCodexProviderModelDiscoveryConfig({})).toBe(false);
+  });
+
+  /**
+   * 验证目标：
+   * 卡片和测试按钮需要一份统一的“是否已配置模型”判断，避免 models 与 customModels 各算各的。
+   *
+   * 断言意图：
+   * 空数组视为未配置；任一字段有模型即视为已配置。
+   */
+  it('treats empty model lists as unconfigured and counts the primary model collection', () => {
+    expect(hasCodexProviderConfiguredModels({ models: [] })).toBe(false);
+    expect(hasCodexProviderConfiguredModels({
+      models: [{ id: 'gpt-5.5', label: 'GPT 5.5' }],
+    })).toBe(true);
+    expect(getCodexProviderConfiguredModelCount({
+      models: [{ id: 'gpt-5.5', label: 'GPT 5.5' }],
+      customModels: [{ id: 'legacy', label: 'Legacy' }],
+    })).toBe(1);
+    expect(getCodexProviderConfiguredModelCount({
+      customModels: [{ id: 'legacy', label: 'Legacy' }],
+    })).toBe(1);
   });
 });
 

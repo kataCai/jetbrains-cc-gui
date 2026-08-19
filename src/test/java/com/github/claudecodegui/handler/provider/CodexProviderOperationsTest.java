@@ -26,8 +26,9 @@ import static org.junit.Assert.assertTrue;
  * 验证 Codex provider 测试连接逻辑。
  * 重点覆盖：
  * 1. provider 不存在时会走独立 test result 失败提示；
- * 2. 本地环境变量缺失时会在 resolver 阶段失败；
- * 3. bridge 返回成功时会展示最终生效 runtime profile 摘要。
+ * 2. 本地环境变量缺失时会在 resolver 阶段失败，但仍回传 provider 上下文；
+ * 3. 空模型 provider 走模型发现阶段，而不是直接报 No Codex model configured；
+ * 4. 已配置模型的 provider 仍走完整 SDK 消息测试。
  */
 public class CodexProviderOperationsTest {
 
@@ -60,6 +61,109 @@ public class CodexProviderOperationsTest {
         JsonObject payload = jsCallback.getLastPayload();
         assertEquals(false, payload.get("success").getAsBoolean());
         assertTrue(payload.get("message").getAsString().contains("API key env is not set"));
+        /**
+         * 验证目标：
+         * runtime profile 解析失败时，测试结果仍必须回传被测 provider 的原始上下文，
+         * 不能因为 catch 丢变量而把 endpointSource 误报成 sdk_default。
+         *
+         * 断言意图：
+         * providerId、baseUrl、requestMode、authMode 都来自被测 provider，endpointSource=provider。
+         */
+        assertEquals("managed-provider", payload.get("providerId").getAsString());
+        assertEquals("https://provider.example.com/v1", payload.get("resolvedBaseUrl").getAsString());
+        assertEquals("provider", payload.get("endpointSource").getAsString());
+        assertEquals("codex_sdk", payload.get("requestMode").getAsString());
+        assertEquals("api_key_env", payload.get("authMode").getAsString());
+        assertEquals("runtime_profile", payload.get("testStage").getAsString());
+        assertEquals("runtime_profile", payload.get("failureStage").getAsString());
+        assertEquals(false, payload.get("requiresModel").getAsBoolean());
+    }
+
+    /**
+     * 验证目标：
+     * 空模型 provider 点击测试时，应执行 `/v1/models` 端点与凭据测试，
+     * 而不是继续走发送消息 runtime profile 并抛出 No Codex model configured。
+     *
+     * 前置条件：
+     * provider.models 为空，但 Base URL 和凭据字段已配置；discovery service 返回两个模型 id。
+     *
+     * 断言意图：
+     * 1. 成功结果的 testStage 为 model_discovery。
+     * 2. requiresModel=true，提示用户还需要导入模型。
+     * 3. 不会调用 CodexSDKBridge.sendMessage。
+     * 4. 消息不再包含 No Codex model configured。
+     */
+    @Test
+    public void shouldReturnModelDiscoveryStageWhenProviderHasNoModels() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createEmptyModelProvider();
+        TrackingFetchSettingsService settingsService = new TrackingFetchSettingsService(provider, new JsonObject());
+        RecordingDiscoveryService discoveryService = new RecordingDiscoveryService(
+                settingsService,
+                new CodexProviderModelDiscoveryService.DiscoveryResult(List.of("gpt-5.5", "gpt-5.4-mini"), 0, 0)
+        );
+        RecordingCodexSDKBridge sdkBridge = new RecordingCodexSDKBridge();
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, sdkBridge, jsCallback),
+                discoveryService
+        );
+
+        operations.handleTestCodexProvider("{\"id\":\"empty-model-provider\"}");
+
+        assertEquals("window.showTestResult", jsCallback.lastFunctionName);
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(true, payload.get("success").getAsBoolean());
+        assertEquals("model_discovery", payload.get("testStage").getAsString());
+        assertEquals("", payload.get("failureStage").getAsString());
+        assertEquals(true, payload.get("requiresModel").getAsBoolean());
+        assertEquals(true, payload.get("canFetchModels").getAsBoolean());
+        assertEquals("empty-model-provider", payload.get("providerId").getAsString());
+        assertEquals("https://provider.example.com/v1", payload.get("resolvedBaseUrl").getAsString());
+        assertEquals("provider", payload.get("endpointSource").getAsString());
+        assertTrue(payload.get("message").getAsString().contains("Discovered 2 models"));
+        assertFalse(payload.get("message").getAsString().contains("No Codex model configured"));
+        assertEquals(0, sdkBridge.getSendMessageCallCount());
+        assertEquals("empty-model-provider", discoveryService.getLastProvider().get("id").getAsString());
+    }
+
+    /**
+     * 验证目标：
+     * 已配置模型的 provider 仍必须走完整 SDK 消息测试，不能被新的空模型短路径误伤。
+     *
+     * 前置条件：
+     * provider 已有模型，且通过 inline apiKey 绕过环境变量缺失。
+     *
+     * 断言意图：
+     * testStage=sdk_message，并且 SDK bridge 被调用一次。
+     */
+    @Test
+    public void shouldKeepSdkLiveTestWhenProviderAlreadyHasModels() {
+        RecordingJsCallback jsCallback = new RecordingJsCallback();
+        JsonObject provider = createManagedProvider();
+        TestSettingsService settingsService = new TestSettingsService(provider, new JsonObject()) {
+            @Override
+            public JsonObject getCodexProviderById(String providerId) {
+                JsonObject providerObject = super.getCodexProviderById(providerId);
+                if (providerObject != null) {
+                    providerObject.addProperty("apiKey", "test-secret");
+                    providerObject.remove("apiKeyEnv");
+                }
+                return providerObject;
+            }
+        };
+        RecordingCodexSDKBridge sdkBridge = new RecordingCodexSDKBridge();
+        CodexProviderOperations operations = new CodexProviderOperations(
+                createContext(settingsService, sdkBridge, jsCallback)
+        );
+
+        operations.handleTestCodexProvider("{\"id\":\"managed-provider\"}");
+
+        JsonObject payload = jsCallback.getLastPayload();
+        assertEquals(true, payload.get("success").getAsBoolean());
+        assertEquals("sdk_message", payload.get("testStage").getAsString());
+        assertEquals(false, payload.get("requiresModel").getAsBoolean());
+        assertEquals("provider-model", payload.get("model").getAsString());
+        assertEquals(1, sdkBridge.getSendMessageCallCount());
     }
 
     @Test
@@ -520,6 +624,24 @@ public class CodexProviderOperationsTest {
         );
     }
 
+    /**
+     * 构造一个没有任何模型、但连接配置完整的托管 provider。
+     * 该夹具专门覆盖空模型测试短路径，避免继续复用带 seed-model 的普通夹具。
+     *
+     * @return models 为空的托管 provider
+     */
+    private static JsonObject createEmptyModelProvider() {
+        JsonObject provider = new JsonObject();
+        provider.addProperty("id", "empty-model-provider");
+        provider.addProperty("name", "Empty Model Provider");
+        provider.addProperty("authMode", "api_key_env");
+        provider.addProperty("requestMode", "codex_sdk");
+        provider.addProperty("baseUrl", "https://provider.example.com/v1");
+        provider.addProperty("apiKeyEnv", "EMPTY_MODEL_CODEX_KEY");
+        provider.add("models", new JsonArray());
+        return provider;
+    }
+
     private static JsonObject createManagedProvider() {
         JsonObject provider = new JsonObject();
         provider.addProperty("id", "managed-provider");
@@ -727,6 +849,15 @@ public class CodexProviderOperationsTest {
             }
             return result;
         }
+
+        /**
+         * 返回最近一次 discoverModels 收到的 provider 副本。
+         *
+         * @return 最近一次入参；尚未调用时返回空对象
+         */
+        JsonObject getLastProvider() {
+            return lastProvider.deepCopy();
+        }
     }
 
     /**
@@ -771,6 +902,17 @@ public class CodexProviderOperationsTest {
     }
 
     private static class RecordingCodexSDKBridge extends CodexSDKBridge {
+        private int sendMessageCallCount;
+
+        /**
+         * 返回测试过程中 sendMessage 被调用的次数。
+         *
+         * @return 调用次数；未调用时为 0
+         */
+        int getSendMessageCallCount() {
+            return sendMessageCallCount;
+        }
+
         @Override
         public CompletableFuture<SDKResult> sendMessage(
                 String channelId,
@@ -785,6 +927,7 @@ public class CodexProviderOperationsTest {
                 com.github.claudecodegui.provider.codex.CodexRuntimeProfile runtimeProfile,
                 MessageCallback callback
         ) {
+            sendMessageCallCount++;
             SDKResult result = SDKResult.success("OK");
             callback.onComplete(result);
             return CompletableFuture.completedFuture(result);

@@ -15,6 +15,12 @@ const translations: Record<string, string> = {
   'settings.codexProvider.runtimeSource.codexLocalConfig': 'Codex Local Config',
   'settings.codexProvider.runtimeSource.sdkDefault': 'SDK Default',
   'settings.codexProvider.runtimeSource.proxyFallback': 'Proxy Fallback',
+  'settings.codexProvider.testResult.testStage': 'Test stage: {{stage}}',
+  'settings.codexProvider.testResult.modelDiscoverySuccess': 'Model discovery succeeded, but a message test has not been run yet.',
+  'settings.codexProvider.testResult.requiresModel': 'This provider has no models yet. Fetch the model list first, or add a model ID supported by this provider.',
+  'settings.codexProvider.testStage.model_discovery': 'Endpoint and credential test',
+  'settings.codexProvider.testStage.sdk_message': 'Full message test',
+  'settings.codexProvider.testStage.runtime_profile': 'Runtime profile resolution',
   'settings.codexProvider.fetchModelsResult.added': '{{providerName}}: Added {{addedCount}} models. Skipped {{duplicateCount}} duplicates and {{invalidCount}} invalid entries.',
   'settings.codexProvider.fetchModelsResult.removedStaleSuffix': ' Removed {{removedCount}} stale models from the previous cache.',
 };
@@ -634,6 +640,67 @@ describe('useSettingsWindowCallbacks merged callback registry', () => {
     expect((deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[0]?.[2]).toContain('Runtime Source: Managed Provider');
     expect((deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[1]?.[2]).toContain('Runtime Source: Proxy Fallback');
     expect(deps.setTestingCodexProviderId).toHaveBeenCalledWith('');
+  });
+
+  /**
+   * 验证目标：
+   * 模型发现阶段成功结果必须展示 testStage，并明确提示“尚未执行消息测试”；
+   * 同时不能把底层 No Codex model configured 作为首行主错误暴露。
+   *
+   * 前置条件：
+   * 先推送一条 testStage=model_discovery 的成功结果，再推送一条包含底层空模型错误的失败结果。
+   *
+   * 断言意图：
+   * 1. 成功消息包含 test stage 与 model discovery success 文案。
+   * 2. 失败消息用用户可理解文案替换底层 No Codex model configured。
+   */
+  it('formats model-discovery test results and hides raw empty-model errors', () => {
+    const deps = createDeps();
+    renderHook(() => useSettingsWindowCallbacks(deps));
+
+    window.showTestResult?.(JSON.stringify({
+      success: true,
+      providerId: 'buycode-codex-pro',
+      requestMode: 'codex_sdk',
+      model: '',
+      resolvedBaseUrl: 'https://console.buycodekey.com/v1',
+      credentialSource: 'apiKey',
+      transport: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+      fallbackDetected: false,
+      endpointSource: 'provider',
+      authMode: 'api_key',
+      testStage: 'model_discovery',
+      requiresModel: true,
+      canFetchModels: true,
+      message: 'Endpoint and credentials are available. Discovered 2 models.',
+    }));
+    window.showTestResult?.(JSON.stringify({
+      success: false,
+      providerId: 'buycode-codex-pro',
+      requestMode: 'codex_sdk',
+      model: '',
+      resolvedBaseUrl: 'https://console.buycodekey.com/v1',
+      credentialSource: 'apiKey',
+      transport: 'codex_sdk',
+      effectiveConfigSource: 'codemoss_managed_provider',
+      fallbackDetected: false,
+      endpointSource: 'provider',
+      authMode: 'api_key',
+      testStage: 'runtime_profile',
+      requiresModel: true,
+      message: 'Codex provider test failed: No Codex model configured for provider: buycode-codex-pro',
+    }));
+
+    const successMessage = (deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as string;
+    const failureMessage = (deps.showAlert as ReturnType<typeof vi.fn>).mock.calls[1]?.[2] as string;
+    expect(successMessage).toContain('Endpoint and credentials are available. Discovered 2 models.');
+    expect(successMessage).toContain('Test stage: Endpoint and credential test');
+    expect(successMessage).toContain('Model discovery succeeded, but a message test has not been run yet.');
+    expect(successMessage).toContain('This provider has no models yet. Fetch the model list first, or add a model ID supported by this provider.');
+    expect(failureMessage).toContain('This provider has no models yet. Fetch the model list first, or add a model ID supported by this provider.');
+    expect(failureMessage).not.toContain('No Codex model configured for provider');
+    expect(failureMessage).toContain('Test stage: Runtime profile resolution');
   });
 
   /**

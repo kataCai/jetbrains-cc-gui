@@ -734,6 +734,9 @@
       "providerTypeMeta": "模板：{{type}}",
       "baseUrlMeta": "Base URL：{{baseUrl}}",
       "modelCountMeta": "模型数：{{count}}",
+      "noModelsConfigured": "未配置模型",
+      "testEndpointAndCredentialsTooltip": "当前未配置模型，将执行端点与凭据测试",
+      "testSdkMessageTooltip": "使用已配置模型执行完整消息测试",
       "runtimeSourceLabel": "运行时来源：{{source}}",
       "runtimeSource": {
         "managedProvider": "托管供应商",
@@ -743,7 +746,15 @@
       },
       "testResult": {
         "guiProviderConfirmed": "当前请求已命中 GUI 托管 provider：{{provider}}",
-        "localConfigConflict": "本地 Codex CLI 默认 provider 仍可能造成冲突：{{provider}}"
+        "localConfigConflict": "本地 Codex CLI 默认 provider 仍可能造成冲突：{{provider}}",
+        "testStage": "测试阶段：{{stage}}",
+        "modelDiscoverySuccess": "模型发现成功但尚未执行消息测试",
+        "requiresModel": "当前供应商尚未配置模型。可以先点击“获取模型列表”导入模型，或手动添加一个该供应商支持的模型 ID。"
+      },
+      "testStage": {
+        "model_discovery": "端点与凭据测试",
+        "sdk_message": "完整消息测试",
+        "runtime_profile": "运行时配置解析"
       },
       "deleteConfirmTitle": "确认删除",
       "deleteConfirmMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。",
